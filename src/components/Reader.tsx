@@ -109,7 +109,11 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [id, index, book, attempt]);
+    // `book` enters as the primitive `book?.id`: the guard below is the only
+    // use, and a dependency on the object would re-run this effect on every
+    // parse that lands, for a fetch the previous run already decided against
+    // (rerender-dependencies).
+  }, [id, index, book?.id, attempt]);
 
   // Coming back from settings after a failed chapter is worth one more try:
   // "download a model" is the reason the prompt sent the user there.
