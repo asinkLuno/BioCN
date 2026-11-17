@@ -218,6 +218,9 @@ jobs:
         run: rm -f android-signing/biocn.keystore src-tauri/gen/android/keystore.properties
 
   # Windows / Linux / macOS 桌面安装包；macOS 出 universal（Apple Silicon + Intel）包。
+  # macOS 部署目标在 src-tauri/tauri.conf.json 的 bundle.macOS.minimumSystemVersion
+  # 里设为 13.0：tauri-build 会以它注入 MACOSX_DEPLOYMENT_TARGET，workflow 里的
+  # 环境变量会被盖掉，所以不在这里设（tauri#11246 同类链接问题的修复）。
   desktop:
     needs: guard
     if: github.ref == 'refs/heads/releases'
@@ -225,12 +228,6 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-    env:
-      # ort-sys 预编译的 ONNX Runtime（CoreML 代码）用 13.4 SDK 构建，链接时
-      # 部署目标低于它会让 Apple linker 选错 compiler-rt，报
-      # `___isPlatformVersionAtLeast` 未定义（tauri#11246 同类问题）。
-      # ORT 本身要求 macOS 12+，这里取 13.0；Linux/Windows 忽略此变量。
-      MACOSX_DEPLOYMENT_TARGET: '13.0'
     strategy:
       fail-fast: false
       matrix:
