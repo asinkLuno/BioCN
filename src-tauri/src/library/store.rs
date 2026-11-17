@@ -124,9 +124,9 @@ impl Library {
         };
         match fs::read_to_string(self.index_path()) {
             Ok(text) => serde_json::from_str::<Index>(&text)
-                .map_err(|error| format!("library index is unreadable: {error}")),
+                .map_err(|error| format!("书库索引无法读取：{error}")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(empty()),
-            Err(error) => Err(format!("cannot read library index: {error}")),
+            Err(error) => Err(format!("无法读取书库索引：{error}")),
         }
     }
 
@@ -369,7 +369,7 @@ fn fallback_title(display_name: &str) -> String {
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
     let stem = stem.trim();
     if stem.is_empty() {
-        "Untitled".to_owned()
+        "无题".to_owned()
     } else {
         stem.to_owned()
     }
@@ -591,7 +591,7 @@ mod tests {
             .import("a.epub", Cursor::new(epub_bytes("")))
             .unwrap_err();
 
-        assert!(error.contains("unreadable"), "unexpected error: {error}");
+        assert!(error.contains("无法读取"), "意外的错误：{error}");
         assert_eq!(
             fs::read_to_string(dir.path().join("index.json")).unwrap(),
             "{ not json",

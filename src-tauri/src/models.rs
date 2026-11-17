@@ -89,7 +89,7 @@ impl Manifest {
         let spec = self
             .variants
             .get(variant)
-            .ok_or_else(|| format!("unknown variant {variant}"))?;
+            .ok_or_else(|| format!("未知的模型版本 {variant}"))?;
         let mut files: Vec<&File> = self.tables.iter().collect();
         files.extend(spec.files.iter());
         Ok((spec, files))
@@ -226,12 +226,12 @@ async fn fetch_manifest() -> Result<Manifest> {
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| format!("manifest: {e}"))?
+        .map_err(|e| format!("模型清单：{e}"))?
         .error_for_status()
-        .map_err(|e| format!("manifest: {e}"))?
+        .map_err(|e| format!("模型清单：{e}"))?
         .text()
         .await
-        .map_err(|e| format!("manifest: {e}"))?;
+        .map_err(|e| format!("模型清单：{e}"))?;
     parse_manifest(&body)
 }
 
@@ -249,10 +249,10 @@ fn parse_manifest(body: &str) -> Result<Manifest> {
             "manifest: 校验失败（{digest}），服务器上的模型清单被改动过"
         ));
     }
-    let manifest: Manifest = serde_json::from_str(body).map_err(|e| format!("manifest: {e}"))?;
+    let manifest: Manifest = serde_json::from_str(body).map_err(|e| format!("模型清单：{e}"))?;
     if manifest.schema != 1 {
         return Err(format!(
-            "manifest schema {} — this app reads schema 1, update it",
+            "模型清单的 schema 为 {}，本应用只支持 schema 1，请更新应用",
             manifest.schema
         ));
     }
@@ -271,14 +271,14 @@ fn basename(path: &str) -> Result<&str> {
         .split('/')
         .any(|segment| segment.is_empty() || segment.starts_with('.'))
     {
-        return Err(format!("bad path {path}"));
+        return Err(format!("路径无效 {path}"));
     }
     let name = path
         .rsplit('/')
         .next()
-        .ok_or_else(|| format!("bad path {path}"))?;
+        .ok_or_else(|| format!("路径无效 {path}"))?;
     if name.contains('\\') {
-        return Err(format!("bad path {path}"));
+        return Err(format!("路径无效 {path}"));
     }
     Ok(name)
 }
@@ -543,7 +543,7 @@ fn status_of<R: Runtime>(
 #[tauri::command]
 pub async fn models_install<R: Runtime>(app: AppHandle<R>, variant: String) -> Result<Status> {
     if !is_variant(&variant) {
-        return Err(format!("unknown variant {variant}"));
+        return Err(format!("未知的模型版本 {variant}"));
     }
     // Held for the whole install, not just the swap: the download writes
     // `staging/<variant>` and the swap deletes it, so two installs of the same
@@ -606,7 +606,7 @@ async fn install<R: Runtime>(app: AppHandle<R>, variant: String) -> Result<Statu
 #[tauri::command]
 pub async fn models_activate<R: Runtime>(app: AppHandle<R>, variant: String) -> Result<Status> {
     if !is_variant(&variant) {
-        return Err(format!("unknown variant {variant}"));
+        return Err(format!("未知的模型版本 {variant}"));
     }
     let root = root(&app)?;
     if installed(&root.join(&variant)).is_none() {
@@ -751,7 +751,7 @@ fn commit(root: &Path, variant: &str, files: &[(String, u64)]) -> Result<()> {
 #[tauri::command]
 pub async fn models_remove<R: Runtime>(app: AppHandle<R>, variant: String) -> Result<Status> {
     if !is_variant(&variant) {
-        return Err(format!("unknown variant {variant}"));
+        return Err(format!("未知的模型版本 {variant}"));
     }
     match app.try_state::<AnalyzerState>() {
         Some(state) => {

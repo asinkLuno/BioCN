@@ -36,8 +36,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Invalid(reason) => write!(f, "not an EPUB file: {reason}"),
-            Error::Io(error) => write!(f, "cannot read EPUB: {error}"),
+            Error::Invalid(reason) => write!(f, "不是 EPUB 文件：{reason}"),
+            Error::Io(error) => write!(f, "无法读取 EPUB：{error}"),
         }
     }
 }
@@ -68,12 +68,12 @@ fn invalid(error: &rbook::ebook::errors::EbookError) -> Error {
 
     let reason = match error {
         EbookError::Archive(ArchiveError::UnreadableArchive { .. }) => {
-            "the file is not a readable EPUB archive".to_owned()
+            "这个文件不是可读的 EPUB 压缩包".to_owned()
         }
         EbookError::Archive(ArchiveError::InvalidResource { .. }) => {
-            "the archive is missing a file it references".to_owned()
+            "压缩包缺少它引用的文件".to_owned()
         }
-        EbookError::Format(_) => "the package inside the archive is malformed".to_owned(),
+        EbookError::Format(_) => "压缩包内的包文件格式有误".to_owned(),
         other => other.to_string(),
     };
     Error::Invalid(reason)
@@ -159,7 +159,7 @@ struct Limited<'a, W: Write> {
 impl<W: Write> Write for Limited<'_, W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if buf.len() as u64 > self.limit {
-            return Err(std::io::Error::other("size limit exceeded"));
+            return Err(std::io::Error::other("超出大小上限"));
         }
         self.limit -= buf.len() as u64;
         self.inner.write(buf)
@@ -335,8 +335,8 @@ mod tests {
         let error = read_metadata(Cursor::new(b"not a zip".to_vec())).expect_err("must fail");
         let message = error.to_string();
         assert!(
-            message.starts_with("not an EPUB file:"),
-            "unexpected message: {message}"
+            message.starts_with("不是 EPUB 文件："),
+            "意外的消息：{message}"
         );
     }
 }

@@ -33,7 +33,7 @@ export async function pickEpubFiles(): Promise<string[]> {
   const selected = await open({
     multiple: true,
     directory: false,
-    title: "Add books to your library",
+    title: "把书添加到书架",
     filters: [epubFilter()],
   });
 

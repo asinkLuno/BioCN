@@ -103,7 +103,23 @@ fn title_of<R: Runtime>(app: &AppHandle<R>, id: &str) -> String {
         .ok()
         .and_then(|books| books.into_iter().find(|book| book.id == id))
         .map(|book| book.title)
-        .unwrap_or_else(|| "Untitled".into())
+        .unwrap_or_else(|| "无题".into())
+}
+
+/// Every chapter of `id`, parsed (from memory when it is the cached book).
+///
+/// Public because coloring a whole book walks the same chapters the reader
+/// does: the two must agree on what a chapter is, or the progress bar would
+/// count paragraphs the reader never shows.
+pub async fn parse_book<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<Arc<Vec<Chapter>>> {
+    let app = app.clone();
+    let id = id.to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ReadingState>();
+        chapters(&app, &state, &id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Opens a book: its title and chapter list, nothing else.
@@ -112,17 +128,13 @@ fn title_of<R: Runtime>(app: &AppHandle<R>, id: &str) -> String {
 /// parsing is paid once.
 #[tauri::command]
 pub async fn book_open<R: Runtime>(app: AppHandle<R>, id: String) -> Result<BookView> {
-    let chapters = {
-        let app = app.clone();
-        let id = id.clone();
-        // Unzipping and XML parsing are blocking file work.
-        tauri::async_runtime::spawn_blocking(move || {
-            let state = app.state::<ReadingState>();
-            chapters(&app, &state, &id)
-        })
-        .await
-        .map_err(|e| e.to_string())??
-    };
+    // A book being colored in the background is refused here rather than by the
+    // reader: the job already holds it, and two passes over the same chapters
+    // would pay for every sentence twice. The shelf asks first and explains.
+    if app.state::<AnalyzerState>().coloring(&id) {
+        return Err("book-coloring: 这本书正在着色全书中，请等它完成".into());
+    }
+    let chapters = parse_book(&app, &id).await?;
     Ok(BookView {
         title: title_of(&app, &id),
         chapters: chapters
@@ -149,14 +161,9 @@ pub async fn book_chapter<R: Runtime>(
     index: usize,
 ) -> Result<ChapterView> {
     let chapter = {
-        let app = app.clone();
-        let id = id.clone();
-        let parsed = tauri::async_runtime::spawn_blocking(move || {
-            let state = app.state::<ReadingState>();
-            chapters(&app, &state, &id)
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+        // Parsing is blocking file work; the lookup is cheap but has to happen
+        // where the (possibly cached) chapter list lives.
+        let parsed = parse_book(&app, &id).await?;
         parsed
             .iter()
             .find(|chapter| chapter.index == index)
@@ -169,9 +176,11 @@ pub async fn book_chapter<R: Runtime>(
         .iter()
         .map(|paragraph: &Paragraph| paragraph.text.clone())
         .collect();
+    // Cached analyses are reused; only what this chapter has never had is
+    // analyzed. Coloring it also marks it done for the whole-book job.
     let paragraphs = app
         .state::<AnalyzerState>()
-        .colorize(&app, paragraphs)
+        .colored(&app, id.clone(), index, paragraphs)
         .await?;
 
     Ok(ChapterView {
@@ -190,14 +199,7 @@ mod tests {
         let chapter = Chapter {
             index: 3,
             title: Some("第三章".into()),
-            paragraphs: vec![
-                Paragraph {
-                    text: "一。".into(),
-                },
-                Paragraph {
-                    text: "二。".into(),
-                },
-            ],
+            paragraphs: vec![Paragraph::text_only("一。"), Paragraph::text_only("二。")],
         };
         let summary = ChapterSummary {
             index: chapter.index,

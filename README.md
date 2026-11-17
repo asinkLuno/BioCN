@@ -14,6 +14,17 @@ React 19, running the same analysis fully offline.
 - **Coloring.** Each sentence is split, tokenized, part-of-speech tagged and
   dependency-parsed by three small ONNX models; subjects, predicates and objects
   get distinct colors. Same colors as the web version.
+- **Coloring a whole book.** A book's menu can color every chapter that has none
+  yet. It runs in the background — other books stay readable, a progress bar
+  sits in the header, and the bar's cancel keeps whatever was already colored.
+  Results are stored in SQLite (`analysis.db`), keyed by a fingerprint of the
+  installed weights, so a second read is a query rather than a model run.
+- **Export.** A book's menu writes a colored copy as a new EPUB: the analyzed
+  words are wrapped in `<span class="svo …">`, everything else — layout,
+  images, fonts, the original stylesheet — is carried through. The colors'
+  CSS goes either into each chapter (`<style>`, one self-contained file) or
+  into a single `biocn.css` the chapters link to. Chapters with no analysis yet
+  are copied plain, and the dialog says how many.
 - **Offline.** The models are downloaded once (67 MB or 78 MB) from ModelScope
   and verified against published sha256 digests. After that the app never
   touches the network.
@@ -22,15 +33,17 @@ React 19, running the same analysis fully offline.
 
 ```
 src/                    React frontend (daisyUI components only, per AGENTS.md)
-  components/           Reader, SettingsSheet, ModelSheet, BookTile
-  hooks/                useLibrary, useSettings
+  components/           Reader, ModelSheet, BookTile, ColoringBar, ExportDialog
+  hooks/                useLibrary, useColoring
   lib/                  typed invoke wrappers, theme, picker
 src-tauri/src/
   library/              EPUB import, index, covers, per-book files
   reader/               EPUB -> chapters -> paragraphs (quick-xml)
   text/                 sentence splitting: corrected rules + byte-exact upstream port
   analysis/             tokenizer / POS / dependency ONNX pipeline, EISner decoding
-  analyzer.rs           主谓宾 analyzer: session lifecycle, sentence cache
+  cache.rs              SQLite analyses: sentences + colored-chapter markers
+  analyzer.rs           主谓宾 analyzer: session lifecycle, whole-book coloring
+  export.rs             colored EPUB out: span splicing + inline/external CSS
   reading.rs            book_open / book_chapter commands
   models.rs             ModelScope download, resume, sha256 verify, install
   settings.rs           settings.json (atomic writes)

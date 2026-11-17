@@ -1,20 +1,35 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
+import { ExportDialog } from "./ExportDialog";
 
 interface Props {
   id: string;
   book: Book;
   cover?: string;
+  /** This book is the one being colored right now: opening it is refused. */
+  coloring: boolean;
+  /** Any job at all is running, so a second 着色全书 would be refused. */
+  anyJob: boolean;
   onOpen: (id: string) => void;
+  onColorize: (id: string) => void;
   onRemove: (id: string) => void;
 }
 
 /** Wrapping in a memo is what keeps a shelf worth of tiles from re-rendering
     when one tile's cover loads or its menu opens. */
-export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }: Props) {
+export const BookTile = memo(function BookTile({
+  book,
+  cover,
+  coloring,
+  anyJob,
+  onOpen,
+  onColorize,
+  onRemove,
+}: Props) {
   const [coverBroken, setCoverBroken] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const firstItem = useRef<HTMLButtonElement>(null);
@@ -83,8 +98,12 @@ export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }
               It sits under the menu, which needs its own taps. */}
           <button
             type="button"
-            aria-label={`Read ${book.title}`}
-            className="group block h-full w-full cursor-pointer focus:outline-none"
+            aria-label={`阅读《${book.title}》`}
+            // A book being colored cannot be opened: the job owns it, and the
+            // reader would analyze the same chapter a second time.
+            disabled={coloring}
+            title={coloring ? "着色全书中，完成后才能打开" : undefined}
+            className="group block h-full w-full cursor-pointer focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
             onClick={() => onOpen(book.id)}
           >
             {showCover ? (
@@ -116,10 +135,17 @@ export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }
           </button>
 
           <div ref={menuRoot} className="dropdown dropdown-end absolute top-2 right-2">
+            {coloring && (
+              // The label, not just the muted cover: a disabled book with no
+              // reason reads as broken.
+              <span className="badge badge-primary badge-sm absolute -top-1 right-0 translate-x-1/3 whitespace-nowrap shadow">
+                着色中
+              </span>
+            )}
             <button
               ref={trigger}
               type="button"
-              aria-label={`Actions for ${book.title}`}
+              aria-label={`《${book.title}》的操作`}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
@@ -143,12 +169,48 @@ export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }
                     ref={firstItem}
                     type="button"
                     role="menuitem"
+                    disabled={coloring}
                     onClick={() => {
                       closeMenu();
                       onOpen(book.id);
                     }}
                   >
-                    Read
+                    阅读
+                  </button>
+                </li>
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    // One job at a time, and the job holds the model: a second
+                    // pass would queue behind it for hours and duplicate its
+                    // work. Offering it disabled is clearer than a refusal.
+                    disabled={anyJob}
+                    title={anyJob ? "已有书在着色全书中，等它结束" : undefined}
+                    onClick={() => {
+                      closeMenu();
+                      onColorize(book.id);
+                    }}
+                  >
+                    着色全书
+                  </button>
+                </li>
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    // Exporting reads what the job writes: the chapter being
+                    // analyzed right now would leave as a plain chapter, and
+                    // the file would be a half-colored snapshot nobody asked
+                    // for. Export once the job is over.
+                    disabled={coloring}
+                    title={coloring ? "着色全书中，完成后才能导出" : undefined}
+                    onClick={() => {
+                      closeMenu();
+                      setExporting(true);
+                    }}
+                  >
+                    导出着色后的图书
                   </button>
                 </li>
                 <li role="none">
@@ -156,12 +218,17 @@ export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }
                     type="button"
                     role="menuitem"
                     className="text-error"
+                    // The job is reading this book's file; removing it mid-job
+                    // would leave the bar coloring a book that no longer
+                    // exists. Cancel first, then remove.
+                    disabled={coloring}
+                    title={coloring ? "先取消着色全书，再移除" : undefined}
                     onClick={() => {
                       closeMenu();
                       setConfirming(true);
                     }}
                   >
-                    Remove from library
+                    从书架移除
                   </button>
                 </li>
               </ul>
@@ -175,17 +242,30 @@ export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }
           <h3 className="text-sm leading-snug font-medium">
             <button
               type="button"
-              className="line-clamp-2 w-full text-left break-words hover:underline"
+              // The title is a second way to open the book, so it needs the
+              // same rule as the cover: a job holds the book it is coloring.
+              disabled={coloring}
+              title={coloring ? "着色全书中，完成后才能打开" : undefined}
+              className="line-clamp-2 w-full text-left break-words hover:underline disabled:cursor-not-allowed disabled:opacity-60 disabled:no-underline"
               onClick={() => onOpen(book.id)}
             >
               {book.title}
             </button>
           </h3>
           <p className="mt-0.5 truncate text-xs text-base-content/55">
-            {book.authors.join(", ") || "Unknown author"}
+            {book.authors.join(", ") || "未知作者"}
           </p>
         </div>
       </article>
+
+      {exporting && (
+        <ExportDialog
+          open={exporting}
+          id={book.id}
+          title={book.title}
+          onClose={() => setExporting(false)}
+        />
+      )}
 
       {/* daisyUI modal: removal deletes the imported copy, so ask first. */}
       {confirming && (
@@ -200,14 +280,14 @@ export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }
         >
           <div className="modal-box max-w-sm">
             <h4 id={`remove-title-${book.id}`} className="text-base font-semibold">
-              Remove “{book.title}”?
+              移除《{book.title}》？
             </h4>
             <p className="mt-2 text-sm text-base-content/70">
-              The copy stored in your library is deleted. You can add the file again any time.
+              书架中保存的副本将被删除。之后你随时可以重新添加这个文件。
             </p>
             <div className="modal-action">
               <button type="button" className="btn btn-ghost" onClick={dismissConfirm}>
-                Cancel
+                取消
               </button>
               <button
                 type="button"
@@ -217,13 +297,13 @@ export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }
                   onRemove(book.id);
                 }}
               >
-                Remove
+                移除
               </button>
             </div>
           </div>
           <button
             type="button"
-            aria-label="Close"
+            aria-label="关闭"
             className="modal-backdrop"
             onClick={dismissConfirm}
           />

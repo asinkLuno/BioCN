@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useLibrary } from "./hooks/useLibrary";
+import { useColoring } from "./hooks/useColoring";
 import { BookTile } from "./components/BookTile";
+import { ColoringBar } from "./components/ColoringBar";
 import { Reader } from "./components/Reader";
 import { ModelSheet } from "./components/ModelSheet";
 import type { ImportError } from "./lib/library";
@@ -17,10 +19,20 @@ export default function App() {
     removeBook,
     dismissErrors,
   } = useLibrary();
+  const coloring = useColoring();
   const [reading, setReading] = useState<string | null>(null);
   const [modelsOpen, setModelsOpen] = useState(false);
 
   const isEmpty = !loading && books.length === 0 && pending === 0;
+  // One job at a time, and it holds the book it is working on: the job and the
+  // reader would analyze the same chapter twice, and the reader would wait for
+  // the job's own chapter anyway.
+  const job = coloring.job;
+  const busy = job !== null && !job.finished;
+  const busyId = busy ? job.book : null;
+  // The bar outlives the job (a finished job stays until dismissed), so the
+  // title must come from the job, not from `busy`.
+  const busyTitle = books.find((book) => book.id === job?.book)?.title ?? "这本书";
 
   // The reader owns the whole window while it is open: a shelf behind a book is
   // a distraction, and the reader's own back button returns here.
@@ -46,19 +58,19 @@ export default function App() {
       <header className="sticky top-0 z-10 border-b border-base-content/10 bg-base-100/90 backdrop-blur">
         <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
           <div className="min-w-0 flex-1">
-            <h1 className="text-lg leading-tight font-semibold tracking-tight">Library</h1>
+            <h1 className="text-lg leading-tight font-semibold tracking-tight">书架</h1>
             <p className="text-xs text-base-content/55">
               {loading
-                ? "Loading your books…"
+                ? "正在加载书架…"
                 : books.length === 0
-                  ? "No books yet"
-                  : `${books.length} ${books.length === 1 ? "book" : "books"}`}
+                  ? "还没有书"
+                  : `${books.length} 本书`}
             </p>
           </div>
           <button
             type="button"
             className="btn btn-square btn-ghost btn-sm sm:btn-md"
-            aria-label="Settings"
+            aria-label="设置"
             onClick={() => setModelsOpen(true)}
           >            <svg
               aria-hidden="true"
@@ -75,6 +87,19 @@ export default function App() {
             </svg>
           </button>
         </div>
+        {/* In the header, because coloring is background work: this bar is the
+            only trace of it while the user reads something else. */}
+        {(coloring.job !== null || coloring.problem !== null) && (
+          <div className="mx-auto w-full max-w-6xl px-4 pb-2 sm:px-6">
+            <ColoringBar
+              progress={coloring.job}
+              title={busyTitle}
+              problem={coloring.problem}
+              onCancel={coloring.cancel}
+              onDismiss={coloring.dismiss}
+            />
+          </div>
+        )}
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-5 sm:px-6 sm:py-8">
@@ -82,7 +107,7 @@ export default function App() {
           <div role="alert" className="alert alert-error mb-5 flex-col items-start gap-2 sm:flex-row sm:items-center">
             <div className="min-w-0">
               <p className="font-medium">
-                {problem !== null ? "Something went wrong" : errorHeading(errors)}
+                {problem !== null ? "出了点问题" : errorHeading(errors)}
               </p>
               <ul className="mt-1 list-inside list-disc text-sm opacity-80">
                 {(problem !== null ? [problem] : errorDetails(errors)).map((line, index) => (
@@ -98,7 +123,7 @@ export default function App() {
               className="btn btn-ghost btn-sm sm:ml-auto"
               onClick={dismissErrors}
             >
-              Dismiss
+              知道了
             </button>
           </div>
         )}
@@ -113,7 +138,10 @@ export default function App() {
                 id={book.id}
                 book={book}
                 cover={covers[book.id]}
+                coloring={book.id === busyId}
+                anyJob={busy}
                 onOpen={setReading}
+                onColorize={coloring.start}
                 onRemove={removeBook}
               />
             ))}
@@ -129,7 +157,7 @@ export default function App() {
 
         {loading && (
           <p className="sr-only" role="status">
-            Loading library
+            正在加载书架
           </p>
         )}
       </main>
@@ -140,7 +168,7 @@ export default function App() {
           app root fills the window so no container scroll shifts it. */}
       <button
         type="button"
-        aria-label="Add books"
+        aria-label="添加书籍"
         onClick={addBooks}
         className="btn btn-primary btn-circle fixed bottom-5 right-5 z-20 size-14 text-primary-content shadow-lg transition-transform hover:scale-105 active:scale-95 sm:bottom-8 sm:right-8"
       >
@@ -167,8 +195,8 @@ export default function App() {
 
 function errorHeading(errors: ImportError[]) {
   return errors.length === 1
-    ? `Couldn’t add ${errors[0].name}`
-    : `${errors.length} files couldn’t be added`;
+    ? `无法添加 ${errors[0].name}`
+    : `${errors.length} 个文件未能添加`;
 }
 
 function errorDetails(errors: ImportError[]) {
@@ -193,13 +221,13 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
           <path d="M24 21v10M19 26h10" />
         </svg>
       </div>
-      <h2 className="text-xl font-semibold tracking-tight">Your shelf is empty</h2>
+      <h2 className="text-xl font-semibold tracking-tight">书架还是空的</h2>
       <p className="mt-2 text-sm leading-relaxed text-base-content/65">
-        Add EPUB files from this device. Books are copied into BioCN, so your shelf
-        stays intact even if you move or delete the originals.
+        从这台设备添加 EPUB 文件。书籍会被复制到 BioCN 中，因此即使你移动或删除了
+        原文件，书架也不会受影响。
       </p>
       <button type="button" className="btn btn-primary mt-6" onClick={onAdd}>
-        Choose EPUB files
+        选择 EPUB 文件
       </button>
     </section>
   );

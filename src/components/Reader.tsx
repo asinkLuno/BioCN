@@ -65,7 +65,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         setIndex(first ? first.index : null);
         if (first === null || first === undefined) {
           setLoading(false);
-          setError("This book has no readable text.");
+          setError("这本书没有可阅读的正文。");
         }
       })
       .catch((cause: unknown) => {
@@ -188,10 +188,10 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             >
               <path d="M11.5 5 6.5 10l5 5" />
             </svg>
-            Library
+            书架
           </button>
           <div className="min-w-0 flex-1 text-center">
-            <p className="truncate text-sm font-medium">{book?.title ?? "Opening…"}</p>
+            <p className="truncate text-sm font-medium">{book?.title ?? "正在打开…"}</p>
             {chapter?.title && (
               <p className="truncate text-xs text-base-content/55">{chapter.title}</p>
             )}
@@ -202,14 +202,14 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             aria-expanded={tocOpen}
             onClick={() => setTocOpen((open) => !open)}
           >
-            Contents
+            目录
           </button>
         </div>
       </header>
 
       {tocOpen && book && (
         <nav
-          aria-label="Chapters"
+          aria-label="章节目录"
           className="border-b border-base-content/10 bg-base-200/50"
         >
           <ul className="menu mx-auto w-full max-w-3xl max-h-[60vh] flex-nowrap overflow-y-auto px-2 py-2">
@@ -228,10 +228,10 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
                   }}
                 >
                   <span className="min-w-0 flex-1 truncate text-left">
-                    {entry.title ?? `Section ${entry.index}`}
+                    {entry.title ?? `第 ${entry.index} 节`}
                   </span>
                   {entry.paragraphs === 0 && (
-                    <span className="badge badge-ghost badge-sm">no text</span>
+                    <span className="badge badge-ghost badge-sm">无正文</span>
                   )}
                 </button>
               </li>
@@ -249,21 +249,21 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
           <div role="alert" className="alert alert-error items-start">
             <div className="min-w-0 flex-1">
               <p className="font-medium">
-                {missingModel ? "主谓宾 coloring needs an analysis model" : "Couldn’t open this chapter"}
+                {missingModel ? "主谓宾着色需要分析模型" : "无法打开这一章"}
               </p>
               <p className="mt-1 text-sm break-words opacity-80">
                 {missingModel
-                  ? "Download it once in settings; after that the app works offline."
+                  ? "在设置中下载一次；之后应用即可离线使用。"
                   : error}
               </p>
             </div>
             <div className="flex shrink-0 gap-2">
               <button type="button" className="btn btn-sm" onClick={() => setAttempt((n) => n + 1)}>
-                Retry
+                重试
               </button>
               {missingModel && (
                 <button type="button" className="btn btn-sm btn-primary" onClick={onOpenSettings}>
-                  Open settings
+                  打开设置
                 </button>
               )}
             </div>
@@ -296,7 +296,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             disabled={!position?.previous}
             onClick={() => position?.previous && setIndex(position.previous.index)}
           >
-            Previous
+            上一章
           </button>
           <p className="flex-1 text-center text-xs text-base-content/50">
             {position ? `${position.at + 1} / ${position.total}` : ""}
@@ -307,7 +307,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             disabled={!position?.next}
             onClick={() => position?.next && setIndex(position.next.index)}
           >
-            Next
+            下一章
           </button>
         </div>
       </footer>

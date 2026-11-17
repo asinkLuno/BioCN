@@ -129,8 +129,8 @@ describe("reader", () => {
     const user = userEvent.setup();
 
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText(/needs an analysis model/)).toBeInTheDocument();
-    await user.click(within(alert).getByRole("button", { name: "Open settings" }));
+    expect(within(alert).getByText(/需要分析模型/)).toBeInTheDocument();
+    await user.click(within(alert).getByRole("button", { name: "打开设置" }));
     expect(onOpenSettings).toHaveBeenCalled();
   });
 
@@ -225,7 +225,7 @@ describe("reader", () => {
 
     await waitFor(() => expect(chapterMock).toHaveBeenCalledWith("emma", 7));
     expect(chapterMock).not.toHaveBeenCalledWith("emma", 1);
-    expect(screen.queryByText(/no chapter/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/无法打开这一章/)).not.toBeInTheDocument();
   });
 
   it("lists every spine document, including ones with no text", async () => {
@@ -233,13 +233,13 @@ describe("reader", () => {
     renderReader();
     await prose();
 
-    await user.click(screen.getByRole("button", { name: "Contents" }));
-    const nav = screen.getByRole("navigation", { name: "Chapters" });
+    await user.click(screen.getByRole("button", { name: "目录" }));
+    const nav = screen.getByRole("navigation", { name: "章节目录" });
     // Hiding a text-less document would renumber the list away from the book.
     const rows = within(nav).getAllByRole("button");
     expect(rows).toHaveLength(3);
-    expect(within(nav).getByText("no text")).toBeInTheDocument();
-    expect(within(nav).getByRole("button", { name: /Section 0/ })).toBeDisabled();
+    expect(within(nav).getByText("无正文")).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: /第 0 节/ })).toBeDisabled();
   });
 
   it("turns pages with the arrow keys and stops at the ends", async () => {

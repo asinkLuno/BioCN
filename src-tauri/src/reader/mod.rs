@@ -94,7 +94,66 @@ fn is_frame(name: &str) -> bool {
 pub struct Paragraph {
     /// Text with inline markup flattened and whitespace collapsed.
     pub text: String,
+    /// Where each character of `text` came from in the chapter document.
+    ///
+    /// Always the same length as `text.chars()`. Empty means "nobody recorded
+    /// it" — [`paragraphs`] does not fill it, and a paragraph that only a test
+    /// constructs has no markup to point at. The exporter needs it because its
+    /// whole job is putting spans back into the *right* text node: `text` is
+    /// collapsed and entity-decoded, so searching the source for it would find
+    /// the first look-alike instead.
+    pub source: Vec<Placed>,
 }
+
+impl Paragraph {
+    /// A paragraph known only by its text (tests, and callers that do not
+    /// rewrite markup).
+    pub fn text_only(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            source: Vec::new(),
+        }
+    }
+}
+
+/// One character of a paragraph, and the bytes of the document it came from.
+///
+/// One entry per character rather than one per markup event: a colored span
+/// starts and ends *between* characters, and runs would have to be split again
+/// at every boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placed {
+    pub ch: char,
+    /// Byte range of the markup this character came from. [`SYNTHETIC`] in both
+    /// ends for a character that is not in the markup at all (the space a
+    /// `<br/>` becomes).
+    pub from: u32,
+    pub to: u32,
+    /// Which markup event produced it. A colored span is never allowed to cross
+    /// two of these: between `a` and `b` in `a <em>b</em>` sit the `</em><em>`
+    /// bytes, so a span straddling both would close inside an element it did
+    /// not open in.
+    pub run: u32,
+}
+
+impl Placed {
+    pub(crate) fn synthetic(ch: char) -> Self {
+        Self {
+            ch,
+            from: SYNTHETIC,
+            to: SYNTHETIC,
+            run: 0,
+        }
+    }
+
+    /// Not in the markup at all, so there are no bytes to wrap in a span.
+    pub fn is_synthetic(&self) -> bool {
+        self.from == SYNTHETIC
+    }
+}
+
+/// [`Placed::from`] of a character that is not in the document.
+pub const SYNTHETIC: u32 = u32::MAX;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chapter {
@@ -117,9 +176,9 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Invalid(reason) => write!(f, "not an EPUB file: {reason}"),
+            Error::Invalid(reason) => write!(f, "不是 EPUB 文件：{reason}"),
             Error::Chapter { index, reason } => {
-                write!(f, "chapter {index} could not be read: {reason}")
+                write!(f, "无法读取第 {index} 章：{reason}")
             }
         }
     }
@@ -199,7 +258,7 @@ fn chapter_titles(book: &rbook::Epub) -> HashMap<usize, String> {
 /// XHTML chapters are allowed to be in a legacy encoding (GB2312 shows up in
 /// older Chinese books), and the parser cannot be handed bytes in an encoding
 /// it was not told about.
-fn decode(bytes: &[u8]) -> String {
+pub(crate) fn decode(bytes: &[u8]) -> String {
     let bytes = bytes
         .strip_prefix([0xEF, 0xBB, 0xBF].as_slice())
         .unwrap_or(bytes);
@@ -213,11 +272,46 @@ fn decode(bytes: &[u8]) -> String {
         return String::from_utf8_lossy(bytes).into_owned();
     }
     let (text, _, _) = encoding.decode(bytes);
-    text.into_owned()
+    // The bytes are UTF-8 from here on, so a declaration still naming the
+    // original encoding is a lie. It matters most on the way out: the exporter
+    // writes this string back into the EPUB, and a reader that trusts the
+    // declaration would decode UTF-8 as GBK and see mojibake.
+    declare_utf8(&text)
+}
+
+/// Rewrites the `encoding` of an XML declaration to `utf-8`, if there is one.
+fn declare_utf8(html: &str) -> String {
+    // The declaration is ASCII and at the very start, so it is found by simple
+    // search over the head of the document.
+    let head = &html[..html.len().min(256)];
+    let Some(start) = head.find("<?xml") else {
+        return html.to_owned();
+    };
+    let Some(end) = head[start..].find("?>") else {
+        return html.to_owned();
+    };
+    let declaration = &head[start..start + end];
+    let Some(at) = declaration.find("encoding") else {
+        return html.to_owned();
+    };
+    let rest = &declaration[at + "encoding".len()..];
+    let Some(quoted) = rest.find(['"', '\'']) else {
+        return html.to_owned();
+    };
+    let quote = &rest[quoted..quoted + 1];
+    let Some(close) = rest[quoted + 1..].find(quote) else {
+        return html.to_owned();
+    };
+    let value = start + at + "encoding".len() + quoted + 1;
+    let mut out = String::with_capacity(html.len());
+    out.push_str(&html[..value]);
+    out.push_str(encoding_rs::UTF_8.name());
+    out.push_str(&html[value + close..]);
+    out
 }
 
 /// The `encoding="…"` value in the XML declaration, if the document has one.
-fn declared_encoding(xml: &[u8]) -> Option<String> {
+pub(crate) fn declared_encoding(xml: &[u8]) -> Option<String> {
     // The declaration is ASCII and must be the first thing in the document, so
     // it is searched byte-wise: the bytes after it are in whatever encoding the
     // declaration names, which by definition is not UTF-8.
@@ -242,6 +336,12 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Paragraphs of one chapter document, in reading order.
+///
+/// The offsets recorded in each [`Paragraph`] are only meaningful for the
+/// *same* string that was parsed, and they are the reason the exporter cannot
+/// work by "find `text` in `html`": `text` is whitespace-collapsed and
+/// entity-decoded, so two paragraphs can collapse to the same string, and a
+/// phrase can appear inside another one.
 pub fn paragraphs(html: &str) -> Vec<Paragraph> {
     let mut reader = Reader::from_str(html);
     let config = reader.config_mut();
@@ -253,7 +353,7 @@ pub fn paragraphs(html: &str) -> Vec<Paragraph> {
     config.allow_unmatched_ends = true;
     config.allow_dangling_amp = true;
 
-    let mut out = Vec::new();
+    let mut out: Vec<Paragraph> = Vec::new();
     // Open frames, innermost last. Text lands in the innermost frame, so a
     // `<p>` inside a `<div>` collects its own text and the `<div>` keeps only
     // what sits outside the `<p>`.
@@ -263,7 +363,17 @@ pub fn paragraphs(html: &str) -> Vec<Paragraph> {
 
     // A malformed tail must not lose the paragraphs read so far, so the loop
     // stops at the first parse error rather than propagating it.
-    while let Ok(event) = reader.read_event() {
+    loop {
+        // `buffer_position` before and after the read brackets exactly the bytes
+        // this event consumed — a start tag, a text run, or `&amp;` — which is
+        // what a rewrite has to replace. It is the one thing quick-xml does not
+        // hand back with the event.
+        let begin = byte_position(&reader);
+        let Ok(event) = reader.read_event() else {
+            break;
+        };
+        let end = byte_position(&reader);
+        let span = (begin < end && end <= html.len()).then_some(begin..end);
         match event {
             Event::Start(start) => {
                 let name = local_name(start.local_name().as_ref());
@@ -280,8 +390,8 @@ pub fn paragraphs(html: &str) -> Vec<Paragraph> {
                     stack.push(Frame::new(name));
                 }
             }
-            Event::End(end) => {
-                let name = local_name(end.local_name().as_ref());
+            Event::End(end_tag) => {
+                let name = local_name(end_tag.local_name().as_ref());
                 if SKIPPED.contains(&name.as_str()) {
                     skipped = skipped.saturating_sub(1);
                 } else if is_frame(&name) {
@@ -302,7 +412,9 @@ pub fn paragraphs(html: &str) -> Vec<Paragraph> {
                 if name == "br"
                     && let Some(frame) = stack.last_mut()
                 {
-                    frame.push(' ');
+                    // A synthesized space: it is in the paragraph text but not
+                    // in the markup, so it has no bytes to point at.
+                    frame.push_placed(Placed::synthetic(' '));
                 }
             }
             Event::Text(text) => {
@@ -310,15 +422,30 @@ pub fn paragraphs(html: &str) -> Vec<Paragraph> {
                 // data is not prose even though it is text.
                 if skipped == 0
                     && let Some(frame) = stack.last_mut()
+                    && let Some(span) = span
                 {
-                    frame.push_str(&decode_text(&text));
+                    // `into_inner` rather than `xml_content`: the offsets are
+                    // walked over these bytes, so normalizing `\r\n` here
+                    // would shift every character after it. EOL normalization
+                    // happens in `push_paragraph`, where the bytes no longer
+                    // matter.
+                    frame.push_str(&text.into_inner(), span);
                 }
             }
-            Event::CData(text) => {
+            Event::CData(cdata) => {
                 if skipped == 0
                     && let Some(frame) = stack.last_mut()
                 {
-                    frame.push_str(&text.into_inner());
+                    // Literal text, so nothing can be spliced into it: a `<span>`
+                    // written between `<![CDATA[` and `]]>` would come out as
+                    // visible text, not markup. The characters are still part of
+                    // the paragraph — they have to be, or the offsets of
+                    // everything after them would be wrong — but they are
+                    // marked as having no bytes of their own, which is what
+                    // tells the exporter to leave them alone.
+                    for ch in cdata.into_inner().chars() {
+                        frame.push_placed(Placed::synthetic(ch));
+                    }
                 }
             }
             Event::GeneralRef(reference) => {
@@ -327,13 +454,20 @@ pub fn paragraphs(html: &str) -> Vec<Paragraph> {
                 // hand-written chapter is likely to contain.
                 if skipped == 0
                     && let Some(frame) = stack.last_mut()
+                    && let Some(span) = span
                 {
                     let name: &str = reference.as_ref();
-                    if let Ok(Some(ch)) = reference.resolve_char_ref() {
-                        frame.push(ch);
-                    } else if let Some(entity) = entity_text(name) {
-                        frame.push_str(entity);
-                    }
+                    let text = match reference.resolve_char_ref() {
+                        Ok(Some(ch)) => ch.to_string(),
+                        _ => match entity_text(name) {
+                            Some(entity) => entity.to_owned(),
+                            None => continue,
+                        },
+                    };
+                    // The whole `&name;` is one span for every character it
+                    // resolves to, so replacing any of them replaces the
+                    // reference rather than leaving a dangling `&`.
+                    frame.push_ref(&text, span);
                 }
             }
             Event::Eof => break,
@@ -353,26 +487,69 @@ fn close_innermost(stack: &mut Vec<Frame>, out: &mut Vec<Paragraph>) {
     }
 }
 
-/// One open block element, plus the text collected directly inside it.
+/// One open block element, plus the characters collected directly inside it.
 struct Frame {
     name: String,
-    text: String,
+    /// The characters of the paragraph being collected, in reading order.
+    chars: Vec<Placed>,
+    /// Number for the next text event this frame collects.
+    ///
+    /// Only has to differ between the runs of one paragraph, and a paragraph is
+    /// always one frame's characters, so a per-frame counter is enough — and it
+    /// keeps incrementing across a flush, because the frame stays open for the
+    /// text that follows its child blocks.
+    runs: u32,
 }
 
 impl Frame {
     fn new(name: String) -> Self {
         Self {
             name,
-            text: String::new(),
+            chars: Vec::new(),
+            runs: 0,
         }
     }
 
-    fn push(&mut self, ch: char) {
-        self.text.push(ch);
+    fn push_placed(&mut self, placed: Placed) {
+        self.chars.push(placed);
     }
 
-    fn push_str(&mut self, text: &str) {
-        self.text.push_str(text);
+    fn take_run(&mut self) -> u32 {
+        let run = self.runs;
+        self.runs = self.runs.saturating_add(1);
+        run
+    }
+
+    /// Records a markup event's text, remembering where each character sits.
+    ///
+    /// `text` has to be the source bytes of `span` verbatim — the offsets are
+    /// computed by walking it — which is why the parser hands over
+    /// [`Event::Text`]'s own content instead of a normalized copy: entity
+    /// references are separate events, so a text run is exactly its bytes.
+    ///
+    /// `run` increments per event so a span can be kept inside one: the bytes
+    /// *between* two runs are tags, and a span may not straddle them.
+    fn push_str(&mut self, text: &str, span: std::ops::Range<usize>) {
+        let run = self.take_run();
+        for (offset, ch) in text.char_indices() {
+            let from = byte_in_document(span.start + offset);
+            let to = byte_in_document(span.start + offset + ch.len_utf8());
+            self.chars.push(Placed { ch, from, to, run });
+        }
+    }
+
+    /// Records an entity reference's text.
+    ///
+    /// Every character it resolves to points at the whole `&name;`, because
+    /// that is the unit a rewrite can replace: wrapping part of it would leave
+    /// a dangling `&` in the document.
+    fn push_ref(&mut self, text: &str, span: std::ops::Range<usize>) {
+        let run = self.take_run();
+        let from = byte_in_document(span.start);
+        let to = byte_in_document(span.end);
+        for ch in text.chars() {
+            self.chars.push(Placed { ch, from, to, run });
+        }
     }
 
     /// Ends the paragraph this frame has collected so far, keeping the frame
@@ -382,15 +559,32 @@ impl Frame {
         // Indentation between nested blocks collapses to nothing and is dropped
         // by `push_paragraph`, so no "did I hold a child block" bookkeeping is
         // needed.
-        if self.text.is_empty() {
+        if self.chars.is_empty() {
             return;
         }
-        push_paragraph(std::mem::take(&mut self.text), out);
+        push_paragraph(std::mem::take(&mut self.chars), out);
     }
 
     fn flush(mut self, out: &mut Vec<Paragraph>) {
         self.flush_text(out);
     }
+}
+
+/// Byte position in the document that the reader will resume from.
+///
+/// Before a read it is where the next event starts; after one it is just past
+/// that event, so bracketing the two gives the event's own bytes.
+fn byte_position<R: std::io::BufRead>(reader: &Reader<R>) -> usize {
+    usize::try_from(reader.buffer_position()).unwrap_or(usize::MAX)
+}
+
+/// A document byte offset as [`Placed`] stores it.
+///
+/// A chapter larger than 4 GiB cannot be pointed at, and is not worth failing
+/// over: it becomes [`SYNTHETIC`], which means "no bytes" and costs a span
+/// rather than producing a wrong one.
+fn byte_in_document(at: usize) -> u32 {
+    u32::try_from(at).unwrap_or(SYNTHETIC)
 }
 
 /// Entities that XHTML chapters use and XML does not define.
@@ -405,34 +599,43 @@ fn entity_text(name: &str) -> Option<&'static str> {
     quick_xml::escape::resolve_predefined_entity(name).or_else(|| html_entity(name))
 }
 
-/// Text of a parsed event, with EOL normalization and no entity decoding left.
+/// Collapses one paragraph's characters into its text.
 ///
-/// `xml_content` (not `into_inner`) because XHTML authors write `\r\n` and the
-/// analyzer should see the same text a browser would.
-fn decode_text(text: &quick_xml::events::BytesText<'_>) -> String {
-    let content = text.xml_content(quick_xml::XmlVersion::Implicit1_0);
-    content.into_owned()
-}
-
-/// A paragraph is kept when it has visible text; runs of whitespace collapse to
-/// one space, because XHTML source indentation is not a paragraph break.
-fn push_paragraph(text: String, out: &mut Vec<Paragraph>) {
-    let mut collapsed = String::with_capacity(text.len());
-    let mut space = false;
-    for ch in text.chars() {
-        if ch.is_whitespace() || ch == '\u{a0}' {
-            space = true;
+/// Runs of whitespace collapse to one space, which is what the analyzer is
+/// given; the surviving characters keep the markup bytes they came from, so the
+/// exporter can put spans back where they belong. A collapsed space is charged
+/// to the *first* character of the run that follows it, because a span boundary
+/// must not fall between the space and the word it precedes.
+pub fn push_paragraph(chars: Vec<Placed>, out: &mut Vec<Paragraph>) {
+    let mut text = String::new();
+    let mut kept: Vec<Placed> = Vec::with_capacity(chars.len());
+    // Whitespace seen but not yet emitted: one run may end in spaces and the
+    // next begin immediately, and the collapse owes exactly one space between
+    // them.
+    let mut pending_space = false;
+    for placed in chars {
+        let collapse = placed.ch.is_whitespace() || placed.ch == '\u{a0}';
+        if collapse {
+            pending_space = true;
             continue;
         }
-        if space && !collapsed.is_empty() {
-            collapsed.push(' ');
+        if pending_space && !text.is_empty() {
+            // The space is not in the source, so it has no bytes of its own; it
+            // is attributed to this character's span, keeping the two together.
+            text.push(' ');
+            kept.push(Placed {
+                ch: ' ',
+                ..placed.clone()
+            });
         }
-        space = false;
-        collapsed.push(ch);
+        pending_space = false;
+        text.push(placed.ch);
+        kept.push(placed);
     }
-    if !collapsed.is_empty() {
-        out.push(Paragraph { text: collapsed });
+    if text.is_empty() {
+        return;
     }
+    out.push(Paragraph { text, source: kept });
 }
 
 /// HTML entities that XHTML chapters use and XML does not define.
@@ -568,6 +771,21 @@ mod tests {
         bytes.extend_from_slice(b"</p></body>");
         let html = decode(&bytes);
         assert_eq!(texts(&html), ["中文"]);
+        // Decoding produces UTF-8, so the declaration must say so: the exporter
+        // writes this string back into the EPUB, and a reader that trusted the
+        // stale label would show mojibake.
+        assert!(
+            html.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn leaves_a_utf8_declaration_alone() {
+        let html = decode(r#"<?xml version="1.0" encoding="utf-8"?><p>字。</p>"#.as_bytes());
+        assert_eq!(html, r#"<?xml version="1.0" encoding="utf-8"?><p>字。</p>"#);
+        // A document with no declaration at all is not given one.
+        assert_eq!(decode(b"<p>x</p>"), "<p>x</p>");
     }
 
     #[test]

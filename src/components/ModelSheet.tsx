@@ -131,19 +131,19 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
       }}
     >
       <div className="modal-box max-w-lg">
-        <h3 id="models-title" className="text-base font-semibold">
-          Analysis models
-        </h3>
-        <p className="mt-1 text-sm leading-relaxed text-base-content/65">
-          主谓宾 coloring needs a sentence-analysis model. Download it once; after that the
-          app works offline. Both variants can live on disk together — switch any time.
-        </p>
+          <h3 id="models-title" className="text-base font-semibold">
+            分析模型
+          </h3>
+          <p className="mt-1 text-sm leading-relaxed text-base-content/65">
+            主谓宾着色需要句子分析模型。下载一次，之后应用即可离线使用。两个版本可以同时存在
+            于磁盘上——随时切换。
+          </p>
 
         {status?.manifestError && (
           <div role="alert" className="alert alert-warning mt-4 text-sm">
             <span>
-              Couldn’t read the download sizes ({status.manifestError}). You can still install a
-              model; the size just isn’t known in advance.
+              无法读取下载大小（{status.manifestError}）。你仍可安装模型，只是无法提前知道
+              大小。
             </span>
           </div>
         )}
@@ -202,7 +202,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                           <p className="mt-1 text-xs text-base-content/50">
                             {formatBytes(variant.bytes)}
                             {variant.partial > 0 && !isInstalled && (
-                              <> · {formatBytes(variant.partial)} already downloaded</>
+                              <> · 已下载 {formatBytes(variant.partial)}</>
                             )}
                           </p>
                         </div>
@@ -218,7 +218,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                               void remove(variant.id);
                             }}
                           >
-                            {isRemoving ? <span className="loading loading-spinner loading-xs" /> : "Remove"}
+                            {isRemoving ? <span className="loading loading-spinner loading-xs" /> : "移除"}
                           </button>
                         ) : (
                           <button
@@ -230,9 +230,9 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                             {isDownloading ? (
                               <span className="loading loading-spinner loading-xs" />
                             ) : variant.partial > 0 ? (
-                              "Resume"
+                              "继续下载"
                             ) : (
-                              "Download"
+                              "下载"
                             )}
                           </button>
                         )}
@@ -243,10 +243,10 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                             className="progress progress-primary w-full"
                             value={ratio}
                             max={1}
-                            aria-label={`Downloading ${variant.label}`}
+                            aria-label={`正在下载 ${variant.label}`}
                           />
                           <p className="text-xs text-base-content/55">
-                            {progress ? `${progress.file} · ${Math.round(ratio * 100)}%` : "Starting…"}
+                            {progress ? `${progress.file} · ${Math.round(ratio * 100)}%` : "开始中…"}
                           </p>
                         </>
                       )}
@@ -260,19 +260,19 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
 
         <p className="mt-4 text-xs leading-relaxed text-base-content/50">
           {status !== null && status.installed.length > 0
-            ? "Removing a model keeps your books; they just stop being colored until you download or activate another one."
-            : "Both variants run on this device. Nothing is uploaded."}
+            ? "移除模型不会影响你的书；它们只是不再着色，直到你下载或启用另一个模型。"
+            : "两个版本都在本机运行，不会上传任何内容。"}
         </p>
 
         <div className="modal-action">
           <button type="button" className="btn" onClick={onClose} disabled={busy !== null}>
-            {busy !== null ? "Working…" : "Done"}
+            {busy !== null ? "处理中…" : "完成"}
           </button>
         </div>
       </div>
       <button
         type="button"
-        aria-label="Close"
+        aria-label="关闭"
         className="modal-backdrop"
         onClick={() => busy === null && onClose()}
       />

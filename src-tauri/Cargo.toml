@@ -30,7 +30,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rbook = { version = "0.7", default-features = false }
+# `write` is what turns a parsed book back into an EPUB: exporting a colored
+# book rewrites each chapter's XHTML in place rather than building a new
+# archive, so the original layout, images and styles survive untouched.
+rbook = { version = "0.7", default-features = false, features = ["write"] }
 sha2 = "0.10"
 unicode-normalization = "0.1"
 unicode-general-category = "1"
@@ -46,6 +49,10 @@ reqwest = { version = "0.13", default-features = false, features = [
 # declared-charset handling older Chinese books need (GB2312 chapters).
 quick-xml = { version = "0.42", features = ["encoding"] }
 encoding_rs = "0.8"
+# Persistent 主谓宾 cache (src/cache.rs). `bundled` compiles SQLite in: Android
+# has no system libsqlite3 to link against, and the bundled build is the one
+# whose version is known to support WAL and the upserts the schema uses.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # ONNX Runtime for the 主谓宾 analyzer (src/analysis). Same features as upstream's
 # biocn-core: `download-binaries` fetches the official prebuilt library at build

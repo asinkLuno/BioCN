@@ -71,7 +71,7 @@ export async function onModelProgress(handler: (progress: ModelProgress) => void
 
 /** `78 MB` / `1.2 GB`, matching the size column in the model sheet. */
 export function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "unknown size";
+  if (bytes <= 0) return "大小未知";
   const units = ["B", "KB", "MB", "GB"];
   let value = bytes;
   let unit = 0;

@@ -6,6 +6,7 @@
  * uses.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 /** `normal` spans are the sentence's punctuation and untouched words. */
 export type Role = "normal" | "subject" | "predicate" | "object";
@@ -60,7 +61,7 @@ export const MODEL_MISSING = "models-missing";
 export function message(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
-  return "Something went wrong.";
+  return "出了点问题。";
 }
 
 /** A `book-missing` / `chapter-missing` / `models-missing` prefix, or `null`. */
@@ -73,3 +74,51 @@ export const bookOpen = (id: string) => invoke<BookView>("book_open", { id });
 
 export const bookChapter = (id: string, index: number) =>
   invoke<ChapterView>("book_chapter", { id, index });
+
+/**
+ * How far a whole-book coloring job has got.
+ *
+ * One job at a time (`AnalyzerState` holds a single one), so this is the whole
+ * of the job's state: a book either has a job or it does not.
+ */
+export interface ColoringProgress {
+  book: string;
+  /** Paragraphs analyzed so far, and how many the book has. */
+  done: number;
+  total: number;
+  /** Chapters finished, and how many were uncolored when the job started. */
+  chapters: number;
+  chaptersTotal: number;
+  /** Set once the job is over — finished, failed or cancelled. */
+  finished: boolean;
+  /** The user stopped it; what it colored stays colored, and it is not a failure. */
+  cancelled: boolean;
+  /** A failure that stopped the job; what it colored stays colored. */
+  error: string | null;
+}
+
+/** The event the backend emits for every change of a coloring job. */
+export const COLORING_EVENT = "coloring://progress";
+
+/**
+ * Colors every chapter of `id` that has none yet, in the background.
+ *
+ * Resolves as soon as the job is accepted — the work takes hours, and the app
+ * must stay usable meanwhile. Progress arrives on `COLORING_EVENT`, and the
+ * book cannot be opened until the job is done with it.
+ */
+export const colorizeBook = (id: string) => invoke<void>("colorize_book", { id });
+
+/** The running job, for a menu that opened after it started. */
+export const coloringProgress = () =>
+  invoke<ColoringProgress | null>("coloring_progress");
+
+/** Stops the running job after the chapter it is in. */
+export const cancelColorizeBook = () => invoke<void>("colorize_book_cancel");
+
+/** Subscribes to coloring progress. Returns the unsubscribe function. */
+export async function onColoringProgress(
+  handler: (progress: ColoringProgress) => void,
+) {
+  return listen<ColoringProgress>(COLORING_EVENT, (event) => handler(event.payload));
+}
