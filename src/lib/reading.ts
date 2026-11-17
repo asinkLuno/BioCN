@@ -132,6 +132,14 @@ export const clearBookCache = (id: string) => invoke<void>("clear_book_cache", {
  */
 export const bookHasColoring = (id: string) => invoke<boolean>("book_has_coloring", { id });
 
+/**
+ * Whether `id` has coloring under the *active* weights — the only slice
+ * exporting reads. Asked when a book menu opens, so 导出着色后的图书 can be
+ * honest about a book that would export plain.
+ */
+export const bookHasActiveColoring = (id: string) =>
+  invoke<boolean>("book_has_active_coloring", { id });
+
 /** Subscribes to coloring progress. Returns the unsubscribe function. */
 export async function onColoringProgress(
   handler: (progress: ColoringProgress) => void,

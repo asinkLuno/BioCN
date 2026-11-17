@@ -297,6 +297,19 @@ impl AnalysisCache {
         .map_err(err)
     }
 
+    /// Whether `book` has chapter markers under exactly `weights` — the slice
+    /// the exporter reads, and the only one that makes an export worth asking
+    /// for.
+    pub fn has_coloring_under(&self, weights: &str, book: &str) -> Result<bool> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chapters WHERE weights = ?1 AND book = ?2)",
+            params![weights, book],
+            |row| row.get(0),
+        )
+        .map_err(err)
+    }
+
     /// Forgets a book's coloring: its chapter markers and the rows its
     /// sentences keyed, under *every* weights — the user clears "this book's
     /// cache", not one fingerprint's slice of it.
@@ -595,6 +608,31 @@ mod tests {
 
         cache.clear_book("dune", &["沙丘的话。".to_owned(), "别的变体。".to_owned()]).unwrap();
         assert!(!cache.has_coloring("dune").unwrap(), "a cleared book has none");
+    }
+
+    /// The exporter reads only the active weights' slice: a book colored under
+    /// a variant the user left must not offer an export that would write a
+    /// plain book.
+    #[test]
+    fn coloring_under_the_active_weights_is_what_export_asks_about() {
+        let (_dir, cache) = cache();
+        cache
+            .save_chapter("w1", "dune", 1, true, &[("沙丘的话。".into(), None)])
+            .unwrap();
+
+        assert!(cache.has_coloring_under("w1", "dune").unwrap());
+        assert!(
+            !cache.has_coloring_under("w2", "dune").unwrap(),
+            "another weights' slice is not this one"
+        );
+        assert!(
+            !cache.has_coloring_under("w1", "emma").unwrap(),
+            "another book's slice is not this one"
+        );
+        assert!(
+            cache.has_coloring("dune").unwrap(),
+            "the any-weights check (the clear's scope) still sees it"
+        );
     }
 
     /// A novel's worth of sentences exceeds one `IN (...)` list, and a delete

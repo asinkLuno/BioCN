@@ -698,6 +698,18 @@ pub async fn book_has_coloring<R: Runtime>(app: AppHandle<R>, id: String) -> Res
     app.state::<AnalysisCache>().has_coloring(&id)
 }
 
+/// Whether `id` has coloring under the *active* weights — the only slice
+/// [`crate::export::export_book`] reads.
+///
+/// The book menu greys 导出着色后的图书 off without it: exporting a book with
+/// no coloring under these weights would write the plain book back out, and a
+/// variant left behind does not color anything the reader sees.
+#[tauri::command]
+pub async fn book_has_active_coloring<R: Runtime>(app: AppHandle<R>, id: String) -> Result<bool> {
+    let weights = crate::cache::weights(&app)?;
+    app.state::<AnalysisCache>().has_coloring_under(&weights, &id)
+}
+
 /// A job that lost the race is the UI's second guess, not something the user
 /// can act on: the running one keeps going and its progress is the truth. The
 /// command still fails, because a *silent* no-op would leave the button looking

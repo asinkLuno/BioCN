@@ -48,6 +48,7 @@ pub fn run() {
             analyzer::colorize_book_cancel,
             analyzer::clear_book_cache,
             analyzer::book_has_coloring,
+            analyzer::book_has_active_coloring,
             export::export_book,
         ])
         .run(tauri::generate_context!())

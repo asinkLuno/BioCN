@@ -30,6 +30,7 @@ vi.mock("./lib/reading", async (importOriginal) => ({
   cancelColorizeBook: vi.fn(),
   clearBookCache: vi.fn(),
   bookHasColoring: vi.fn(),
+  bookHasActiveColoring: vi.fn(),
   onColoringProgress: vi.fn(),
 }));
 
@@ -50,6 +51,7 @@ const progressMock = vi.mocked(reading.coloringProgress);
 const cancelMock = vi.mocked(reading.cancelColorizeBook);
 const clearCacheMock = vi.mocked(reading.clearBookCache);
 const hasColoringMock = vi.mocked(reading.bookHasColoring);
+const hasActiveColoringMock = vi.mocked(reading.bookHasActiveColoring);
 const subscribeMock = vi.mocked(reading.onColoringProgress);
 
 /** The handler `useColoring` subscribed with, so a test can emit progress. */
@@ -98,6 +100,7 @@ describe("library", () => {
     cancelMock.mockResolvedValue(undefined);
     progressMock.mockResolvedValue(null);
     hasColoringMock.mockResolvedValue(false);
+    hasActiveColoringMock.mockResolvedValue(false);
     subscribeMock.mockImplementation(async (handler) => {
       push = handler;
       return () => {};
@@ -334,8 +337,12 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    hasActiveColoringMock.mockResolvedValue(true);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    await user.click(within(tile).getByRole("menuitem", { name: "导出着色后的图书" }));
+    // The item greys until the menu's coloring check answers true.
+    const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
+    await waitFor(() => expect(exportItem).toBeEnabled());
+    await user.click(exportItem);
     const dialog = within(tile).getByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: "导出《Dune》" })).toBeInTheDocument();
 
@@ -363,8 +370,12 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    hasActiveColoringMock.mockResolvedValue(true);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    await user.click(within(tile).getByRole("menuitem", { name: "导出着色后的图书" }));
+    // The item greys until the menu's coloring check answers true.
+    const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
+    await waitFor(() => expect(exportItem).toBeEnabled());
+    await user.click(exportItem);
     const dialog = within(tile).getByRole("dialog");
 
     await user.click(within(dialog).getByRole("radio", { name: /外联/ }));
@@ -380,8 +391,12 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    hasActiveColoringMock.mockResolvedValue(true);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    await user.click(within(tile).getByRole("menuitem", { name: "导出着色后的图书" }));
+    // The item greys until the menu's coloring check answers true.
+    const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
+    await waitFor(() => expect(exportItem).toBeEnabled());
+    await user.click(exportItem);
     const dialog = within(tile).getByRole("dialog");
 
     // No destination, no export: the dialog stays up, ready for another try.
@@ -400,8 +415,12 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    hasActiveColoringMock.mockResolvedValue(true);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    await user.click(within(tile).getByRole("menuitem", { name: "导出着色后的图书" }));
+    // The item greys until the menu's coloring check answers true.
+    const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
+    await waitFor(() => expect(exportItem).toBeEnabled());
+    await user.click(exportItem);
     const dialog = within(tile).getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "选择位置并导出" }));
 
@@ -419,8 +438,12 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    hasActiveColoringMock.mockResolvedValue(true);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    await user.click(within(tile).getByRole("menuitem", { name: "导出着色后的图书" }));
+    // The item greys until the menu's coloring check answers true.
+    const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
+    await waitFor(() => expect(exportItem).toBeEnabled());
+    await user.click(exportItem);
     const dialog = within(tile).getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "选择位置并导出" }));
 
@@ -433,6 +456,9 @@ describe("library", () => {
   it("will not export the book it is coloring", async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dune]);
+    // The book has coloring: the grey must come from the running job, not
+    // from an empty cache.
+    hasActiveColoringMock.mockResolvedValue(true);
     progressMock.mockResolvedValue({
       book: "dune",
       done: 50,
@@ -522,6 +548,22 @@ describe("library", () => {
     expect(removeMock).toHaveBeenCalledWith("dune");
     await waitFor(() => expect(screen.queryByText("Dune")).not.toBeInTheDocument());
     expect(screen.getByText("1 本书")).toBeInTheDocument();
+  });
+
+  it("greys out 导出着色后的图书 while the book has no coloring to export", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    // The answer, not the pending state, is what must grey the item: wait for
+    // the check to have run before asserting.
+    await waitFor(() => expect(hasActiveColoringMock).toHaveBeenCalledWith("dune"));
+    const item = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
+    expect(item).toBeDisabled();
+    expect(item).toHaveAttribute("title", "还没有着色，先着色全书再导出");
   });
 
   it("greys out 清除着色缓存 while the book has no coloring", async () => {

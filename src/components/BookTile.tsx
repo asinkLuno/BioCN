@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
-import { bookHasColoring, type ColoringProgress } from "../lib/reading";
+import { bookHasColoring, bookHasActiveColoring, type ColoringProgress } from "../lib/reading";
 import { ExportDialog } from "./ExportDialog";
 import { useDialog, ModalBackdrop } from "./dialog";
 
@@ -41,6 +41,8 @@ export const BookTile = memo(function BookTile({
   const [menuOpen, setMenuOpen] = useState(false);
   /** Whether this book has coloring to clear, asked each time the menu opens. */
   const [hasColoring, setHasColoring] = useState<boolean | null>(null);
+  /** …and coloring under the *active* weights, which is what an export reads. */
+  const [hasActiveColoring, setHasActiveColoring] = useState<boolean | null>(null);
   const [confirming, setConfirming] = useState<Confirming>(null);
   const [exporting, setExporting] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
@@ -70,20 +72,28 @@ export const BookTile = memo(function BookTile({
     document.addEventListener("keydown", onKeyDown);
     // The menu only exists while open, so its first item takes focus itself.
     firstItem.current?.focus();
-    // 清除着色缓存 may only be offered when there is something to clear, and
-    // the answer has to be current when the item is clicked — so it is asked
-    // here, at menu-open, not carried over from an earlier look.
+    // 清除着色缓存 and 导出着色后的图书 may only be offered when this book
+    // has coloring — to clear, any weights' markers; to export, the active
+    // weights' (the only slice the exporter reads). The answers have to be
+    // current when an item is clicked, so they are asked here, at menu-open,
+    // not carried over from an earlier look.
     let stale = false;
     setHasColoring(null);
-    bookHasColoring(book.id)
-      .then((has) => {
-        if (!stale) setHasColoring(has);
-      })
-      // A failed check must not hide the item: clearing an empty cache is a
-      // harmless no-op, while a hidden clear looks like a missing one.
-      .catch(() => {
-        if (!stale) setHasColoring(true);
-      });
+    setHasActiveColoring(null);
+    const settle = (asked: Promise<boolean>, got: (value: boolean) => void) => {
+      asked
+        // A failed check must not hide the item it feeds: clearing an empty
+        // cache is a harmless no-op, exporting an uncolored book writes an
+        // honest plain copy, while a hidden item looks like a missing one.
+        .then((value) => {
+          if (!stale) got(value);
+        })
+        .catch(() => {
+          if (!stale) got(true);
+        });
+    };
+    settle(bookHasColoring(book.id), setHasColoring);
+    settle(bookHasActiveColoring(book.id), setHasActiveColoring);
     return () => {
       stale = true;
       document.removeEventListener("pointerdown", onPointerDown);
@@ -236,12 +246,20 @@ export const BookTile = memo(function BookTile({
                   <button
                     type="button"
                     role="menuitem"
-                    // Exporting reads what the job writes: the chapter being
-                    // analyzed right now would leave as a plain chapter, and
-                    // the file would be a half-colored snapshot nobody asked
-                    // for. Export once the job is over.
-                    disabled={coloring}
-                    title={coloring ? "着色全书中，完成后才能导出" : undefined}
+                    // Exporting reads only the active weights' slice, and it
+                    // reads what the job writes: without coloring under these
+                    // weights the file would be the plain book back out, and
+                    // the chapter being analyzed right now would leave as a
+                    // plain chapter. Export once there is something colored
+                    // and the job is over.
+                    disabled={coloring || hasActiveColoring !== true}
+                    title={
+                      coloring
+                        ? "着色全书中，完成后才能导出"
+                        : hasActiveColoring === false
+                          ? "还没有着色，先着色全书再导出"
+                          : undefined
+                    }
                     onClick={() => {
                       closeMenu();
                       setExporting(true);
