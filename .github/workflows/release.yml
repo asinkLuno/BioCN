@@ -392,47 +392,56 @@ jobs:
             git push origin "refs/tags/$tag"
           fi
 
-          reused=false
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            release_id=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)
-            is_draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
-            if [ "$is_draft" = "false" ]; then
-              echo "GitHub Release $tag 已发布，复用现有安装包。"
-              reused=true
-            else
-              # `GET /releases/tags/<tag>` 不返回草稿，按 ID 删除才能稳定清理失败残留。
-              echo "清理上次失败留下的草稿 $tag"
-              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
-            fi
+          # 草稿无法按 tag 查询（GET /releases/tags/<tag> 不返回草稿，run 5 的
+          # upload 404 就是这么来的），一律从列表按 tag_name 匹配拿 ID。
+          draft_id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft == true and .tag_name == \"$tag\") | .id" | head -n1)
+          if [ -n "$draft_id" ]; then
+            echo "清理上次失败留下的草稿 $tag (id $draft_id)"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$draft_id"
           fi
 
-          if [ "$reused" = "false" ]; then
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes \
-              --title "BioCN v$APP_VERSION"
-            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" release-artifacts/*
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > /dev/null 2>&1; then
+            echo "GitHub Release $tag 已发布，复用现有安装包。"
+            exit 0
+          fi
 
-            # 附件上传后逐一回验摘要，防止 GitHub 侧的静默损坏。
-            release_id=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)
-            asset_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")
-            expected_list=$(cat release-artifacts/BioCN_*_arm64.apk.sha256 release-artifacts/checksums-*.sha256)
-            while read -r expected name; do
-              digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<< "$asset_json")
-              if [ -n "$digest" ]; then
-                if [ "$digest" != "sha256:$expected" ]; then
-                  echo "::error::Release 附件摘要不一致：$name $digest != sha256:$expected"
-                  exit 1
-                fi
-              else
-                asset_id=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' <<< "$asset_json")
-                gh api -H "Accept: application/octet-stream" \
-                  "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$RUNNER_TEMP/$name"
-                actual=$(sha256sum "$RUNNER_TEMP/$name" | cut -d' ' -f1)
-                if [ "$actual" != "$expected" ]; then
-                  echo "::error::Release 附件摘要不一致：$name $actual != $expected"
-                  exit 1
-                fi
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes \
+            --title "BioCN v$APP_VERSION"
+          draft_id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft == true and .tag_name == \"$tag\") | .id" | head -n1)
+          if [ -z "$draft_id" ]; then
+            echo "::error::草稿 $tag 创建后未能取到 ID"
+            exit 1
+          fi
+
+          # 草稿按 ID 直接上传附件。
+          for file in release-artifacts/*; do
+            gh api --method POST \
+              -H "Content-Type: application/octet-stream" \
+              --input "$file" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$draft_id/assets?name=$(basename "$file")" > /dev/null
+          done
+
+          # 附件上传后逐一回验摘要，防止 GitHub 侧的静默损坏。
+          asset_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$draft_id")
+          expected_list=$(cat release-artifacts/BioCN_*_arm64.apk.sha256 release-artifacts/checksums-*.sha256)
+          while read -r expected name; do
+            digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<< "$asset_json")
+            if [ -n "$digest" ]; then
+              if [ "$digest" != "sha256:$expected" ]; then
+                echo "::error::Release 附件摘要不一致：$name $digest != sha256:$expected"
+                exit 1
               fi
-            done <<< "$expected_list"
+            else
+              asset_id=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' <<< "$asset_json")
+              gh api -H "Accept: application/octet-stream" \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$RUNNER_TEMP/$name"
+              actual=$(sha256sum "$RUNNER_TEMP/$name" | cut -d' ' -f1)
+              if [ "$actual" != "$expected" ]; then
+                echo "::error::Release 附件摘要不一致：$name $actual != $expected"
+                exit 1
+              fi
+            fi
+          done <<< "$expected_list"
 
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
-          fi
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$draft_id" \
+            -f draft=false -F make_latest=true > /dev/null
