@@ -225,6 +225,12 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    env:
+      # ort-sys 预编译的 ONNX Runtime（CoreML 代码）用 13.4 SDK 构建，链接时
+      # 部署目标低于它会让 Apple linker 选错 compiler-rt，报
+      # `___isPlatformVersionAtLeast` 未定义（tauri#11246 同类问题）。
+      # ORT 本身要求 macOS 12+，这里取 13.0；Linux/Windows 忽略此变量。
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
     strategy:
       fail-fast: false
       matrix:
