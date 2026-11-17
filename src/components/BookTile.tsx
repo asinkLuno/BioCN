@@ -1,17 +1,19 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
+import type { ColoringProgress } from "../lib/reading";
 import { ExportDialog } from "./ExportDialog";
 import { useDialog, ModalBackdrop } from "./dialog";
 
 interface Props {
   book: Book;
   cover?: string;
-  /** This book is the one being colored right now: opening it is refused. */
-  coloring: boolean;
+  /** This book's running job, or null: its only trace lives on this tile. */
+  progress: ColoringProgress | null;
   /** Any job at all is running, so a second 着色全书 would be refused. */
   anyJob: boolean;
   onOpen: (id: string) => void;
   onColorize: (id: string) => void;
+  onCancel: () => void;
   onClearCache: (id: string) => void;
   onRemove: (id: string) => void;
 }
@@ -24,13 +26,17 @@ type Confirming = "remove" | "clear-cache" | null;
 export const BookTile = memo(function BookTile({
   book,
   cover,
-  coloring,
+  progress,
   anyJob,
   onOpen,
   onColorize,
+  onCancel,
   onClearCache,
   onRemove,
 }: Props) {
+  // A running job holds this book: opening, exporting, clearing or removing it
+  // would race the analysis, so they are all refused while `progress` is set.
+  const coloring = progress !== null;
   const [coverBroken, setCoverBroken] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState<Confirming>(null);
@@ -136,14 +142,35 @@ export const BookTile = memo(function BookTile({
             )}
           </button>
 
-          <div ref={menuRoot} className="dropdown dropdown-end absolute top-2 right-2">
-            {coloring && (
-              // The label, not just the muted cover: a disabled book with no
-              // reason reads as broken.
-              <span className="badge badge-primary badge-sm absolute -top-1 right-0 translate-x-1/3 whitespace-nowrap shadow">
-                着色中
+          {progress !== null && (
+            // The job's only trace, on its own tile: just the progress, in the
+            // strip the menu button and the disabled cover sit on. It is
+            // `role="status"`, not an alert — background work must not
+            // interrupt a screen reader — and it renders nothing once the job
+            // is over: done and cancelled are not news.
+            <div
+              role="status"
+              aria-label="着色进度"
+              className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-base-100/85 px-2.5 py-1.5 backdrop-blur-sm"
+            >
+              <progress
+                className="progress progress-primary h-1.5 w-full flex-1"
+                // `max` is the book's sentence count; a bar with no total is
+                // either an empty book or a job that has not parsed one yet,
+                // and 0 would be an invalid range.
+                value={progress.done}
+                max={Math.max(progress.total, 1)}
+              />
+              <span className="text-xs font-medium tabular-nums">
+                {progress.total > 0
+                  ? Math.min(100, Math.round((progress.done / progress.total) * 100))
+                  : 0}
+                %
               </span>
-            )}
+            </div>
+          )}
+
+          <div ref={menuRoot} className="dropdown dropdown-end absolute top-2 right-2">
             <button
               ref={trigger}
               type="button"
@@ -187,14 +214,18 @@ export const BookTile = memo(function BookTile({
                     // One job at a time, and the job holds the model: a second
                     // pass would queue behind it for hours and duplicate its
                     // work. Offering it disabled is clearer than a refusal.
-                    disabled={anyJob}
-                    title={anyJob ? "已有书在着色全书中，等它结束" : undefined}
+                    // The one job it can be is this book's, and then the item
+                    // is its cancel button — the strip on the tile deliberately
+                    // carries no controls.
+                    disabled={progress === null && anyJob}
+                    title={progress === null && anyJob ? "已有书在着色全书中，等它结束" : undefined}
                     onClick={() => {
                       closeMenu();
-                      onColorize(book.id);
+                      if (coloring) onCancel();
+                      else onColorize(book.id);
                     }}
                   >
-                    着色全书
+                    {coloring ? "取消着色全书" : "着色全书"}
                   </button>
                 </li>
                 <li role="none">

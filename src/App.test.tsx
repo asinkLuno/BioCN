@@ -54,12 +54,17 @@ const subscribeMock = vi.mocked(reading.onColoringProgress);
 let push: (progress: reading.ColoringProgress) => void = () => {};
 
 /**
- * The job's bar. It is `role="status"` rather than an alert: a background job
- * that finished is news, not an error, so it must not interrupt a screen reader
+ * The job's strip on its own tile. It is `role="status"` rather than an alert:
+ * a background job is not an error, so it must not interrupt a screen reader
  * mid-shelf — but it must be findable.
  */
-function jobBar() {
-  return screen.getByRole("status", { name: "着色进度" });
+function jobStrip(tile: HTMLElement) {
+  return within(tile).getByRole("status", { name: "着色进度" });
+}
+
+/** The header landmark, to prove the job's progress no longer lives there. */
+function header() {
+  return screen.getByRole("banner");
 }
 
 const dune: library.Book = {
@@ -96,7 +101,7 @@ describe("library", () => {
     });
   });
 
-  it("reports a cancelled job as stopped, not as done", async () => {
+  it("shows nothing for a job that was cancelled before the shelf mounted", async () => {
     listMock.mockResolvedValue([dune]);
     progressMock.mockResolvedValue({
       book: "dune",
@@ -111,13 +116,13 @@ describe("library", () => {
     render(<App />);
     await screen.findByText("1 本书");
 
-    // "完成" after a cancel would claim the book is colored when it is not.
-    expect(jobBar()).toHaveTextContent("已停止");
-    expect(jobBar()).toHaveTextContent("2/4 章");
-    expect(jobBar().querySelector("progress")).toHaveClass("progress-primary");
+    // A stop is the user's own news: it leaves no trace on the shelf.
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    expect(within(tile).queryByRole("status", { name: "着色进度" })).not.toBeInTheDocument();
+    expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeEnabled();
   });
 
-  it("offers 着色全书 and shows the bar it starts", async () => {
+  it("offers 着色全书 and shows the progress on its tile", async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dune, emma]);
     render(<App />);
@@ -134,7 +139,7 @@ describe("library", () => {
     act(() =>
       push({
         book: "dune",
-        done: 0,
+        done: 50,
         total: 200,
         chapters: 0,
         chaptersTotal: 4,
@@ -143,11 +148,13 @@ describe("library", () => {
         error: null,
       }),
     );
+    // The job's only trace is the strip on its own tile, never in the header.
+    await waitFor(() => expect(jobStrip(tile)).toBeInTheDocument());
+    expect(within(header()).queryByRole("status", { name: "着色进度" })).not.toBeInTheDocument();
+    expect(jobStrip(tile)).toHaveTextContent("25%");
     // A job holds its book: opening it is what the user must not be able to do
     // while the job and the reader would analyze the same chapters.
-    await waitFor(() =>
-      expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeDisabled(),
-    );
+    expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeDisabled();
     // The other book is untouched: coloring is background work.
     expect(
       within(screen.getByRole("heading", { name: "Emma" }).closest("li")!).getByRole("button", {
@@ -173,14 +180,13 @@ describe("library", () => {
     render(<App />);
     await screen.findByText("2 本书");
 
-    expect(jobBar()).toHaveTextContent("25%");
-    expect(jobBar()).toHaveTextContent("1/4 章");
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
-    expect(within(tile).getByText("着色中")).toBeInTheDocument();
+    expect(jobStrip(tile)).toHaveTextContent("25%");
     expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeDisabled();
     // Cancelling a job the user cannot see the start of is the point of
-    // reading it on mount.
-    await user.click(screen.getByRole("button", { name: "取消" }));
+    // reading it on mount — the strip carries no controls, so the menu does it.
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await user.click(within(tile).getByRole("menuitem", { name: "取消着色全书" }));
     expect(cancelMock).toHaveBeenCalled();
   });
 
@@ -208,7 +214,7 @@ describe("library", () => {
     expect(within(other).getByRole("menuitem", { name: "阅读" })).toBeEnabled();
   });
 
-  it("reports a finished job and frees the book", async () => {
+  it("a finished job leaves no trace and frees the book", async () => {
     listMock.mockResolvedValue([dune]);
     progressMock.mockResolvedValue({
       book: "dune",
@@ -224,13 +230,55 @@ describe("library", () => {
     render(<App />);
     await screen.findByText("1 本书");
 
-    expect(jobBar()).toHaveTextContent("《Dune》着色全书完成");
+    // Done is not news: the strip is gone without a dismissal, and the book
+    // behaves like any other.
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    expect(within(tile).queryByRole("status", { name: "着色进度" })).not.toBeInTheDocument();
     expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeEnabled();
-    expect(within(tile).queryByText("着色中")).not.toBeInTheDocument();
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    expect(within(tile).getByRole("menuitem", { name: "着色全书" })).toBeEnabled();
+  });
 
-    await user.click(screen.getByRole("button", { name: "关闭" }));
-    await waitFor(() => expect(screen.queryByText("《Dune》着色全书完成")).not.toBeInTheDocument());
+  it("the strip disappears the moment a running job finishes", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await user.click(within(tile).getByRole("menuitem", { name: "着色全书" }));
+    act(() =>
+      push({
+        book: "dune",
+        done: 100,
+        total: 200,
+        chapters: 2,
+        chaptersTotal: 4,
+        finished: false,
+        cancelled: false,
+        error: null,
+      }),
+    );
+    await waitFor(() => expect(jobStrip(tile)).toBeInTheDocument());
+
+    act(() =>
+      push({
+        book: "dune",
+        done: 200,
+        total: 200,
+        chapters: 4,
+        chaptersTotal: 4,
+        finished: true,
+        cancelled: false,
+        error: null,
+      }),
+    );
+    await waitFor(() =>
+      expect(within(tile).queryByRole("status", { name: "着色进度" })).not.toBeInTheDocument(),
+    );
+    expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeEnabled();
+    expect(within(tile).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("says why the job stopped, keeping what it colored", async () => {
@@ -248,9 +296,14 @@ describe("library", () => {
     render(<App />);
     await screen.findByText("1 本书");
 
-    expect(jobBar()).toHaveTextContent("着色全书中断");
-    expect(jobBar()).toHaveTextContent("尚未下载模型");
-    expect(jobBar().querySelector("progress")).toHaveClass("progress-error");
+    // A failure is news, unlike a finish: it becomes an alert, and the strip
+    // still disappears.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("着色全书中断");
+    expect(alert).toHaveTextContent("尚未下载模型");
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    expect(within(tile).queryByRole("status", { name: "着色进度" })).not.toBeInTheDocument();
+    expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeEnabled();
   });
 
   it("reports a job that could not start", async () => {
@@ -266,7 +319,7 @@ describe("library", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("这本书已经在着色了");
-    expect(within(tile).queryByText("着色中")).not.toBeInTheDocument();
+    expect(within(tile).queryByRole("status", { name: "着色进度" })).not.toBeInTheDocument();
   });
 
   it("exports a colored book with inline styles by default", async () => {

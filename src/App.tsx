@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useLibrary } from "./hooks/useLibrary";
 import { useColoring } from "./hooks/useColoring";
 import { BookTile } from "./components/BookTile";
-import { ColoringBar } from "./components/ColoringBar";
 import { Reader } from "./components/Reader";
 import { ModelSheet } from "./components/ModelSheet";
 import type { ImportError } from "./lib/library";
@@ -29,15 +28,6 @@ export default function App() {
   // reader would analyze the same chapter twice, and the reader would wait for
   // the job's own chapter anyway.
   const job = coloring.job;
-  const busy = job !== null && !job.finished;
-  const busyId = busy ? job.book : null;
-  // The bar outlives the job (a finished job stays until dismissed), so the
-  // title must come from the job, not from `busy`. Once the book itself is
-  // gone too (removal is refused only while the job runs), the bar would name
-  // a book the shelf can never show again — nothing is lost by dropping it.
-  const keptBook = job !== null && books.some((book) => book.id === job.book);
-  const busyTitle = books.find((book) => book.id === job?.book)?.title ?? "这本书";
-  const showBar = coloring.job !== null && keptBook;
 
   // The reader owns the whole window while it is open: a shelf behind a book is
   // a distraction, and the reader's own back button returns here.
@@ -92,17 +82,21 @@ export default function App() {
             </svg>
           </button>
         </div>
-        {/* In the header, because coloring is background work: this bar is the
-            only trace of it while the user reads something else. */}
-        {(showBar || coloring.problem !== null) && (
+        {/* A refusal or an interruption is news, so it stays an alert up here.
+            The job's progress itself lives on its own book tile, and leaves no
+            trace once the job is over. */}
+        {coloring.problem !== null && (
           <div className="mx-auto w-full max-w-6xl px-4 pb-2 sm:px-6">
-            <ColoringBar
-              progress={coloring.job}
-              title={busyTitle}
-              problem={coloring.problem}
-              onCancel={coloring.cancel}
-              onDismiss={coloring.dismiss}
-            />
+            <div role="alert" className="alert alert-error alert-soft py-2">
+              <p className="min-w-0 flex-1 text-sm break-words">{coloring.problem}</p>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={coloring.dismissProblem}
+              >
+                知道了
+              </button>
+            </div>
           </div>
         )}
       </header>
@@ -142,10 +136,11 @@ export default function App() {
                 key={book.id}
                 book={book}
                 cover={covers[book.id]}
-                coloring={book.id === busyId}
-                anyJob={busy}
+                progress={job !== null && job.book === book.id ? job : null}
+                anyJob={job !== null}
                 onOpen={setReading}
                 onColorize={coloring.start}
+                onCancel={coloring.cancel}
                 onClearCache={clearCache}
                 onRemove={removeBook}
               />
