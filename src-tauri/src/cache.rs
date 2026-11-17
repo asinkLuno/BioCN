@@ -283,6 +283,35 @@ impl AnalysisCache {
         Ok(found)
     }
 
+    /// Forgets a book's coloring: its chapter markers and the rows its
+    /// sentences keyed, under *every* weights — the user clears "this book's
+    /// cache", not one fingerprint's slice of it.
+    ///
+    /// The sentence table is global (see the module docs), so `sentences` —
+    /// the book's texts, collected by the caller, which is the one that knows
+    /// how to parse — may include lines another book shares. Those rows go
+    /// too: a sentence means the same thing wherever it appears, so a lost
+    /// row costs the other book a recompute, never a wrong color.
+    ///
+    /// One transaction, so a clear that trips halfway leaves the book either
+    /// cached or cleared, not half of each. The file itself does not shrink
+    /// (that would take a `VACUUM`, which would hold the write lock for the
+    /// length of a coloring job); the freed pages are reused by later writes.
+    pub fn clear_book(&self, book: &str, sentences: &[String]) -> Result<()> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction().map_err(err)?;
+        tx.execute("DELETE FROM chapters WHERE book = ?1", params![book])
+            .map_err(err)?;
+        for chunk in sentences.chunks(CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!("DELETE FROM sentences WHERE sentence IN ({placeholders})");
+            let args: Vec<&dyn rusqlite::ToSql> =
+                chunk.iter().map(|sentence| sentence as &dyn rusqlite::ToSql).collect();
+            tx.execute(&sql, args.as_slice()).map_err(err)?;
+        }
+        tx.commit().map_err(err)
+    }
+
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
         // A panic while holding the connection must not make the cache
         // permanently unusable: the data is either committed or not.
@@ -465,5 +494,86 @@ mod tests {
         }
 
         assert!(cache.get("w1", &["他走。".into()]).unwrap().is_empty());
+    }
+
+    /// Clearing a book removes the rows its sentences keyed and its chapter
+    /// markers — across *every* weights, which is what "这本书的缓存" means
+    /// to the user. Rows another book shares go with it: a sentence means the
+    /// same thing wherever it appears, so losing one costs a recompute, never
+    /// a wrong color.
+    #[test]
+    fn clearing_a_book_removes_its_rows_and_leaves_the_others() {
+        let (_dir, cache) = cache();
+        let shared = "两个故事都有的一句。";
+        cache
+            .save_chapter("w1", "dune", 1, true, &[("沙丘的话。".into(), None)])
+            .unwrap();
+        cache
+            .save_chapter("w1", "emma", 1, true, &[("艾玛的话。".into(), None)])
+            .unwrap();
+        cache
+            .save_chapter("w1", "dune", 2, true, &[(shared.to_owned(), None)])
+            .unwrap();
+        cache
+            .save_chapter("w1", "emma", 3, true, &[(shared.to_owned(), None)])
+            .unwrap();
+        // The same sentence under another fingerprint: a variant the user
+        // activated once and left.
+        cache
+            .save_chapter("w2", "dune", 1, true, &[("沙丘的话。".into(), None)])
+            .unwrap();
+
+        cache
+            .clear_book("dune", &[shared.to_owned(), "沙丘的话。".to_owned()])
+            .unwrap();
+
+        assert!(
+            cache.colored_chapters("w1", "dune").unwrap().is_empty(),
+            "the cleared book's markers are gone"
+        );
+        assert!(
+            cache.colored_chapters("w2", "dune").unwrap().is_empty(),
+            "so are its markers under other weights"
+        );
+        assert_eq!(
+            cache.colored_chapters("w1", "emma").unwrap(),
+            HashSet::from([1, 3]),
+            "another book's markers are another book's"
+        );
+        let found = cache
+            .get(
+                "w1",
+                &["沙丘的话。".into(), "艾玛的话。".into()],
+            )
+            .unwrap();
+        assert_eq!(found.get("沙丘的话。"), None, "the book's own row is gone");
+        assert!(
+            found.contains_key("艾玛的话。"),
+            "a sentence only emma has stays"
+        );
+        // The shared row went too: the cleared book held it, and re-analysis
+        // of one sentence is the price of an honest clear.
+        assert_eq!(cache.get("w1", &[shared.to_owned()]).unwrap().get(shared), None);
+    }
+
+    /// A novel's worth of sentences exceeds one `IN (...)` list, and a delete
+    /// that silently stopped at the first chunk would leave most rows behind.
+    #[test]
+    fn clearing_a_book_deletes_past_one_chunk() {
+        let (_dir, cache) = cache();
+        let sentences: Vec<String> = (0..900).map(|index| format!("第{index}句。")).collect();
+        let keys: Vec<String> = sentences.clone();
+        cache
+            .save_chapter("w1", "dune", 1, true, &keys.iter().map(|s| (s.clone(), None)).collect::<Vec<_>>())
+            .unwrap();
+        cache
+            .save_chapter("w1", "emma", 1, true, &[("艾玛的话。".into(), None)])
+            .unwrap();
+
+        cache.clear_book("dune", &sentences).unwrap();
+
+        let left = cache.get("w1", &keys).unwrap();
+        assert!(left.is_empty(), "{}/{} rows survived the clear", left.len(), keys.len());
+        assert!(cache.get("w1", &["艾玛的话。".into()]).unwrap().contains_key("艾玛的话。"));
     }
 }

@@ -7,7 +7,7 @@ import {
   type Book,
   type ImportError,
 } from "../lib/library";
-import { message } from "../lib/reading";
+import { clearBookCache, message } from "../lib/reading";
 import { pickEpubFiles } from "../lib/picker";
 
 interface State {
@@ -178,6 +178,18 @@ export function useLibrary() {
     setState((s) => ({ ...s, errors: [], problem: null }));
   }, []);
 
-  return { ...state, covers, addBooks, removeBook, dismissErrors };
+  /**
+   * Clears a book's coloring cache. Nothing on the shelf changes — the cache
+   * is invisible — so a success stays silent and only a refusal is news here.
+   */
+  const clearCache = useCallback(async (id: string) => {
+    try {
+      await clearBookCache(id);
+    } catch (error) {
+      setState((s) => ({ ...s, problem: message(error) }));
+    }
+  }, []);
+
+  return { ...state, covers, addBooks, removeBook, clearCache, dismissErrors };
 }
 

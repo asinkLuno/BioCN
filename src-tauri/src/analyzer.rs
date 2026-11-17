@@ -657,6 +657,36 @@ pub async fn colorize_book_cancel<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     Ok(())
 }
 
+/// Forgets a book's coloring: the cache rows its sentences keyed and its
+/// chapter markers, under every weights. The next read or whole-book pass
+/// analyzes from scratch, which is what the book menu's 清除缓存 promises.
+///
+/// Refused while *this* book is being colored: the job is writing exactly the
+/// rows a clear would delete, and the bar would end over a book that shows no
+/// coloring. Another book's job is left alone — its writes and this clear
+/// touch disjoint markers, and a sentence row they share is recreated by the
+/// job's next save at worst.
+#[tauri::command]
+pub async fn clear_book_cache<R: Runtime>(app: AppHandle<R>, id: String) -> Result<()> {
+    if app.state::<AnalyzerState>().coloring(&id) {
+        return Err("book-cache: 这本书正在着色全书中，先取消或等它结束再清除缓存".into());
+    }
+    // The book is the one that knows its sentences: collect them the same way
+    // the analysis does — the split here is the key the rows live under.
+    let chapters = crate::reading::parse_book(&app, &id).await?;
+    let sentences: Vec<String> = chapters
+        .iter()
+        .flat_map(|chapter| {
+            chapter.paragraphs.iter().flat_map(|paragraph| {
+                crate::text::split(&paragraph.text)
+                    .into_iter()
+                    .map(move |range| paragraph.text[range].to_owned())
+            })
+        })
+        .collect();
+    app.state::<AnalysisCache>().clear_book(&id, &sentences)
+}
+
 /// A job that lost the race is the UI's second guess, not something the user
 /// can act on: the running one keeps going and its progress is the truth. The
 /// command still fails, because a *silent* no-op would leave the button looking

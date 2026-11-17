@@ -12,8 +12,12 @@ interface Props {
   anyJob: boolean;
   onOpen: (id: string) => void;
   onColorize: (id: string) => void;
+  onClearCache: (id: string) => void;
   onRemove: (id: string) => void;
 }
+
+/** What the confirmation dialog is asking about, or that none is open. */
+type Confirming = "remove" | "clear-cache" | null;
 
 /** Wrapping in a memo is what keeps a shelf worth of tiles from re-rendering
     when one tile's cover loads or its menu opens. */
@@ -24,11 +28,12 @@ export const BookTile = memo(function BookTile({
   anyJob,
   onOpen,
   onColorize,
+  onClearCache,
   onRemove,
 }: Props) {
   const [coverBroken, setCoverBroken] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<Confirming>(null);
   const [exporting, setExporting] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -65,7 +70,7 @@ export const BookTile = memo(function BookTile({
 
   // A real modal, not just a dialog with the `open` attribute: the page behind
   // it is inert and focus is trapped until the user decides.
-  useDialog(dialog, confirming);
+  useDialog(dialog, confirming !== null);
 
   /** Arrow keys walk the menu, as a `role="menu"` is expected to. */
   const moveMenuFocus = (event: React.KeyboardEvent<HTMLUListElement>) => {
@@ -81,7 +86,7 @@ export const BookTile = memo(function BookTile({
   /** Dismisses the confirmation. The trigger is unmounted after a removal, so refocus first. */
   const dismissConfirm = () => {
     dialog.current?.close();
-    setConfirming(false);
+    setConfirming(null);
     trigger.current?.focus();
   };
 
@@ -214,6 +219,23 @@ export const BookTile = memo(function BookTile({
                   <button
                     type="button"
                     role="menuitem"
+                    // The job is writing exactly the rows a clear deletes:
+                    // clearing mid-job would leave the bar finishing over a
+                    // book that shows no coloring.
+                    disabled={coloring}
+                    title={coloring ? "着色全书中，完成后才能清除" : undefined}
+                    onClick={() => {
+                      closeMenu();
+                      setConfirming("clear-cache");
+                    }}
+                  >
+                    清除着色缓存
+                  </button>
+                </li>
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
                     className="text-error"
                     // The job is reading this book's file; removing it mid-job
                     // would leave the bar coloring a book that no longer
@@ -222,7 +244,7 @@ export const BookTile = memo(function BookTile({
                     title={coloring ? "先取消着色全书，再移除" : undefined}
                     onClick={() => {
                       closeMenu();
-                      setConfirming(true);
+                      setConfirming("remove");
                     }}
                   >
                     从书架移除
@@ -263,39 +285,71 @@ export const BookTile = memo(function BookTile({
         />
       )}
 
-      {/* daisyUI modal: removal deletes the imported copy, so ask first. */}
+      {/* daisyUI modal: both actions delete work the user paid for, so ask
+          first. */}
       {confirming && (
         <dialog
           ref={dialog}
           className="modal"
-          aria-labelledby={`remove-title-${book.id}`}
+          aria-labelledby={`${confirming}-title-${book.id}`}
           // Escape closes the element without going through `dismissConfirm`,
           // so the state has to follow the native close too.
-          onClose={() => setConfirming(false)}
-          onCancel={() => setConfirming(false)}
+          onClose={() => setConfirming(null)}
+          onCancel={() => setConfirming(null)}
         >
           <div className="modal-box max-w-sm">
-            <h4 id={`remove-title-${book.id}`} className="text-base font-semibold">
-              移除《{book.title}》？
-            </h4>
-            <p className="mt-2 text-sm text-base-content/70">
-              书架中保存的副本将被删除。之后你随时可以重新添加这个文件。
-            </p>
-            <div className="modal-action">
-              <button type="button" className="btn btn-ghost" onClick={dismissConfirm}>
-                取消
-              </button>
-              <button
-                type="button"
-                className="btn btn-error"
-                onClick={() => {
-                  setConfirming(false);
-                  onRemove(book.id);
-                }}
-              >
-                移除
-              </button>
-            </div>
+            {confirming === "remove" ? (
+              <>
+                <h4 id={`remove-title-${book.id}`} className="text-base font-semibold">
+                  移除《{book.title}》？
+                </h4>
+                <p className="mt-2 text-sm text-base-content/70">
+                  书架中保存的副本将被删除。之后你随时可以重新添加这个文件。
+                </p>
+                <div className="modal-action">
+                  <button type="button" className="btn btn-ghost" onClick={dismissConfirm}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-error"
+                    onClick={() => {
+                      setConfirming(null);
+                      onRemove(book.id);
+                    }}
+                  >
+                    移除
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h4 id={`clear-cache-title-${book.id}`} className="text-base font-semibold">
+                  清除《{book.title}》的着色缓存？
+                </h4>
+                <p className="mt-2 text-sm text-base-content/70">
+                  已保存的着色结果将被删除，再次阅读或着色全书时会重新分析（需要模型计算）。
+                  换过模型变体时，旧变体的缓存也会一并清除。
+                </p>
+                <div className="modal-action">
+                  <button type="button" className="btn btn-ghost" onClick={dismissConfirm}>
+                    取消
+                  </button>
+                  {/* `warning`, not `error`: the loss is real but recoverable —
+                      re-analysis rebuilds everything, unlike removal. */}
+                  <button
+                    type="button"
+                    className="btn btn-warning"
+                    onClick={() => {
+                      setConfirming(null);
+                      onClearCache(book.id);
+                    }}
+                  >
+                    清除
+                  </button>
+                </div>
+              </>
+            )}
           </div>
           <ModalBackdrop onClose={dismissConfirm} />
         </dialog>

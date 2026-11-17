@@ -116,6 +116,15 @@ export const coloringProgress = () =>
 /** Stops the running job after the chapter it is in. */
 export const cancelColorizeBook = () => invoke<void>("colorize_book_cancel");
 
+/**
+ * Forgets a book's coloring: the cached analyses of its sentences and its
+ * chapter markers, under every model variant. The next read or whole-book
+ * pass re-analyzes from scratch.
+ *
+ * Refused while this book is being colored; a refusal arrives as a rejection.
+ */
+export const clearBookCache = (id: string) => invoke<void>("clear_book_cache", { id });
+
 /** Subscribes to coloring progress. Returns the unsubscribe function. */
 export async function onColoringProgress(
   handler: (progress: ColoringProgress) => void,

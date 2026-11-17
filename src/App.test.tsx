@@ -28,6 +28,7 @@ vi.mock("./lib/reading", async (importOriginal) => ({
   colorizeBook: vi.fn(),
   coloringProgress: vi.fn(),
   cancelColorizeBook: vi.fn(),
+  clearBookCache: vi.fn(),
   onColoringProgress: vi.fn(),
 }));
 
@@ -46,6 +47,7 @@ const coverMock = vi.mocked(library.libraryCover);
 const colorizeMock = vi.mocked(reading.colorizeBook);
 const progressMock = vi.mocked(reading.coloringProgress);
 const cancelMock = vi.mocked(reading.cancelColorizeBook);
+const clearCacheMock = vi.mocked(reading.clearBookCache);
 const subscribeMock = vi.mocked(reading.onColoringProgress);
 
 /** The handler `useColoring` subscribed with, so a test can emit progress. */
@@ -463,6 +465,26 @@ describe("library", () => {
     expect(removeMock).toHaveBeenCalledWith("dune");
     await waitFor(() => expect(screen.queryByText("Dune")).not.toBeInTheDocument());
     expect(screen.getByText("1 本书")).toBeInTheDocument();
+  });
+
+  it("clears a book's coloring cache after asking", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune, emma]);
+    render(<App />);
+    expect(await screen.findByText("2 本书")).toBeInTheDocument();
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await user.click(within(tile).getByRole("menuitem", { name: "清除着色缓存" }));
+    // The dialog names the book, or a click meant for another tile could
+    // clear the wrong one's work.
+    expect(screen.getByRole("heading", { name: "清除《Dune》的着色缓存？" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "清除" }));
+
+    expect(clearCacheMock).toHaveBeenCalledWith("dune");
+    // The cache is invisible: a success keeps the shelf as it was and quiet.
+    expect(await screen.findByText("2 本书")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("clears the pending tile and reports an unexpected import failure", async () => {

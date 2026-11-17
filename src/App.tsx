@@ -17,6 +17,7 @@ export default function App() {
     problem,
     addBooks,
     removeBook,
+    clearCache,
     dismissErrors,
   } = useLibrary();
   const coloring = useColoring();
@@ -145,6 +146,7 @@ export default function App() {
                 anyJob={busy}
                 onOpen={setReading}
                 onColorize={coloring.start}
+                onClearCache={clearCache}
                 onRemove={removeBook}
               />
             ))}
