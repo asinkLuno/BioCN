@@ -411,8 +411,8 @@ jobs:
           # 事后查列表会撞最终一致性空窗（run 7 踩过：创建后 1 秒内查不到）。
           # tag 已在上面打好并校验指向，API 会把 release 挂到这个 tag 上。
           draft_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-            -f tag_name="$tag" -f draft=true -f generate_release_notes=true \
-            -f name="BioCN v$APP_VERSION" --jq .id)
+            -f tag_name="$tag" -f name="BioCN v$APP_VERSION" \
+            -F draft=true -F generate_release_notes=true --jq .id)
 
           # 草稿按 ID 直接上传附件。
           for file in release-artifacts/*; do
