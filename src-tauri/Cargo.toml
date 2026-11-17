@@ -32,7 +32,39 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rbook = { version = "0.7", default-features = false }
 sha2 = "0.10"
+unicode-normalization = "0.1"
+unicode-general-category = "1"
+# Model downloads (src/models.rs). `rustls` rather than the default native TLS
+# keeps the same features building for Android without openssl-sys.
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls",
+  "http2",
+  "charset",
+  "stream",
+] }
+# Chapter text is XHTML, so this is the parser; `encoding` gives it the
+# declared-charset handling older Chinese books need (GB2312 chapters).
+quick-xml = { version = "0.42", features = ["encoding"] }
+encoding_rs = "0.8"
 
+# ONNX Runtime for the 主谓宾 analyzer (src/analysis). Same features as upstream's
+# biocn-core: `download-binaries` fetches the official prebuilt library at build
+# time and `tls-rustls` matches reqwest so no openssl toolchain is needed.
+# Android ships its own minimal-build `libonnxruntime.so` in jniLibs and loads it
+# by SONAME at run time, because that 6 MB build (instead of 34 MB) only carries
+# the kernels these three graphs use.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = [
+  "std",
+  "download-binaries",
+  "tls-rustls",
+] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = [
+  "std",
+  "load-dynamic",
+] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

@@ -1,0 +1,212 @@
+//! Reading a book from the shelf: EPUB -> chapters -> colored paragraphs.
+//!
+//! The shelf stores an EPUB file per book; the reader asks for one chapter at a
+//! time. Parsing is the expensive part (a 23k-paragraph novel takes a few
+//! hundred milliseconds), so the last parsed book is kept in memory: paging
+//! through a chapter list must not re-unzip the whole book for every page, and
+//! a reader is only ever in one book.
+//!
+//! Only one book is kept. Opening a second book drops the first, which costs
+//! one re-parse when the user hops back — better than holding every book the
+//! session has ever opened.
+
+use std::sync::{Arc, Mutex};
+
+use serde::Serialize;
+use tauri::{AppHandle, Manager, Runtime};
+
+use crate::analyzer::{AnalyzerState, ColoredParagraph};
+use crate::library::Library;
+use crate::reader::{Chapter, Paragraph};
+
+type Result<T> = std::result::Result<T, String>;
+
+#[derive(Default)]
+pub struct ReadingState {
+    book: Mutex<Option<(String, Arc<Vec<Chapter>>)>>,
+    /// Held while a book is being parsed. Without it, two commands that arrive
+    /// together (a chapter click while the TOC is still loading) both miss the
+    /// cache and unzip the same EPUB twice, and the second result can overwrite
+    /// the first after the reader has already been served from it.
+    parsing: Mutex<()>,
+}
+
+/// One row of the chapter list. Paragraphs are counted but not sent: the list
+/// is a table of contents, and shipping the text would send a whole book over
+/// the IPC bridge to render a sidebar.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterSummary {
+    pub index: usize,
+    pub title: Option<String>,
+    pub paragraphs: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookView {
+    pub id: String,
+    pub title: String,
+    pub chapters: Vec<ChapterSummary>,
+}
+
+/// A chapter's paragraphs, each already split into 主谓宾-colored sentences.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterView {
+    pub index: usize,
+    pub title: Option<String>,
+    pub paragraphs: Vec<ColoredParagraph>,
+}
+
+/// Parsed chapters of `id`, reusing the cached book when it is the same one.
+fn chapters<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &ReadingState,
+    id: &str,
+) -> Result<Arc<Vec<Chapter>>> {
+    if let Ok(cache) = state.book.lock()
+        && let Some((cached_id, chapters)) = cache.as_ref()
+        && cached_id == id
+    {
+        return Ok(chapters.clone());
+    }
+    // Only one parse at a time, and the cache is re-checked under the gate: the
+    // wait above may have been spent waiting for the very book we want. A
+    // poisoned gate is recovered rather than propagated: one unparseable book
+    // panicking must not make the reader unable to open any book again.
+    let _parsing = state
+        .parsing
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Ok(cache) = state.book.lock()
+        && let Some((cached_id, chapters)) = cache.as_ref()
+        && cached_id == id
+    {
+        return Ok(chapters.clone());
+    }
+    let library = app.state::<Library>();
+    let path = library
+        .book_file(id)
+        .ok_or_else(|| format!("book-missing: 书库里没有这本书（{id}）"))?;
+    let file = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let parsed = Arc::new(crate::reader::chapters(file).map_err(|e| e.to_string())?);
+    if let Ok(mut cache) = state.book.lock() {
+        *cache = Some((id.to_owned(), parsed.clone()));
+    }
+    Ok(parsed)
+}
+
+fn title_of<R: Runtime>(app: &AppHandle<R>, id: &str) -> String {
+    app.state::<Library>()
+        .list()
+        .ok()
+        .and_then(|books| books.into_iter().find(|book| book.id == id))
+        .map(|book| book.title)
+        .unwrap_or_else(|| "Untitled".into())
+}
+
+/// Opens a book: its title and chapter list, nothing else.
+///
+/// This is the first command the reader sends, and it is also where the cost of
+/// parsing is paid once.
+#[tauri::command]
+pub async fn book_open<R: Runtime>(app: AppHandle<R>, id: String) -> Result<BookView> {
+    let chapters = {
+        let app = app.clone();
+        let id = id.clone();
+        // Unzipping and XML parsing are blocking file work.
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = app.state::<ReadingState>();
+            chapters(&app, &state, &id)
+        })
+        .await
+        .map_err(|e| e.to_string())??
+    };
+    Ok(BookView {
+        title: title_of(&app, &id),
+        chapters: chapters
+            .iter()
+            .map(|chapter| ChapterSummary {
+                index: chapter.index,
+                title: chapter.title.clone(),
+                paragraphs: chapter.paragraphs.len(),
+            })
+            .collect(),
+        id,
+    })
+}
+
+/// Loads and colors one chapter.
+///
+/// The analysis is what needs the model, so this is also where
+/// `models-missing` surfaces; the frontend turns it into "download a model in
+/// settings" rather than showing a raw error.
+#[tauri::command]
+pub async fn book_chapter<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    index: usize,
+) -> Result<ChapterView> {
+    let chapter = {
+        let app = app.clone();
+        let id = id.clone();
+        let parsed = tauri::async_runtime::spawn_blocking(move || {
+            let state = app.state::<ReadingState>();
+            chapters(&app, &state, &id)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        parsed
+            .iter()
+            .find(|chapter| chapter.index == index)
+            .cloned()
+            .ok_or_else(|| format!("chapter-missing: 这本书没有第 {index} 章"))?
+    };
+
+    let paragraphs: Vec<String> = chapter
+        .paragraphs
+        .iter()
+        .map(|paragraph: &Paragraph| paragraph.text.clone())
+        .collect();
+    let paragraphs = app
+        .state::<AnalyzerState>()
+        .colorize(&app, paragraphs)
+        .await?;
+
+    Ok(ChapterView {
+        index: chapter.index,
+        title: chapter.title,
+        paragraphs,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chapter_list_row_counts_paragraphs_without_text() {
+        let chapter = Chapter {
+            index: 3,
+            title: Some("第三章".into()),
+            paragraphs: vec![
+                Paragraph {
+                    text: "一。".into(),
+                },
+                Paragraph {
+                    text: "二。".into(),
+                },
+            ],
+        };
+        let summary = ChapterSummary {
+            index: chapter.index,
+            title: chapter.title.clone(),
+            paragraphs: chapter.paragraphs.len(),
+        };
+        assert_eq!(summary.paragraphs, 2);
+        // The summary is a TOC row: it must stay small however long the book is.
+        let json = serde_json::to_string(&summary).expect("serialize");
+        assert!(!json.contains('一'), "章节列表不该带正文：{json}");
+    }
+}
