@@ -18,3 +18,38 @@
     overscroll-behavior-y: none;
   }
 }
+
+@layer components {
+  /*
+   * 主谓宾 colors. These come from bioCN (the web app) rather than daisyUI:
+   * the whole point is that the same book reads the same way here as there.
+   * Three hues far apart in lightness as well as hue, so they stay
+   * distinguishable in both themes and for deuteranopes.
+   */
+  .svo-subject {
+    color: #d95f02;
+  }
+
+  .svo-predicate {
+    color: #1b9e77;
+  }
+
+  .svo-object {
+    color: #7570b3;
+  }
+
+  /* A slightly deeper set in dark mode, for contrast on a dark page. */
+  @media (prefers-color-scheme: dark) {
+    .svo-subject {
+      color: #f28e4b;
+    }
+
+    .svo-predicate {
+      color: #4ec6a3;
+    }
+
+    .svo-object {
+      color: #a99cf0;
+    }
+  }
+}

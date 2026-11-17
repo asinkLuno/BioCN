@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { useLibrary } from "./hooks/useLibrary";
 import { BookTile } from "./components/BookTile";
+import { Reader } from "./components/Reader";
+import { ModelSheet } from "./components/ModelSheet";
 import type { ImportError } from "./lib/library";
 
 export default function App() {
@@ -14,8 +17,29 @@ export default function App() {
     removeBook,
     dismissErrors,
   } = useLibrary();
+  const [reading, setReading] = useState<string | null>(null);
+  const [modelsOpen, setModelsOpen] = useState(false);
 
   const isEmpty = !loading && books.length === 0 && pending === 0;
+
+  // The reader owns the whole window while it is open: a shelf behind a book is
+  // a distraction, and the reader's own back button returns here.
+  if (reading !== null) {
+    return (
+      <>
+        <Reader
+          id={reading}
+          onClose={() => setReading(null)}
+          onOpenSettings={() => setModelsOpen(true)}
+          modelsOpen={modelsOpen}
+        />
+        <ModelSheet
+          open={modelsOpen}
+          onClose={() => setModelsOpen(false)}
+        />
+      </>
+    );
+  }
 
   return (
     <div className="flex min-h-dvh flex-col bg-base-100 text-base-content">
@@ -31,19 +55,24 @@ export default function App() {
                   : `${books.length} ${books.length === 1 ? "book" : "books"}`}
             </p>
           </div>
-          <button type="button" className="btn btn-primary btn-sm sm:btn-md" onClick={addBooks}>
-            <svg
+          <button
+            type="button"
+            className="btn btn-square btn-ghost btn-sm sm:btn-md"
+            aria-label="Settings"
+            onClick={() => setModelsOpen(true)}
+          >            <svg
               aria-hidden="true"
               viewBox="0 0 20 20"
-              className="size-4"
+              className="size-5"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.8"
+              strokeWidth="1.6"
               strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              <path d="M10 4v12M4 10h12" />
+              <circle cx="10" cy="10" r="2.6" />
+              <path d="M10 2.6h0a1.4 1.4 0 0 1 1.4 1.4v.7a1 1 0 0 0 .5.9l.6.3a1 1 0 0 0 1 0l.6-.3a1.4 1.4 0 0 1 1.9.5l.5.9a1.4 1.4 0 0 1-.5 1.9l-.6.3a1 1 0 0 0-.5.9v.6a1 1 0 0 0 .5.9l.6.3a1.4 1.4 0 0 1 .5 1.9l-.5.9a1.4 1.4 0 0 1-1.9.5l-.6-.3a1 1 0 0 0-1 0l-.6.3a1 1 0 0 0-.5.9v.7a1.4 1.4 0 0 1-1.4 1.4h-1a1.4 1.4 0 0 1-1.4-1.4v-.7a1 1 0 0 0-.5-.9l-.6-.3a1 1 0 0 0-1 0l-.6.3a1.4 1.4 0 0 1-1.9-.5l-.5-.9a1.4 1.4 0 0 1 .5-1.9l.6-.3a1 1 0 0 0 .5-.9v-.6a1 1 0 0 0-.5-.9l-.6-.3a1.4 1.4 0 0 1-.5-1.9l.5-.9a1.4 1.4 0 0 1 1.9-.5l.6.3a1 1 0 0 0 1 0l.6-.3a1 1 0 0 0 .5-.9v-.7A1.4 1.4 0 0 1 9 2.6z" />
             </svg>
-            Add books
           </button>
         </div>
       </header>
@@ -52,7 +81,9 @@ export default function App() {
         {(problem !== null || errors.length > 0) && (
           <div role="alert" className="alert alert-error mb-5 flex-col items-start gap-2 sm:flex-row sm:items-center">
             <div className="min-w-0">
-              <p className="font-medium">{problem !== null ? "Something went wrong" : errorHeading(errors)}</p>
+              <p className="font-medium">
+                {problem !== null ? "Something went wrong" : errorHeading(errors)}
+              </p>
               <ul className="mt-1 list-inside list-disc text-sm opacity-80">
                 {(problem !== null ? [problem] : errorDetails(errors)).map((line, index) => (
                   // The same message can occur for two files, so index the key.
@@ -62,7 +93,11 @@ export default function App() {
                 ))}
               </ul>
             </div>
-            <button type="button" className="btn btn-ghost btn-sm sm:ml-auto" onClick={dismissErrors}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm sm:ml-auto"
+              onClick={dismissErrors}
+            >
               Dismiss
             </button>
           </div>
@@ -75,8 +110,10 @@ export default function App() {
             {books.map((book) => (
               <BookTile
                 key={book.id}
+                id={book.id}
                 book={book}
                 cover={covers[book.id]}
+                onOpen={setReading}
                 onRemove={removeBook}
               />
             ))}
@@ -96,6 +133,34 @@ export default function App() {
           </p>
         )}
       </main>
+
+      {/* The floating add button lives over the content, bottom-right, like
+          the material FAB: adding is the one action the shelf always offers,
+          whatever state it is in. `fixed` positions it against the window; the
+          app root fills the window so no container scroll shifts it. */}
+      <button
+        type="button"
+        aria-label="Add books"
+        onClick={addBooks}
+        className="btn btn-primary btn-circle fixed bottom-5 right-5 z-20 size-14 text-primary-content shadow-lg transition-transform hover:scale-105 active:scale-95 sm:bottom-8 sm:right-8"
+      >
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 20 20"
+          className="size-6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        >
+          <path d="M10 4v12M4 10h12" />
+        </svg>
+      </button>
+
+      <ModelSheet
+        open={modelsOpen}
+        onClose={() => setModelsOpen(false)}
+      />
     </div>
   );
 }

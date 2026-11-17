@@ -1,13 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
 
 interface Props {
+  id: string;
   book: Book;
   cover?: string;
+  onOpen: (id: string) => void;
   onRemove: (id: string) => void;
 }
 
-export function BookTile({ book, cover, onRemove }: Props) {
+/** Wrapping in a memo is what keeps a shelf worth of tiles from re-rendering
+    when one tile's cover loads or its menu opens. */
+export const BookTile = memo(function BookTile({ book, cover, onOpen, onRemove }: Props) {
   const [coverBroken, setCoverBroken] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -74,31 +78,42 @@ export function BookTile({ book, cover, onRemove }: Props) {
   return (
     <li>
       <article className="flex h-full flex-col gap-3">
-        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-base-200 ring-1 ring-base-content/10">
-          {showCover ? (
-            <img
-              src={cover}
-              alt=""
-              loading="lazy"
-              onError={() => setCoverBroken(true)}
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center p-4 text-base-content/35">
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 48 48"
-                className="size-10"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M24 11v27M24 11c-5-2.6-10-2.6-14 0v24c4-2.6 9-2.6 14 0 5-2.6 10-2.6 14 0V11c-4-2.6-9-2.6-14 0Z" />
-              </svg>
-            </div>
-          )}
+        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-base-200 ring-1 ring-base-content/10 transition ring-offset-2 ring-offset-base-100 hover:ring-primary/40 focus-within:ring-primary/60">
+          {/* The cover is the button: on a shelf, the book itself is the target.
+              It sits under the menu, which needs its own taps. */}
+          <button
+            type="button"
+            aria-label={`Read ${book.title}`}
+            className="group block h-full w-full cursor-pointer focus:outline-none"
+            onClick={() => onOpen(book.id)}
+          >
+            {showCover ? (
+              <img
+                src={cover}
+                alt=""
+                loading="lazy"
+                onError={() => setCoverBroken(true)}
+                className="h-full w-full object-cover transition group-hover:brightness-95"
+              />
+            ) : (
+              // A `span`, not a `div`: a button may only contain phrasing
+              // content, and the fallback icon is inside one.
+              <span className="flex h-full items-center justify-center p-4 text-base-content/35">
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 48 48"
+                  className="size-10"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M24 11v27M24 11c-5-2.6-10-2.6-14 0v24c4-2.6 9-2.6 14 0 5-2.6 10-2.6 14 0V11c-4-2.6-9-2.6-14 0Z" />
+                </svg>
+              </span>
+            )}
+          </button>
 
           <div ref={menuRoot} className="dropdown dropdown-end absolute top-2 right-2">
             <button
@@ -128,6 +143,18 @@ export function BookTile({ book, cover, onRemove }: Props) {
                     ref={firstItem}
                     type="button"
                     role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      onOpen(book.id);
+                    }}
+                  >
+                    Read
+                  </button>
+                </li>
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
                     className="text-error"
                     onClick={() => {
                       closeMenu();
@@ -143,8 +170,16 @@ export function BookTile({ book, cover, onRemove }: Props) {
         </div>
 
         <div className="min-w-0 px-0.5">
-          <h3 className="line-clamp-2 text-sm leading-snug font-medium break-words">
-            {book.title}
+          {/* The heading wraps the button, not the other way round: a `h3` is
+              not phrasing content and would be invalid inside a button. */}
+          <h3 className="text-sm leading-snug font-medium">
+            <button
+              type="button"
+              className="line-clamp-2 w-full text-left break-words hover:underline"
+              onClick={() => onOpen(book.id)}
+            >
+              {book.title}
+            </button>
           </h3>
           <p className="mt-0.5 truncate text-xs text-base-content/55">
             {book.authors.join(", ") || "Unknown author"}
@@ -196,4 +231,4 @@ export function BookTile({ book, cover, onRemove }: Props) {
       )}
     </li>
   );
-}
+});

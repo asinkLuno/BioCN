@@ -7,6 +7,7 @@ import {
   type Book,
   type ImportError,
 } from "../lib/library";
+import { message } from "../lib/reading";
 import { pickEpubFiles } from "../lib/picker";
 
 interface State {
@@ -40,6 +41,11 @@ export function useLibrary() {
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   /** Books hidden optimistically while their removal is queued. */
   const hidden = useRef(new Set<string>());
+  // The shelf, always current: a callback with stable identity (useCallback
+  // with []) must read the latest books through a ref, never through the
+  // stale `state` captured when it was first created.
+  const booksRef = useRef<Book[]>([]);
+  booksRef.current = state.books;
 
   const exclusive = <T,>(job: () => Promise<T>): Promise<T> => {
     const run = queue.current.then(job, job);
@@ -134,7 +140,7 @@ export function useLibrary() {
     // queued import from flashing the tile back before the removal runs.
     hidden.current.add(id);
     // The shelf as it was, so a failed removal can restore it verbatim.
-    const before = state.books;
+    const before = booksRef.current;
     setState((s) => ({ ...s, books: s.books.filter((book) => book.id !== id) }));
     await exclusive(async () => {
       try {
@@ -175,8 +181,3 @@ export function useLibrary() {
   return { ...state, covers, addBooks, removeBook, dismissErrors };
 }
 
-function message(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  return "Something went wrong.";
-}

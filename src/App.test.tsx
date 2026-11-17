@@ -127,7 +127,9 @@ describe("library", () => {
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("Something went wrong")).toBeInTheDocument();
     expect(within(alert).getByText("Cannot reach the library on disk")).toBeInTheDocument();
-    expect(document.querySelectorAll(".skeleton")).toHaveLength(0);
+    // The pending tiles clear out; the two skeleton boxes the closed-but-mounted
+    // model sheet keeps are ignored (jsdom has no `:where(dialog:not([open]))`).
+    expect(document.querySelectorAll("li[aria-hidden='true'] .skeleton")).toHaveLength(0);
   });
 
   it("shows a placeholder when a cover image fails to decode", async () => {
@@ -174,7 +176,9 @@ describe("library", () => {
 
     // A stale snapshot from the import must not overwrite the newer removal.
     finishImport({ library: [dune], added: [dune], errors: [] });
-    await waitFor(() => expect(document.querySelectorAll(".skeleton")).toHaveLength(0));
+    await waitFor(() =>
+      expect(document.querySelectorAll("li[aria-hidden='true'] .skeleton")).toHaveLength(0),
+    );
     expect(screen.getByText("No books yet")).toBeInTheDocument();
   });
 
@@ -226,7 +230,9 @@ describe("library", () => {
     expect(removeMock).not.toHaveBeenCalled();
     finishImport({ library: [dune], added: [dune], errors: [] });
     await waitFor(() => expect(removeMock).toHaveBeenCalledWith("dune"));
-    await waitFor(() => expect(document.querySelectorAll(".skeleton")).toHaveLength(0));
+    await waitFor(() =>
+      expect(document.querySelectorAll("li[aria-hidden='true'] .skeleton")).toHaveLength(0),
+    );
     expect(screen.queryByRole("heading", { name: "Dune" })).not.toBeInTheDocument();
   });
 
