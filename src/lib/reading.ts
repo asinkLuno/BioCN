@@ -83,7 +83,7 @@ export const bookChapter = (id: string, index: number) =>
  */
 export interface ColoringProgress {
   book: string;
-  /** Paragraphs analyzed so far, and how many the book has. */
+  /** Sentences analyzed so far, and how many the chapters in flight have. */
   done: number;
   total: number;
   /** Chapters finished, and how many were uncolored when the job started. */

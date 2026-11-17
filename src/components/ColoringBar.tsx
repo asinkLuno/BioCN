@@ -18,9 +18,11 @@ interface Props {
  * and the whole point is that it does not interrupt anything — the bar is the
  * only trace of it while other books are read.
  *
- * Progress counts paragraphs rather than chapters because that is what the work
- * is: chapters vary from a title page to a 200-page part, so a chapter bar would
- * sit at 40 % and then jump. `chapters` is shown next to it for orientation.
+ * Progress counts sentences rather than chapters because that is what the work
+ * is: the model analyzes sentence by sentence and the cache is keyed by them, so
+ * a one-line heading must not weigh like a 2 000-character block. Chapters
+ * still vary from a title page to a 200-page part — a chapter bar would sit at
+ * 40 % and then jump — so `chapters` is shown next to it for orientation.
  */
 export function ColoringBar({ progress, title, problem, onCancel, onDismiss }: Props) {
   if (problem !== null) {
@@ -70,7 +72,7 @@ export function ColoringBar({ progress, title, problem, onCancel, onDismiss }: P
       </div>
       <progress
         className={`progress mt-1.5 w-full ${failed ? "progress-error" : "progress-primary"}`}
-        // `max` is the book's paragraph count; a bar with no total is either an
+        // `max` is the book's sentence count; a bar with no total is either an
         // empty book or a job that has not parsed one yet, and 0 would be an
         // invalid range.
         value={progress.done}

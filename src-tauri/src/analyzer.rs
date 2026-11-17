@@ -37,12 +37,23 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// The sentences of a chapter's paragraphs — the progress unit, because that
+/// is what the model processes and what the cache is keyed by. Splitting a
+/// chapter twice (here for the bar, inside `colored` for the analysis) is
+/// noise next to the hours of inference it weights.
+fn sentences_in(paragraphs: &[crate::reader::Paragraph]) -> usize {
+    paragraphs
+        .iter()
+        .map(|paragraph| crate::text::split(&paragraph.text).len())
+        .sum()
+}
+
 /// What the main menu's progress bar reads.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColoringProgress {
     pub book: String,
-    /// Paragraphs analyzed so far, and how many the book has.
+    /// Sentences analyzed so far, and how many the chapters in flight have.
     pub done: usize,
     pub total: usize,
     /// Chapters finished, and how many were not colored when the job started.
@@ -387,10 +398,10 @@ pub async fn spawn_colorize_book<A: Runtime>(
     book: String,
     title: String,
     todo: Vec<usize>,
-    paragraphs_total: usize,
+    sentences_total: usize,
 ) -> bool {
     let state = app.state::<AnalyzerState>();
-    let cancelled = match state.begin(&book, paragraphs_total, todo.len()) {
+    let cancelled = match state.begin(&book, sentences_total, todo.len()) {
         Ok(cancelled) => cancelled,
         Err(running) => {
             log_conflict(&title, &running);
@@ -519,7 +530,7 @@ async fn run_book<A: Runtime>(
         let Some(chapter) = parsed.iter().find(|chapter| chapter.index == *index) else {
             continue;
         };
-        let paragraphs = chapter.paragraphs.len();
+        let sentences = sentences_in(&chapter.paragraphs);
         let texts: Vec<String> = chapter
             .paragraphs
             .iter()
@@ -542,7 +553,7 @@ async fn run_book<A: Runtime>(
             };
         }
         chapters += 1;
-        done += paragraphs;
+        done += sentences;
         {
             let mut job = state
                 .job
@@ -619,14 +630,14 @@ pub async fn colorize_book<R: Runtime>(app: AppHandle<R>, id: String) -> Result<
         .collect();
     // Progress is over the work this job will actually do: a book half-colored
     // by reading should not open at 50 %.
-    let paragraphs: usize = chapters
+    let sentences: usize = chapters
         .iter()
         .filter(|chapter| todo.contains(&chapter.index))
-        .map(|chapter| chapter.paragraphs.len())
+        .map(|chapter| sentences_in(&chapter.paragraphs))
         .sum();
     // A refusal has to reach the button: the shelf would otherwise show no bar
     // and no reason, and the user would press it again.
-    if !spawn_colorize_book(app, id, title, todo, paragraphs).await {
+    if !spawn_colorize_book(app, id, title, todo, sentences).await {
         return Err("book-coloring: 另一本书正在着色全书中，等它结束再来".into());
     }
     Ok(())
@@ -664,7 +675,7 @@ impl AnalyzerState {
     fn begin(
         &self,
         book: &str,
-        paragraphs_total: usize,
+        sentences_total: usize,
         chapters_total: usize,
     ) -> std::result::Result<Arc<std::sync::atomic::AtomicBool>, String> {
         let mut job = self
@@ -682,7 +693,7 @@ impl AnalyzerState {
             progress: ColoringProgress {
                 book: book.to_owned(),
                 done: 0,
-                total: paragraphs_total,
+                total: sentences_total,
                 chapters: 0,
                 chapters_total,
                 finished: false,
@@ -734,6 +745,29 @@ impl AnalyzerState {
 mod tests {
     use super::*;
     use crate::analysis::Role;
+
+    /// The progress unit is the sentence, because that is what the model
+    /// processes and what the cache is keyed by: a one-line paragraph heading
+    /// and a two-thousand-character block must not weigh the same.
+    #[test]
+    fn progress_counts_sentences_not_paragraphs() {
+        fn paragraph(text: &str) -> crate::reader::Paragraph {
+            crate::reader::Paragraph {
+                text: text.to_owned(),
+                source: vec![],
+            }
+        }
+        let paragraphs = vec![
+            // A heading: no sentence-final punctuation, still its own run.
+            paragraph("第一章"),
+            paragraph("他走了。「好。」她没回头。"),
+        ];
+        // The heading is its own sentence run, and 「好。」 is a sentence of
+        // its own inside the quote: the chapter weighs 4, not its paragraph
+        // count of 2.
+        assert_eq!(sentences_in(&paragraphs), 4);
+        assert_eq!(sentences_in(&[]), 0);
+    }
 
     /// The paragraph/offset contract: sentence offsets must be usable as DOM
     /// ranges, which means UTF-16 units counted from the paragraph start, not
