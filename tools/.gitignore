@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.onnx
+
+# subset_font.py download cache
+.cache/
+
+# convert_ort.py products (derived from the .onnx above, see tools/README.md)
+*.ort
+*.config
