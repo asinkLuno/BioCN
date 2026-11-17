@@ -445,6 +445,9 @@ jobs:
           fi
           expected_list=$(cat release-artifacts/BioCN_*_arm64.apk.sha256 release-artifacts/checksums-*.sha256)
           while read -r expected name; do
+            # Windows runner 的 sha256sum 输出二进制模式标记 `<hash> *<name>`，
+            # Linux 是 `<hash>  <name>`；比对前剥掉星号（run 10 踩过）。
+            name="${name#\*}"
             digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<< "$asset_json")
             if [ "$digest" != "sha256:$expected" ]; then
               echo "::error::Release 附件摘要不一致：$name $digest != sha256:$expected"
