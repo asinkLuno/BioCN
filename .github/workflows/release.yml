@@ -238,7 +238,9 @@ jobs:
             label: linux
             target: ''
             rustTargets: ''
-          - os: macos-latest
+          # macos-latest(=macos-26) 的 arm64 池多次 "not acquired by hosted
+          # runner" 被系统取消（run 6 三次重试均如此），显式换 macos-15 池。
+          - os: macos-15
             label: macos
             target: aarch64-apple-darwin
             rustTargets: 'aarch64-apple-darwin'
