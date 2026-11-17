@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
-import type { ColoringProgress } from "../lib/reading";
+import { bookHasColoring, type ColoringProgress } from "../lib/reading";
 import { ExportDialog } from "./ExportDialog";
 import { useDialog, ModalBackdrop } from "./dialog";
 
@@ -39,6 +39,8 @@ export const BookTile = memo(function BookTile({
   const coloring = progress !== null;
   const [coverBroken, setCoverBroken] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  /** Whether this book has coloring to clear, asked each time the menu opens. */
+  const [hasColoring, setHasColoring] = useState<boolean | null>(null);
   const [confirming, setConfirming] = useState<Confirming>(null);
   const [exporting, setExporting] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
@@ -68,11 +70,26 @@ export const BookTile = memo(function BookTile({
     document.addEventListener("keydown", onKeyDown);
     // The menu only exists while open, so its first item takes focus itself.
     firstItem.current?.focus();
+    // 清除着色缓存 may only be offered when there is something to clear, and
+    // the answer has to be current when the item is clicked — so it is asked
+    // here, at menu-open, not carried over from an earlier look.
+    let stale = false;
+    setHasColoring(null);
+    bookHasColoring(book.id)
+      .then((has) => {
+        if (!stale) setHasColoring(has);
+      })
+      // A failed check must not hide the item: clearing an empty cache is a
+      // harmless no-op, while a hidden clear looks like a missing one.
+      .catch(() => {
+        if (!stale) setHasColoring(true);
+      });
     return () => {
+      stale = true;
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [menuOpen]);
+  }, [menuOpen, book.id]);
 
   // A real modal, not just a dialog with the `open` attribute: the page behind
   // it is inert and focus is trapped until the user decides.
@@ -198,19 +215,6 @@ export const BookTile = memo(function BookTile({
                     ref={firstItem}
                     type="button"
                     role="menuitem"
-                    disabled={coloring}
-                    onClick={() => {
-                      closeMenu();
-                      onOpen(book.id);
-                    }}
-                  >
-                    阅读
-                  </button>
-                </li>
-                <li role="none">
-                  <button
-                    type="button"
-                    role="menuitem"
                     // One job at a time, and the job holds the model: a second
                     // pass would queue behind it for hours and duplicate its
                     // work. Offering it disabled is clearer than a refusal.
@@ -250,11 +254,18 @@ export const BookTile = memo(function BookTile({
                   <button
                     type="button"
                     role="menuitem"
-                    // The job is writing exactly the rows a clear deletes:
-                    // clearing mid-job would leave the bar finishing over a
-                    // book that shows no coloring.
-                    disabled={coloring}
-                    title={coloring ? "着色全书中，完成后才能清除" : undefined}
+                    // Grey until there is something to clear, and while the job
+                    // is writing exactly the rows a clear deletes: clearing
+                    // mid-job would leave the strip finishing over a book that
+                    // shows no coloring.
+                    disabled={coloring || hasColoring !== true}
+                    title={
+                      coloring
+                        ? "着色全书中，完成后才能清除"
+                        : hasColoring === false
+                          ? "还没有着色缓存"
+                          : undefined
+                    }
                     onClick={() => {
                       closeMenu();
                       setConfirming("clear-cache");

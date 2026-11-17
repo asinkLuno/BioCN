@@ -283,6 +283,20 @@ impl AnalysisCache {
         Ok(found)
     }
 
+    /// Whether `book` has any coloring at all: a chapter marker under *any*
+    /// weights — the same scope [`Self::clear_book`] works on, which is the
+    /// menu the answer feeds. The sentence table is global and cannot name its
+    /// book without parsing it, so the markers are the whole truth here.
+    pub fn has_coloring(&self, book: &str) -> Result<bool> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chapters WHERE book = ?1)",
+            params![book],
+            |row| row.get(0),
+        )
+        .map_err(err)
+    }
+
     /// Forgets a book's coloring: its chapter markers and the rows its
     /// sentences keyed, under *every* weights — the user clears "this book's
     /// cache", not one fingerprint's slice of it.
@@ -554,6 +568,33 @@ mod tests {
         // The shared row went too: the cleared book held it, and re-analysis
         // of one sentence is the price of an honest clear.
         assert_eq!(cache.get("w1", &[shared.to_owned()]).unwrap().get(shared), None);
+    }
+
+    /// The book menu greys its clear item off unless the book holds coloring,
+    /// under *any* weights — the same scope the clear itself works on.
+    #[test]
+    fn a_book_has_coloring_only_while_it_has_markers() {
+        let (_dir, cache) = cache();
+        assert!(!cache.has_coloring("dune").unwrap(), "a fresh book has none");
+
+        cache
+            .save_chapter("w1", "dune", 1, true, &[("沙丘的话。".into(), None)])
+            .unwrap();
+        assert!(cache.has_coloring("dune").unwrap());
+        assert!(
+            !cache.has_coloring("emma").unwrap(),
+            "another book's markers are not this book's"
+        );
+
+        // A variant the user activated once and left still counts: the clear
+        // would remove it, so the menu must offer it.
+        cache
+            .save_chapter("w2", "dune", 2, true, &[("别的变体。".into(), None)])
+            .unwrap();
+        assert!(cache.has_coloring("dune").unwrap());
+
+        cache.clear_book("dune", &["沙丘的话。".to_owned(), "别的变体。".to_owned()]).unwrap();
+        assert!(!cache.has_coloring("dune").unwrap(), "a cleared book has none");
     }
 
     /// A novel's worth of sentences exceeds one `IN (...)` list, and a delete

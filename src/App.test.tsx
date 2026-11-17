@@ -29,6 +29,7 @@ vi.mock("./lib/reading", async (importOriginal) => ({
   coloringProgress: vi.fn(),
   cancelColorizeBook: vi.fn(),
   clearBookCache: vi.fn(),
+  bookHasColoring: vi.fn(),
   onColoringProgress: vi.fn(),
 }));
 
@@ -48,6 +49,7 @@ const colorizeMock = vi.mocked(reading.colorizeBook);
 const progressMock = vi.mocked(reading.coloringProgress);
 const cancelMock = vi.mocked(reading.cancelColorizeBook);
 const clearCacheMock = vi.mocked(reading.clearBookCache);
+const hasColoringMock = vi.mocked(reading.bookHasColoring);
 const subscribeMock = vi.mocked(reading.onColoringProgress);
 
 /** The handler `useColoring` subscribed with, so a test can emit progress. */
@@ -95,6 +97,7 @@ describe("library", () => {
     colorizeMock.mockResolvedValue(undefined);
     cancelMock.mockResolvedValue(undefined);
     progressMock.mockResolvedValue(null);
+    hasColoringMock.mockResolvedValue(false);
     subscribeMock.mockImplementation(async (handler) => {
       push = handler;
       return () => {};
@@ -211,7 +214,8 @@ describe("library", () => {
     // One job at a time: a second pass would wait hours behind the first, so
     // the item explains itself instead of starting and being refused.
     expect(within(other).getByRole("menuitem", { name: "着色全书" })).toBeDisabled();
-    expect(within(other).getByRole("menuitem", { name: "阅读" })).toBeEnabled();
+    // Reading needs no menu item: the cover and the title open the book.
+    expect(within(other).queryByRole("menuitem", { name: "阅读" })).not.toBeInTheDocument();
   });
 
   it("a finished job leaves no trace and frees the book", async () => {
@@ -520,15 +524,35 @@ describe("library", () => {
     expect(screen.getByText("1 本书")).toBeInTheDocument();
   });
 
+  it("greys out 清除着色缓存 while the book has no coloring", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    // The answer, not the pending state, is what must grey the item: wait for
+    // the check to have run before asserting.
+    await waitFor(() => expect(hasColoringMock).toHaveBeenCalledWith("dune"));
+    const item = within(tile).getByRole("menuitem", { name: "清除着色缓存" });
+    expect(item).toBeDisabled();
+    expect(item).toHaveAttribute("title", "还没有着色缓存");
+    expect(clearCacheMock).not.toHaveBeenCalled();
+  });
+
   it("clears a book's coloring cache after asking", async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dune, emma]);
+    hasColoringMock.mockResolvedValue(true);
     render(<App />);
     expect(await screen.findByText("2 本书")).toBeInTheDocument();
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    await user.click(within(tile).getByRole("menuitem", { name: "清除着色缓存" }));
+    const item = within(tile).getByRole("menuitem", { name: "清除着色缓存" });
+    await waitFor(() => expect(item).toBeEnabled());
+    await user.click(item);
     // The dialog names the book, or a click meant for another tile could
     // clear the wrong one's work.
     expect(screen.getByRole("heading", { name: "清除《Dune》的着色缓存？" })).toBeInTheDocument();

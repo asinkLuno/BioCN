@@ -125,6 +125,13 @@ export const cancelColorizeBook = () => invoke<void>("colorize_book_cancel");
  */
 export const clearBookCache = (id: string) => invoke<void>("clear_book_cache", { id });
 
+/**
+ * Whether `id` has coloring to clear: any chapter marker, under any weights —
+ * the same scope `clearBookCache` works on. Asked when a book menu opens, so
+ * the 清除着色缓存 item can be honest about an empty cache.
+ */
+export const bookHasColoring = (id: string) => invoke<boolean>("book_has_coloring", { id });
+
 /** Subscribes to coloring progress. Returns the unsubscribe function. */
 export async function onColoringProgress(
   handler: (progress: ColoringProgress) => void,

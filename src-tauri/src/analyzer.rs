@@ -687,6 +687,17 @@ pub async fn clear_book_cache<R: Runtime>(app: AppHandle<R>, id: String) -> Resu
     app.state::<AnalysisCache>().clear_book(&id, &sentences)
 }
 
+/// Whether `id` has coloring to clear: any chapter marker, under any weights —
+/// the same scope [`clear_book_cache`] works on.
+///
+/// The book menu greys 清除着色缓存 off when there is nothing to clear, and
+/// answering that must not parse the whole book: the markers settle it with
+/// one lookup, taken at menu-open so it is current when the item is clicked.
+#[tauri::command]
+pub async fn book_has_coloring<R: Runtime>(app: AppHandle<R>, id: String) -> Result<bool> {
+    app.state::<AnalysisCache>().has_coloring(&id)
+}
+
 /// A job that lost the race is the UI's second guess, not something the user
 /// can act on: the running one keeps going and its progress is the truth. The
 /// command still fails, because a *silent* no-op would leave the button looking
