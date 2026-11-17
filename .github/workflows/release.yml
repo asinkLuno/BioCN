@@ -1,0 +1,417 @@
+name: Release BioCN
+
+# releases 分支推进后：构建签名 arm64 APK + Windows/Linux/macOS 桌面安装包 → GitHub Release。
+# 方式参照 MusicDan 的 android-build.yml；本项目暂无官网，故没有 Pages 部分。
+#
+# 发布前需要在仓库 Secrets 里配置（keystore 在本机 android-signing/，密码见同目录 SECRETS.txt）：
+#   ANDROID_KEYSTORE_BASE64    base64 -w0 android-signing/biocn.keystore 的输出
+#   ANDROID_KEY_ALIAS          biocn
+#   ANDROID_KEYSTORE_PASSWORD  keystore 口令
+#   ANDROID_KEY_PASSWORD       key 口令（与 keystore 口令相同）
+#
+# 使用：把 main 快进到 releases 分支并推送，或从 releases 分支手动触发 workflow_dispatch。
+on:
+  push:
+    branches:
+      - releases
+  workflow_dispatch:
+
+# 发布必须串行，避免并发同步或重跑互相覆盖。
+concurrency:
+  group: biocn-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_NDK_VERSION: '30.0.16248370'
+  ANDROID_BUILD_TOOLS_VERSION: '37.0.0'
+  # android-signing/biocn.keystore 生成时的证书指纹；换 keystore 必须同步更新这里。
+  ANDROID_CERT_SHA256: '1ab11299c4513c4c04eba5e2ed0dfe24378ca955be84d278ce258a16f005dc6a'
+
+jobs:
+  # 发布质量门禁：releases 只能构建 main 上已有的提交，且前端测试先过一遍。
+  guard:
+    if: github.ref == 'refs/heads/releases'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify the build commit came from main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git fetch --tags --force origin
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "::error::releases 只能构建 main 上已有的提交；请先把改动合入 main，再把 releases 快进到 main。"
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.22.1'
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Pin Yarn Classic
+        run: corepack enable && corepack prepare yarn@1.22.22 --activate
+
+      - name: Install frontend dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run frontend tests
+        run: yarn test
+
+  # Android：签名 arm64 APK，签名材料只从 Secrets 读取，缺失即失败，绝不生成替代证书。
+  android:
+    needs: guard
+    if: github.ref == 'refs/heads/releases'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.22.1'
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Pin Yarn Classic
+        run: corepack enable && corepack prepare yarn@1.22.22 --activate
+
+      - name: Setup JDK and Gradle cache
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17.0.21+9'
+          cache: gradle
+          cache-dependency-path: |
+            src-tauri/gen/android/**/*.gradle*
+            src-tauri/gen/android/**/gradle-wrapper.properties
+            src-tauri/gen/android/gradle.properties
+            src-tauri/Cargo.lock
+
+      - name: Install pinned Android SDK and NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "ndk;$ANDROID_NDK_VERSION"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: android-ndk-${{ env.ANDROID_NDK_VERSION }}
+
+      - name: Install frontend dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Restore release signing from Secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          for variable in KEYSTORE_BASE64 KS_ALIAS KS_STORE_PASS KS_KEY_PASS; do
+            if [ -z "${!variable}" ]; then
+              echo "::error::Missing signing secret: $variable. Restore the existing keystore into Secrets; never generate a replacement."
+              exit 1
+            fi
+          done
+          umask 077
+          mkdir -p android-signing
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android-signing/biocn.keystore
+          keytool -list -keystore android-signing/biocn.keystore -alias "$KS_ALIAS" -storepass:env KS_STORE_PASS > /dev/null
+          python3 tools/android-signing-properties.py
+
+      - name: Read app version
+        id: version
+        run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      # tauri-action 负责调用 `tauri android build`；beforeBuildCommand 会执行 `yarn build`。
+      - name: Build signed arm64 APK
+        uses: tauri-apps/tauri-action@v1
+        env:
+          BIOCN_BUILD_NUMBER: ${{ github.run_number }}
+        with:
+          tauriScript: yarn tauri
+          mobile: android
+          args: --apk --split-per-abi --target aarch64
+          uploadUpdaterJson: false
+
+      - name: Verify APK and write checksum
+        env:
+          BIOCN_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+          shopt -s nullglob
+          apks=(src-tauri/gen/android/app/build/outputs/apk/arm64/release/*.apk)
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one signed arm64 APK, found ${#apks[@]}"
+            printf '%s\n' "${apks[@]}"
+            exit 1
+          fi
+          apk="${apks[0]}"
+          signature=$("$tools/apksigner" verify --print-certs "$apk")
+          cert=$(printf '%s\n' "$signature" | grep -i 'certificate SHA-256 digest' | head -n1 | sed 's/.*digest:[[:space:]]*//' | tr -d ':' | tr 'A-F' 'a-f')
+          if [ "$cert" != "$ANDROID_CERT_SHA256" ]; then
+            echo "::error::APK signing certificate mismatch (expected $ANDROID_CERT_SHA256, got $cert)"
+            exit 1
+          fi
+          "$tools/apksigner" verify --verbose "$apk"
+          metadata=$("$tools/aapt" dump badging "$apk")
+          expected_code=$((1000000000 + BIOCN_BUILD_NUMBER))
+          if [[ "$metadata" != *"package: name='ink.syncmoon.biocn' versionCode='$expected_code'"* ]]; then
+            echo "::error::Unexpected application id or versionCode (expected $expected_code)"
+            printf '%s\n' "$metadata"
+            exit 1
+          fi
+          expected_version="${{ steps.version.outputs.version }}"
+          if [[ "$metadata" != *"versionName='$expected_version'"* ]]; then
+            echo "::error::Unexpected versionName (expected $expected_version)"
+            printf '%s\n' "$metadata"
+            exit 1
+          fi
+          if [[ "$metadata" != *"native-code: 'arm64-v8a'"* ]]; then
+            echo "::error::APK does not contain arm64-v8a"
+            printf '%s\n' "$metadata"
+            exit 1
+          fi
+          mkdir -p artifacts/ci
+          name="BioCN_${{ steps.version.outputs.version }}_arm64.apk"
+          cp "$apk" "artifacts/ci/$name"
+          (cd artifacts/ci && sha256sum "$name" > "$name.sha256")
+          cat "artifacts/ci/$name.sha256"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: BioCN_${{ steps.version.outputs.version }}_arm64-build-${{ github.run_number }}
+          path: |
+            artifacts/ci/BioCN_${{ steps.version.outputs.version }}_arm64.apk
+            artifacts/ci/BioCN_${{ steps.version.outputs.version }}_arm64.apk.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f android-signing/biocn.keystore src-tauri/gen/android/keystore.properties
+
+  # Windows / Linux / macOS 桌面安装包；macOS 出 universal（Apple Silicon + Intel）包。
+  desktop:
+    needs: guard
+    if: github.ref == 'refs/heads/releases'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: linux
+            target: ''
+            rustTargets: ''
+          # universal-apple-darwin 只是 Tauri 的打包别名；rust 工具链必须装两个真实 target。
+          - os: macos-latest
+            label: macos
+            target: universal-apple-darwin
+            rustTargets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - os: windows-latest
+            label: windows
+            target: ''
+            rustTargets: ''
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.22.1'
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Pin Yarn Classic
+        run: corepack enable && corepack prepare yarn@1.22.22 --activate
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: ${{ matrix.rustTargets }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: desktop-${{ matrix.label }}
+
+      - name: Install Linux build dependencies
+        if: matrix.label == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
+
+      - name: Install frontend dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build desktop bundles
+        uses: tauri-apps/tauri-action@v1
+        with:
+          tauriScript: yarn tauri
+          args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+          uploadUpdaterJson: false
+
+      - name: Collect bundles and write checksums
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/ci
+          find src-tauri/target -path '*/release/bundle/*' -type f \
+            \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) \
+            -exec cp {} artifacts/ci/ \;
+          count=$(ls -1 artifacts/ci | wc -l)
+          if [ "$count" -lt 1 ]; then
+            echo "::error::No desktop bundles found"
+            find src-tauri/target -path '*bundle*' | head -50
+            exit 1
+          fi
+          # 按平台命名，避免 release job 下载合并时同名互相覆盖。
+          manifest="checksums-${{ matrix.label }}.sha256"
+          : > "artifacts/ci/$manifest"
+          for file in artifacts/ci/*; do
+            base=$(basename "$file")
+            [ "$base" = "$manifest" ] && continue
+            (cd artifacts/ci && sha256sum "$base") >> "$manifest"
+          done
+          cat "artifacts/ci/$manifest"
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: desktop-${{ matrix.label }}-build-${{ github.run_number }}
+          path: artifacts/ci
+          if-no-files-found: error
+          compression-level: 0
+
+  # 汇总发布：所有平台产物打包进同一个 GitHub Release；附件摘要逐一回验后才转正式。
+  release:
+    needs: [android, desktop]
+    if: github.ref == 'refs/heads/releases'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Verify artifact checksums
+        run: |
+          set -euo pipefail
+          cd release-artifacts
+          ls -la
+          sha256sum -c --strict BioCN_*_arm64.apk.sha256
+          sha256sum -c --strict checksums-*.sha256
+
+      - name: Read app version
+        id: version
+        run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$APP_VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+            tag_sha=$(git rev-list -n 1 "$tag")
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              echo "::error::标签 $tag 已指向 $tag_sha，而不是本次构建的 $GITHUB_SHA；请提升版本号后重新同步。"
+              exit 1
+            fi
+          else
+            git tag -a "$tag" -m "BioCN $tag (build $GITHUB_RUN_NUMBER)" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+          fi
+
+          reused=false
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            release_id=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)
+            is_draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+            if [ "$is_draft" = "false" ]; then
+              echo "GitHub Release $tag 已发布，复用现有安装包。"
+              reused=true
+            else
+              # `GET /releases/tags/<tag>` 不返回草稿，按 ID 删除才能稳定清理失败残留。
+              echo "清理上次失败留下的草稿 $tag"
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
+            fi
+          fi
+
+          if [ "$reused" = "false" ]; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes \
+              --title "BioCN v$APP_VERSION"
+            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" release-artifacts/*
+
+            # 附件上传后逐一回验摘要，防止 GitHub 侧的静默损坏。
+            release_id=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)
+            asset_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id")
+            expected_list=$(cat release-artifacts/BioCN_*_arm64.apk.sha256 release-artifacts/checksums-*.sha256)
+            while read -r expected name; do
+              digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<< "$asset_json")
+              if [ -n "$digest" ]; then
+                if [ "$digest" != "sha256:$expected" ]; then
+                  echo "::error::Release 附件摘要不一致：$name $digest != sha256:$expected"
+                  exit 1
+                fi
+              else
+                asset_id=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' <<< "$asset_json")
+                gh api -H "Accept: application/octet-stream" \
+                  "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$RUNNER_TEMP/$name"
+                actual=$(sha256sum "$RUNNER_TEMP/$name" | cut -d' ' -f1)
+                if [ "$actual" != "$expected" ]; then
+                  echo "::error::Release 附件摘要不一致：$name $actual != $expected"
+                  exit 1
+                fi
+              fi
+            done <<< "$expected_list"
+
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
