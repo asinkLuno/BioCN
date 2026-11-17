@@ -281,6 +281,21 @@ jobs:
             libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
 
+      # ort-sys 预编译的 ONNX Runtime 带 CoreML 的 ObjC++ @available 检查，
+      # 引用 ___isPlatformVersionAtLeast；它只在 Apple compiler-rt builtins 里，
+      # rustc 的 -nodefaultlibs 会抑制系统默认库，rust 自带 compiler_builtins
+      # 又不含它，必须显式链接（tauri#11246 同类修法）。
+      - name: Link Apple compiler-rt builtins
+        if: matrix.label == 'macos'
+        run: |
+          set -euo pipefail
+          rt="$(xcrun clang -print-resource-dir)/lib/darwin/libclang_rt.osx.a"
+          if [ ! -f "$rt" ]; then
+            echo "::error::compiler-rt builtins not found at $rt"
+            exit 1
+          fi
+          echo "RUSTFLAGS=-C link-arg=$rt" >> "$GITHUB_ENV"
+
       - name: Install frontend dependencies
         run: yarn install --frozen-lockfile
 
