@@ -25,3 +25,8 @@ dist-ssr
 
 # Agent tooling (vendored skills, has its own repo)
 .agents/
+
+# Android release signing material (CI reads it from Secrets instead)
+android-signing/
+*.keystore
+*.jks
