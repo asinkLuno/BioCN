@@ -22,11 +22,11 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
-use tauri_plugin_fs::{FilePath, FsExt, OpenOptions};
+use tauri_plugin_fs::{FsExt, OpenOptions};
 
 use crate::analysis::Role;
 use crate::analyzer::{ColoredParagraph, ColoredSentence};
-use crate::library::Library;
+use crate::library::{file_path, Library};
 use crate::reader::{self, Paragraph, Placed};
 
 /// Where a chapter's colors come from.
@@ -584,14 +584,6 @@ fn save<R: Runtime>(app: &AppHandle<R>, destination: &str, bytes: &[u8]) -> Resu
         .map_err(|error| format!("无法写入 {destination}：{error}"))?;
     out.flush()
         .map_err(|error| format!("无法写入 {destination}：{error}"))
-}
-
-/// Parses a plain path or a `content://` / `file://` URI. Parsing cannot fail.
-fn file_path(path: &str) -> FilePath {
-    match path.parse::<FilePath>() {
-        Ok(file_path) => file_path,
-        Err(never) => match never {},
-    }
 }
 
 #[cfg(test)]

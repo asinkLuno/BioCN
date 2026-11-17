@@ -279,8 +279,7 @@ impl Analyzer {
             if answers.contains_key(sentence) {
                 continue;
             }
-            let answer = analyze_sentence(&self.resources, &self.sessions, sentence)
-                .map(|analysis| analysis.map(|analysis| analysis.segments));
+            let answer = analyze_sentence(&self.resources, &self.sessions, sentence);
             analyzed += 1;
             match answer {
                 Ok(segments) => {
@@ -605,7 +604,7 @@ pub async fn colorize_book<R: Runtime>(app: AppHandle<R>, id: String) -> Result<
         .ok()
         .and_then(|books| books.into_iter().find(|book| book.id == id))
         .map(|book| book.title)
-        .unwrap_or_else(|| "无题".into());
+        .unwrap_or_else(|| crate::reading::DEFAULT_TITLE.into());
     // Which chapters are left is decided here, not by the job: the totals shown
     // on the bar have to be right when it appears, and a chapter the reader
     // colored yesterday must not be counted as work to do.

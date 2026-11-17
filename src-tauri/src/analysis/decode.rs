@@ -9,11 +9,11 @@ use crate::analysis::resources::BioCNResources;
 use crate::analysis::roles::Dep;
 use crate::analysis::utf16::from_utf16;
 
+/// One decoded word: just the text. Its position in the sentence died with the
+/// old Word.start/end — nothing ever read it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Word {
     pub text: String,
-    pub start: usize,
-    pub end: usize,
 }
 
 /// argmax over `len` floats starting at `offset` (first max wins, like NaN
@@ -84,8 +84,6 @@ pub fn decode_words(
         if b > a {
             words.push(Word {
                 text: from_utf16(&text[a..b]),
-                start: a,
-                end: b,
             });
         }
     }

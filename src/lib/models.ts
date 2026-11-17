@@ -18,6 +18,8 @@ export interface VariantStatus {
   description: string;
   /** Download size in bytes as published; 0 when the manifest is unreachable. */
   bytes: number;
+  /** Bytes already on disk (the installed stamp size); 0 before first install. Mirrors Rust `VariantStatus.size`. */
+  size: number;
   /** Bytes of an interrupted attempt already on disk, for "resume". */
   partial: number;
 }

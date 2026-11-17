@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
   exportBook,
@@ -9,9 +9,9 @@ import {
 } from "../lib/exporting";
 import { message } from "../lib/reading";
 import { epubFilter } from "../lib/picker";
+import { useDialog, ModalBackdrop } from "./dialog";
 
 interface Props {
-  open: boolean;
   /** The book to export, and the title used for the default file name. */
   id: string;
   title: string;
@@ -32,23 +32,14 @@ type Phase =
  * what the file contains, and a file picked first would have to be rewritten
  * after the fact to change the answer.
  */
-export function ExportDialog({ open, id, title, onClose }: Props) {
+export function ExportDialog({ id, title, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [stylesheet, setStylesheet] = useState<Stylesheet>("inline");
   const [phase, setPhase] = useState<Phase>({ kind: "choosing" });
 
-  useEffect(() => {
-    const element = dialog.current;
-    if (!element) return;
-    if (open && !element.open) element.showModal();
-    if (!open && element.open) element.close();
-  }, [open]);
-
-  // A new book starts a new export: the previous one's report or failure is
-  // about a file the user is no longer looking at.
-  useEffect(() => {
-    if (open) setPhase({ kind: "choosing" });
-  }, [open, id]);
+  // Mounted only while a book is being exported (BookTile renders it only for
+  // that), so it opens once on mount and never toggles afterwards.
+  useDialog(dialog, true);
 
   const run = async () => {
     let target: string | null;
@@ -189,12 +180,7 @@ export function ExportDialog({ open, id, title, onClose }: Props) {
           )}
         </div>
       </div>
-      <button
-        type="button"
-        aria-label="关闭"
-        className="modal-backdrop"
-        onClick={close}
-      />
+      <ModalBackdrop onClose={close} />
     </dialog>
   );
 }

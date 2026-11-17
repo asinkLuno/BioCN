@@ -1,9 +1,9 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
 import { ExportDialog } from "./ExportDialog";
+import { useDialog, ModalBackdrop } from "./dialog";
 
 interface Props {
-  id: string;
   book: Book;
   cover?: string;
   /** This book is the one being colored right now: opening it is refused. */
@@ -65,10 +65,7 @@ export const BookTile = memo(function BookTile({
 
   // A real modal, not just a dialog with the `open` attribute: the page behind
   // it is inert and focus is trapped until the user decides.
-  useEffect(() => {
-    const element = dialog.current;
-    if (element && confirming && !element.open) element.showModal();
-  }, [confirming]);
+  useDialog(dialog, confirming);
 
   /** Arrow keys walk the menu, as a `role="menu"` is expected to. */
   const moveMenuFocus = (event: React.KeyboardEvent<HTMLUListElement>) => {
@@ -260,7 +257,6 @@ export const BookTile = memo(function BookTile({
 
       {exporting && (
         <ExportDialog
-          open={exporting}
           id={book.id}
           title={book.title}
           onClose={() => setExporting(false)}
@@ -301,12 +297,7 @@ export const BookTile = memo(function BookTile({
               </button>
             </div>
           </div>
-          <button
-            type="button"
-            aria-label="关闭"
-            className="modal-backdrop"
-            onClick={dismissConfirm}
-          />
+          <ModalBackdrop onClose={dismissConfirm} />
         </dialog>
       )}
     </li>

@@ -18,7 +18,6 @@ use ort::environment::Environment;
 use ort::session::Session;
 use ort::value::Tensor;
 
-use crate::analysis::pipeline::SessionRunner;
 use crate::analysis::resources::{Error, Result};
 
 pub struct Sessions {
@@ -119,8 +118,11 @@ fn ids_tensor(shape: (i64, i64), ids: &[i64]) -> Result<Tensor<i64>> {
     Tensor::from_array((vec![shape.0, shape.1], ids.to_vec())).map_err(oerr)
 }
 
-impl SessionRunner for Sessions {
-    fn run_tok(&self, input_ids: &[i64], shape: (i64, i64)) -> Result<Vec<f32>> {
+/// The three model calls as plain methods; `pipeline.rs` documents why there
+/// is no runner trait (no mocks exist; reintroduce one for tensor-replay
+/// tests).
+impl Sessions {
+    pub fn run_tok(&self, input_ids: &[i64], shape: (i64, i64)) -> Result<Vec<f32>> {
         let input = ids_tensor(shape, input_ids)?;
         let mut session = lock(&self.tok);
         let outputs = session.run(ort::inputs![input]).map_err(oerr)?;
@@ -128,7 +130,7 @@ impl SessionRunner for Sessions {
         Ok(logits.to_vec())
     }
 
-    fn run_pos(
+    pub fn run_pos(
         &self,
         input_ids: &[i64],
         ids_shape: (i64, i64),
@@ -147,7 +149,7 @@ impl SessionRunner for Sessions {
         Ok(logits.to_vec())
     }
 
-    fn run_dep(
+    pub fn run_dep(
         &self,
         input_ids: &[i64],
         ids_shape: (i64, i64),

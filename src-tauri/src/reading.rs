@@ -21,6 +21,11 @@ use crate::reader::{Chapter, Paragraph};
 
 type Result<T> = std::result::Result<T, String>;
 
+/// Shown when a book has no usable title anywhere (OPF and file name both
+/// empty). One shared constant so the fallback word cannot drift between the
+/// reader, the coloring job and the index.
+pub(crate) const DEFAULT_TITLE: &str = "无题";
+
 #[derive(Default)]
 pub struct ReadingState {
     book: Mutex<Option<(String, Arc<Vec<Chapter>>)>>,
@@ -103,7 +108,7 @@ fn title_of<R: Runtime>(app: &AppHandle<R>, id: &str) -> String {
         .ok()
         .and_then(|books| books.into_iter().find(|book| book.id == id))
         .map(|book| book.title)
-        .unwrap_or_else(|| "无题".into())
+        .unwrap_or_else(|| DEFAULT_TITLE.into())
 }
 
 /// Every chapter of `id`, parsed (from memory when it is the cached book).

@@ -11,6 +11,7 @@ import {
   type VariantId,
 } from "../lib/models";
 import { message } from "../lib/reading";
+import { useDialog, ModalBackdrop } from "./dialog";
 
 /** A hoisted no-op: literal props in callers would be a fresh function every render. */
 const noop = () => {};
@@ -39,11 +40,11 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
   const [progress, setProgress] = useState<ModelProgress | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
 
+  // Toggled open and closed by `open`: the shelf keeps the sheet mounted.
+  useDialog(dialog, open);
   useEffect(() => {
     const element = dialog.current;
-    if (!element) return;
-    if (open && !element.open) element.showModal();
-    if (!open && element.open) element.close();
+    if (!open && element?.open) element.close();
   }, [open]);
 
   // Read the status whenever the sheet opens: another window (or a crashed
@@ -71,10 +72,13 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
     setWorking(variant);
     setProblem(null);
     setProgress(null);
-    // Subscribe before the command: a debug build copies from disk and can
-    // finish every file before a listener attached afterwards is told.
-    const unlisten = await onModelProgress((event) => setProgress(event));
+    // Everything from the subscription on is guarded: if listening fails,
+    // `busy` still clears, or every button in the sheet would stay disabled.
+    let unlisten: (() => void) | undefined;
     try {
+      // Subscribe before the command: a debug build copies from disk and can
+      // finish every file before a listener attached afterwards is told.
+      unlisten = await onModelProgress((event) => setProgress(event));
       setStatus(await modelsInstall(variant));
       onChange();
     } catch (error) {
@@ -83,7 +87,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
       // puts the "resume" size on screen.
       setStatus(await modelsStatus().catch(() => null));
     } finally {
-      unlisten();
+      unlisten?.();
       setBusy(null);
       setProgress(null);
     }
@@ -181,16 +185,37 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                   : 0;
               return (
                 <li key={variant.id}>
-                  {/* The active card is outlined in primary. Clicking an
-                      installed card switches to it; hovering darkens it so the
-                      clickability is visible. */}
-                  <button
-                    type="button"
-                    disabled={!isInstalled || isActive || busy !== null}
-                    onClick={() => void activate(variant.id)}
-                    className={`card border w-full bg-base-100 text-left transition-colors duration-200 hover:bg-base-200 ${
-                      isActive ? "border-primary" : "border-base-content/10"
-                    }`}
+                  {/* Not a <button>: a button may not contain buttons, and a
+                      disabled parent would swallow the child clicks on some
+                      webviews. The card itself becomes clickable (activate)
+                      only when that is possible. */}
+                  <div
+                    role="button"
+                    tabIndex={isInstalled && !isActive && busy === null ? 0 : undefined}
+                    aria-disabled={!isInstalled || isActive || busy !== null}
+                    onClick={(event) => {
+                      // Clicks on 移除/下载 bubble here; the guard plus the
+                      // event-target check keep those from also activating.
+                      const target = event.target as HTMLElement;
+                      if (target.closest("button")) return;
+                      if (isInstalled && !isActive && busy === null) void activate(variant.id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        (event.key === "Enter" || event.key === " ") &&
+                        isInstalled &&
+                        !isActive &&
+                        busy === null
+                      ) {
+                        event.preventDefault();
+                        void activate(variant.id);
+                      }
+                    }}
+                    className={`card border w-full bg-base-100 text-left transition-colors duration-200 ${
+                      isInstalled && !isActive && busy === null
+                        ? "cursor-pointer hover:bg-base-200"
+                        : ""
+                    } ${isActive ? "border-primary" : "border-base-content/10"}`}
                   >
                     <div className="card-body gap-2 p-4">
                       <div className="flex items-start gap-3">
@@ -202,7 +227,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                           <p className="mt-1 text-xs text-base-content/50">
                             {formatBytes(variant.bytes)}
                             {variant.partial > 0 && !isInstalled && (
-                              <> · 已下载 {formatBytes(variant.partial)}</>
+                              <> · 已下载 {formatBytes(variant.partial)} </>
                             )}
                           </p>
                         </div>
@@ -211,12 +236,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                             type="button"
                             className="btn btn-ghost btn-sm text-error"
                             disabled={busy !== null}
-                            onClick={(event) => {
-                              // The card is one big button; removal must not
-                              // trigger the switch underneath it.
-                              event.stopPropagation();
-                              void remove(variant.id);
-                            }}
+                            onClick={() => void remove(variant.id)}
                           >
                             {isRemoving ? <span className="loading loading-spinner loading-xs" /> : "移除"}
                           </button>
@@ -251,7 +271,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                         </>
                       )}
                     </div>
-                  </button>
+                  </div>
                 </li>
               );
             })}
@@ -270,12 +290,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
           </button>
         </div>
       </div>
-      <button
-        type="button"
-        aria-label="关闭"
-        className="modal-backdrop"
-        onClick={() => busy === null && onClose()}
-      />
+      <ModalBackdrop onClose={() => busy === null && onClose()} />
     </dialog>
   );
 }

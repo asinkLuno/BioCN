@@ -191,7 +191,11 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             书架
           </button>
           <div className="min-w-0 flex-1 text-center">
-            <p className="truncate text-sm font-medium">{book?.title ?? "正在打开…"}</p>
+            <p className="truncate text-sm font-medium">
+              {/* `book` lags the switch (the parse is what sets it): naming the
+                  old book while opening the new one would be a lie. */}
+              {book?.id === id ? book.title : "正在打开…"}
+            </p>
             {chapter?.title && (
               <p className="truncate text-xs text-base-content/55">{chapter.title}</p>
             )}
@@ -280,7 +284,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             ))}
           </div>
         ) : (
-          <article className="reader-prose space-y-4 text-[17px] leading-[1.85] sm:text-lg">
+          <article className="space-y-4 text-[17px] leading-[1.85] sm:text-lg">
             {chapter.paragraphs.map((paragraph, at) => (
               <Paragraph key={at} paragraph={paragraph} />
             ))}

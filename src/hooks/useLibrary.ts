@@ -22,7 +22,7 @@ interface State {
 }
 
 /** Cover data URLs keyed by book id. */
-export type Covers = Record<string, string>;
+type Covers = Record<string, string>;
 
 export function useLibrary() {
   const [state, setState] = useState<State>({

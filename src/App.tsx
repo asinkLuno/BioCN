@@ -31,8 +31,12 @@ export default function App() {
   const busy = job !== null && !job.finished;
   const busyId = busy ? job.book : null;
   // The bar outlives the job (a finished job stays until dismissed), so the
-  // title must come from the job, not from `busy`.
+  // title must come from the job, not from `busy`. Once the book itself is
+  // gone too (removal is refused only while the job runs), the bar would name
+  // a book the shelf can never show again — nothing is lost by dropping it.
+  const keptBook = job !== null && books.some((book) => book.id === job.book);
   const busyTitle = books.find((book) => book.id === job?.book)?.title ?? "这本书";
+  const showBar = coloring.job !== null && keptBook;
 
   // The reader owns the whole window while it is open: a shelf behind a book is
   // a distraction, and the reader's own back button returns here.
@@ -89,7 +93,7 @@ export default function App() {
         </div>
         {/* In the header, because coloring is background work: this bar is the
             only trace of it while the user reads something else. */}
-        {(coloring.job !== null || coloring.problem !== null) && (
+        {(showBar || coloring.problem !== null) && (
           <div className="mx-auto w-full max-w-6xl px-4 pb-2 sm:px-6">
             <ColoringBar
               progress={coloring.job}
@@ -135,7 +139,6 @@ export default function App() {
             {books.map((book) => (
               <BookTile
                 key={book.id}
-                id={book.id}
                 book={book}
                 cover={covers[book.id]}
                 coloring={book.id === busyId}

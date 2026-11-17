@@ -63,7 +63,12 @@ pub fn write_active_variant<R: Runtime>(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    let temporary = target.with_extension("json.tmp");
+    // A unique temp per write: two windows can run install/activate/remove
+    // concurrently, and a shared `settings.json.tmp` would make one rename
+    // fail (or silently lose the loser's write).
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = target.with_extension(format!("json.{}.{}.tmp", std::process::id(), unique));
     std::fs::write(&temporary, text).map_err(|e| e.to_string())?;
     std::fs::rename(&temporary, &target).map_err(|e| e.to_string())
 }

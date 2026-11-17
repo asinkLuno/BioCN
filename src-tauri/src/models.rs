@@ -144,12 +144,12 @@ pub fn installed_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     let active = crate::settings::active_variant(app)
         .filter(|variant| installed(&root.join(variant)).is_some())
         .or_else(|| {
-            let mut installed: Vec<String> = ["int8", "fp16"]
+            let installed: Vec<String> = VARIANTS
                 .into_iter()
                 .filter(|variant| installed(&root.join(variant)).is_some())
                 .map(str::to_owned)
                 .collect();
-            installed.sort();
+            // VARIANTS is in the order the fallback must try, no sort needed.
             installed.into_iter().next()
         });
     let variant =
@@ -161,6 +161,10 @@ pub fn installed_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
 /// not just against itself: a truncated or half-written stamp would otherwise
 /// list a single file and `installed()` would call the variant complete.
 const REQUIRED: [&str; 3] = ["biocn_tok.ort", "biocn_pos.ort", "biocn_dep.ort"];
+
+/// Event the install download streams [`Progress`] on. The frontend
+/// (`src/lib/models.ts`) listens on the same literal.
+pub const MODELS_PROGRESS_EVENT: &str = "models://progress";
 
 /// The variant whose files all sit in `dir`, per the stamp it wrote.
 ///
@@ -190,8 +194,13 @@ fn installed(dir: &Path) -> Option<String> {
     Some(variant)
 }
 
+/// The two published weight sets, in display order (int8 first: it is the
+/// cheaper one and the alphabetical fallback in `installed_dir` relies on
+/// the sorted order).
+const VARIANTS: [&str; 2] = ["int8", "fp16"];
+
 fn is_variant(name: &str) -> bool {
-    matches!(name, "int8" | "fp16")
+    VARIANTS.contains(&name)
 }
 
 /// Total size of the regular files directly inside `dir`; 0 if it is missing.
@@ -502,7 +511,7 @@ fn status_of<R: Runtime>(
         Err(error) => (None, Some(error)),
     };
     let mut installed_variants = Vec::new();
-    let variants = ["int8", "fp16"]
+    let variants = VARIANTS
         .into_iter()
         .map(|id| {
             let spec = manifest.as_ref().and_then(|m| m.variants.get(id));
@@ -612,7 +621,15 @@ pub async fn models_activate<R: Runtime>(app: AppHandle<R>, variant: String) -> 
     if installed(&root.join(&variant)).is_none() {
         return Err(format!("models-missing: {variant} 没有安装在磁盘上"));
     }
-    crate::settings::write_active_variant(&app, Some(&variant))?;
+    // The settings write still takes the same operation lock install/remove
+    // hold, so concurrent install+activate cannot interleave: the unique temp
+    // file in settings.rs keeps the writes intact, the lock keeps the
+    // *decision* (which variant is active) in order. No long job runs inside
+    // the critical section.
+    app
+        .state::<AnalyzerState>()
+        .while_installing_model(async { crate::settings::write_active_variant(&app, Some(&variant)) })
+        .await?;
     // Drop the sessions so the next analysis loads the variant just picked; a
     // cache full of spans from the old one must not survive the switch.
     if let Some(state) = app.try_state::<AnalyzerState>() {
@@ -672,7 +689,7 @@ async fn fetch<R: Runtime>(
         let base = done;
         download(&client, &file_url(&file.path), &dest, file.bytes, |bytes| {
             let _ = app.emit(
-                "models://progress",
+                MODELS_PROGRESS_EVENT,
                 Progress {
                     variant: variant.to_string(),
                     file: name.clone(),

@@ -247,15 +247,12 @@ impl Library {
         let cover_path = metadata
             .cover
             .as_ref()
-            .filter(|cover| {
-                let path = self
-                    .covers_dir()
-                    .join(format!("{id}.{}", extension_for_mime(&cover.mime)));
-                fs::write(&path, &cover.bytes).is_ok()
-            })
-            .map(|cover| {
-                self.covers_dir()
-                    .join(format!("{id}.{}", extension_for_mime(&cover.mime)))
+            .and_then(|cover| epub::extension_for_mime(&cover.mime))
+            .and_then(|extension| {
+                let path = self.covers_dir().join(format!("{id}.{extension}"));
+                fs::write(&path, &metadata.cover.as_ref().expect("checked").bytes)
+                    .ok()
+                    .map(|_| path)
             });
 
         let book = Book {
@@ -301,7 +298,7 @@ impl Library {
         // Ids come from the frontend, so never let one escape the library dirs.
         if is_valid_id(id) {
             let _ = fs::remove_file(self.book_path(id));
-            for extension in ["jpg", "jpeg", "png", "gif", "webp", "svg"] {
+            for extension in epub::COVER_EXTENSIONS {
                 let _ = fs::remove_file(self.covers_dir().join(format!("{id}.{extension}")));
             }
         }
@@ -312,11 +309,13 @@ impl Library {
         if !is_valid_id(id) {
             return None;
         }
-        for extension in ["jpg", "jpeg", "png", "gif", "webp", "svg"] {
+        for extension in epub::COVER_EXTENSIONS {
             let path = self.covers_dir().join(format!("{id}.{extension}"));
             if let Ok(bytes) = fs::read(&path) {
                 return Some(CoverImage {
-                    mime: mime_for_extension(extension).to_owned(),
+                    mime: epub::mime_for_extension(extension)
+                        .expect("the extension list comes from the same table")
+                        .to_owned(),
                     base64: base64_encode(&bytes),
                 });
             }
@@ -369,29 +368,9 @@ fn fallback_title(display_name: &str) -> String {
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
     let stem = stem.trim();
     if stem.is_empty() {
-        "无题".to_owned()
+        crate::reading::DEFAULT_TITLE.to_owned()
     } else {
         stem.to_owned()
-    }
-}
-
-fn extension_for_mime(mime: &str) -> &'static str {
-    match mime {
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/svg+xml" => "svg",
-        _ => "jpg",
-    }
-}
-
-fn mime_for_extension(extension: &str) -> &'static str {
-    match extension {
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        _ => "image/jpeg",
     }
 }
 

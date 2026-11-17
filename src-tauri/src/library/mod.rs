@@ -59,7 +59,10 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn file_path(path: &str) -> FilePath {
+/// Parses a plain path or a `content://` / `file://` URI. Parsing cannot fail.
+/// Export uses it too, so commands write their report files through the same
+/// fs-plugin support.
+pub(crate) fn file_path(path: &str) -> FilePath {
     match path.parse::<FilePath>() {
         Ok(file_path) => file_path,
         Err(never) => match never {},

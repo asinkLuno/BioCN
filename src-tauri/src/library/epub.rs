@@ -134,17 +134,46 @@ fn cover_mime(declared: &str, href: &str) -> Option<String> {
         return None;
     }
     let extension = href.rsplit('.').next()?.to_lowercase();
-    let mime = match extension.as_str() {
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        "avif" => "image/avif",
-        "bmp" => "image/bmp",
-        "jpg" | "jpeg" => "image/jpeg",
-        _ => return None,
-    };
-    Some(mime.to_owned())
+    Some(mime_for_extension(&extension)?.to_owned())
+}
+
+/// The canonical image-mime table for covers: the single place where image
+/// mimes, file extensions and which types the library accepts are decided.
+/// `cover` derives from this; the disk store (store.rs) reads the extensions
+/// off it. The accepted set must not drift between the two directions (an
+/// `image/avif` cover once fell back to a `.jpg` name and was served as
+/// `image/jpeg`).
+#[rustfmt::skip]
+pub const TABLE: &[(&str, &str)] = &[
+    ("image/jpeg", "jpg"),
+    ("image/png", "png"),
+    ("image/gif", "gif"),
+    ("image/webp", "webp"),
+    ("image/avif", "avif"),
+    ("image/bmp", "bmp"),
+    ("image/svg+xml", "svg"),
+];
+
+/// The extensions a stored cover can use, mirrored from [`TABLE`]; a unit test
+/// checks the mirror stays honest.
+pub const COVER_EXTENSIONS: &[&str] = &["jpg", "png", "gif", "webp", "avif", "bmp", "svg"];
+
+/// The extension a cover with `mime` is stored under, or `None` when the
+/// library does not accept this image type.
+pub fn extension_for_mime(mime: &str) -> Option<&'static str> {
+    TABLE
+        .iter()
+        .find(|&&(known, _)| known == mime)
+        .map(|&(_, extension)| extension)
+}
+
+/// The mime of a stored cover file, or `None` when it is not a cover
+/// extension this table knows (one direction implies the other).
+pub fn mime_for_extension(extension: &str) -> Option<&'static str> {
+    TABLE
+        .iter()
+        .find(|&&(_, known)| known == extension)
+        .map(|&(mime, _)| mime)
 }
 
 /// Rejects a read that exceeds `limit` bytes instead of buffering all of it.
@@ -177,7 +206,7 @@ fn collapse_whitespace(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_COVER_BYTES, read_metadata};
+    use super::{COVER_EXTENSIONS, TABLE, MAX_COVER_BYTES, extension_for_mime, mime_for_extension, read_metadata};
     use std::io::{Cursor, Write};
 
     /// Builds an EPUB around a raw OPF document.
@@ -296,6 +325,16 @@ mod tests {
         .expect("parses");
 
         assert!(book.cover.is_none(), "a non-image cover must not be stored");
+    }
+
+    #[test]
+    fn the_extension_list_matches_the_mime_table() {
+        for &(mime, extension) in TABLE {
+            assert_eq!(mime_for_extension(extension), Some(mime));
+            assert_eq!(extension_for_mime(mime), Some(extension));
+            assert!(COVER_EXTENSIONS.contains(&extension));
+        }
+        assert_eq!(COVER_EXTENSIONS.len(), TABLE.len());
     }
 
     #[test]

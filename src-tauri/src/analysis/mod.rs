@@ -15,7 +15,7 @@
 //! decode      logits -> words / tags / dependency heads
 //! eisner      HanLP's Eisner decoder for the DEP head scores
 //! roles       主谓宾 spans over the original text
-//! engine      the `ort` sessions behind `SessionRunner`
+//! engine      the `ort` sessions the pipeline drives
 //! ```
 //!
 //! The pure half (everything but `engine`) has no I/O, so it is tested against
@@ -30,6 +30,6 @@ pub mod roles;
 pub mod tokenizer;
 pub mod utf16;
 
-pub use pipeline::{MAX_SUBS, MAX_WORDS, SentenceAnalysis, SessionRunner, analyze_sentence};
+pub use pipeline::{MAX_SUBS, MAX_WORDS, analyze_sentence};
 pub use resources::BioCNResources;
 pub use roles::{Dep, Role, Segment};

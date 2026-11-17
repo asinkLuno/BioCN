@@ -77,9 +77,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let sentence = &paragraph.text[range.clone()];
             let start = biocn_lib::analysis::utf16::utf16_len(&paragraph.text[..range.start]);
             match analyze_sentence(&resources, &sessions, sentence)? {
-                Some(analysis) => {
-                    let spans: Vec<String> = analysis
-                        .segments
+                Some(segments) => {
+                    let spans: Vec<String> = segments
                         .iter()
                         .filter(|segment| segment.role != biocn_lib::analysis::Role::Normal)
                         .map(|segment| format!("{:?}({})", segment.role, segment.text))

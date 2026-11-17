@@ -25,6 +25,11 @@
    * the whole point is that the same book reads the same way here as there.
    * Three hues far apart in lightness as well as hue, so they stay
    * distinguishable in both themes and for deuteranopes.
+   *
+   * These six hex values are copied verbatim by the colored-EPUB stylesheet
+   * (src-tauri/src/export.rs `STYLESHEET`), which the backend test pins to a
+   * sample of them. Change the two files together or exports stop matching
+   * the app.
    */
   .svo-subject {
     color: #d95f02;

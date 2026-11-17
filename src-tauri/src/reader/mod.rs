@@ -129,11 +129,6 @@ pub struct Placed {
     /// `<br/>` becomes).
     pub from: u32,
     pub to: u32,
-    /// Which markup event produced it. A colored span is never allowed to cross
-    /// two of these: between `a` and `b` in `a <em>b</em>` sit the `</em><em>`
-    /// bytes, so a span straddling both would close inside an element it did
-    /// not open in.
-    pub run: u32,
 }
 
 impl Placed {
@@ -142,7 +137,6 @@ impl Placed {
             ch,
             from: SYNTHETIC,
             to: SYNTHETIC,
-            run: 0,
         }
     }
 
@@ -492,13 +486,6 @@ struct Frame {
     name: String,
     /// The characters of the paragraph being collected, in reading order.
     chars: Vec<Placed>,
-    /// Number for the next text event this frame collects.
-    ///
-    /// Only has to differ between the runs of one paragraph, and a paragraph is
-    /// always one frame's characters, so a per-frame counter is enough — and it
-    /// keeps incrementing across a flush, because the frame stays open for the
-    /// text that follows its child blocks.
-    runs: u32,
 }
 
 impl Frame {
@@ -506,18 +493,11 @@ impl Frame {
         Self {
             name,
             chars: Vec::new(),
-            runs: 0,
         }
     }
 
     fn push_placed(&mut self, placed: Placed) {
         self.chars.push(placed);
-    }
-
-    fn take_run(&mut self) -> u32 {
-        let run = self.runs;
-        self.runs = self.runs.saturating_add(1);
-        run
     }
 
     /// Records a markup event's text, remembering where each character sits.
@@ -526,15 +506,11 @@ impl Frame {
     /// computed by walking it — which is why the parser hands over
     /// [`Event::Text`]'s own content instead of a normalized copy: entity
     /// references are separate events, so a text run is exactly its bytes.
-    ///
-    /// `run` increments per event so a span can be kept inside one: the bytes
-    /// *between* two runs are tags, and a span may not straddle them.
     fn push_str(&mut self, text: &str, span: std::ops::Range<usize>) {
-        let run = self.take_run();
         for (offset, ch) in text.char_indices() {
             let from = byte_in_document(span.start + offset);
             let to = byte_in_document(span.start + offset + ch.len_utf8());
-            self.chars.push(Placed { ch, from, to, run });
+            self.chars.push(Placed { ch, from, to });
         }
     }
 
@@ -544,11 +520,10 @@ impl Frame {
     /// that is the unit a rewrite can replace: wrapping part of it would leave
     /// a dangling `&` in the document.
     fn push_ref(&mut self, text: &str, span: std::ops::Range<usize>) {
-        let run = self.take_run();
         let from = byte_in_document(span.start);
         let to = byte_in_document(span.end);
         for ch in text.chars() {
-            self.chars.push(Placed { ch, from, to, run });
+            self.chars.push(Placed { ch, from, to });
         }
     }
 

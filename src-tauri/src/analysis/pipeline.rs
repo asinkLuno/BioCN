@@ -1,6 +1,8 @@
 //! bioCN sentence analysis: preprocessing -> ONNX session calls -> decoding
-//! -> bioCN 主谓宾 segments. The session runner is injected so tests can run
-//! on recorded tensors and the app on ONNX Runtime.
+//! -> bioCN 主谓宾 segments. The three model calls live on the `Sessions`
+//! side (engine.rs); if a test ever needs to replay recorded tensors instead
+//! of running ONNX, re-introduce a runner trait there — no mock exists yet,
+//! so the indirection was removed as dead weight.
 //!
 //! Hard limit from `tools/README.md`: a single call may carry at most 510
 //! subwords for TOK and 510 words for POS/DEP (the exported graphs have no
@@ -8,7 +10,7 @@
 //! chunked below those limits.
 
 use crate::analysis::decode::{Word, decode_dep, decode_pos, decode_words};
-pub use crate::analysis::resources::Result as RunnerResult;
+use crate::analysis::engine::Sessions;
 use crate::analysis::resources::{BioCNResources, Result, pack_word_rows, tok_prep, words_prep};
 use crate::analysis::roles::{Dep, Segment, char_roles, to_segments};
 use crate::analysis::utf16::to_utf16;
@@ -18,41 +20,15 @@ pub const MAX_SUBS: usize = 508;
 /// Max words fed to POS/DEP per call (<= 510 per README).
 pub const MAX_WORDS: usize = 500;
 
-/// The three model calls, injected so the same pipeline runs on
-/// ONNX Runtime (Rust) or recorded fixture tensors.
-pub trait SessionRunner {
-    fn run_tok(&self, input_ids: &[i64], shape: (i64, i64)) -> Result<Vec<f32>>;
-    fn run_pos(
-        &self,
-        input_ids: &[i64],
-        ids_shape: (i64, i64),
-        token_span: &[i64],
-        span_shape: (i64, i64, i64),
-    ) -> Result<Vec<f32>>;
-    fn run_dep(
-        &self,
-        input_ids: &[i64],
-        ids_shape: (i64, i64),
-        token_span: &[i64],
-        span_shape: (i64, i64, i64),
-        mask: &[u8],
-    ) -> Result<(Vec<f32>, Vec<f32>)>;
-}
-
-#[derive(Debug, Clone)]
-pub struct SentenceAnalysis {
-    pub words: Vec<Word>,
-    pub pos: Vec<String>,
-    pub deps: Vec<Dep>,
-    pub segments: Vec<Segment>,
-}
-
 /// `analyzeSentence` — full analysis of one sentence.
+///
+/// Returns the colored segments only; the words/tags/heads they are built
+/// from die here. Callers only ever color text with them.
 pub fn analyze_sentence(
     res: &BioCNResources,
-    runner: &dyn SessionRunner,
+    runner: &Sessions,
     sentence: &str,
-) -> Result<Option<SentenceAnalysis>> {
+) -> Result<Option<Vec<Segment>>> {
     let text = to_utf16(sentence);
 
     // ---- TOK (chunked at the subword limit) -----------------------------
@@ -120,10 +96,5 @@ pub fn analyze_sentence(
 
     let tokens: Vec<String> = words.iter().map(|w| w.text.clone()).collect();
     let roles = char_roles(&text, &tokens, &deps, &pos);
-    Ok(Some(SentenceAnalysis {
-        words,
-        pos,
-        deps,
-        segments: to_segments(&text, &roles),
-    }))
+    Ok(Some(to_segments(&text, &roles)))
 }
