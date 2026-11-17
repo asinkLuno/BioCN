@@ -302,12 +302,14 @@ jobs:
             exit 1
           fi
           # 按平台命名，避免 release job 下载合并时同名互相覆盖。
+          # 重定向必须写在子 shell 内部：`(cd ... && ...) >> x` 的重定向挂在外层
+          # shell 上，会展开成仓库根目录下的裸文件（本地彩排踩过的坑）。
           manifest="checksums-${{ matrix.label }}.sha256"
           : > "artifacts/ci/$manifest"
           for file in artifacts/ci/*; do
             base=$(basename "$file")
             [ "$base" = "$manifest" ] && continue
-            (cd artifacts/ci && sha256sum "$base") >> "$manifest"
+            (cd artifacts/ci && sha256sum "$base" >> "$manifest")
           done
           cat "artifacts/ci/$manifest"
 
