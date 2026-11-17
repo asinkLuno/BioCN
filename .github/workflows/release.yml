@@ -423,24 +423,32 @@ jobs:
           done
 
           # 附件上传后逐一回验摘要，防止 GitHub 侧的静默损坏。
-          asset_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$draft_id")
+          # digest 是 GitHub 异步计算的：上传完立刻查可能还没有（run 9 踩过，
+          # 0.5 秒后验证时全空），轮询等它就绪再比对，不搞下载回验分支。
+          asset_json=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            asset_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$draft_id")
+            have=$(jq -r '[.assets[] | select(.digest != null)] | length' <<< "$asset_json")
+            total=$(jq -r '.assets | length' <<< "$asset_json")
+            if [ "$total" -ge 1 ] && [ "$have" = "$total" ]; then
+              echo "digest 全部就绪 ($have/$total)"
+              break
+            fi
+            echo "digest 异步计算中 ($have/$total)，5 秒后重试..."
+            sleep 5
+          done
+          have=$(jq -r '[.assets[] | select(.digest != null)] | length' <<< "$asset_json")
+          total=$(jq -r '.assets | length' <<< "$asset_json")
+          if [ "$total" -lt 1 ] || [ "$have" != "$total" ]; then
+            echo "::error::50 秒后仍有附件 digest 未就绪 ($have/$total)"
+            exit 1
+          fi
           expected_list=$(cat release-artifacts/BioCN_*_arm64.apk.sha256 release-artifacts/checksums-*.sha256)
           while read -r expected name; do
             digest=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest // empty' <<< "$asset_json")
-            if [ -n "$digest" ]; then
-              if [ "$digest" != "sha256:$expected" ]; then
-                echo "::error::Release 附件摘要不一致：$name $digest != sha256:$expected"
-                exit 1
-              fi
-            else
-              asset_id=$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' <<< "$asset_json")
-              gh api -H "Accept: application/octet-stream" \
-                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$RUNNER_TEMP/$name"
-              actual=$(sha256sum "$RUNNER_TEMP/$name" | cut -d' ' -f1)
-              if [ "$actual" != "$expected" ]; then
-                echo "::error::Release 附件摘要不一致：$name $actual != $expected"
-                exit 1
-              fi
+            if [ "$digest" != "sha256:$expected" ]; then
+              echo "::error::Release 附件摘要不一致：$name $digest != sha256:$expected"
+              exit 1
             fi
           done <<< "$expected_list"
 
