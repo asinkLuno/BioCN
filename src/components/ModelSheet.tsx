@@ -12,6 +12,7 @@ import {
 } from "../lib/models";
 import { message } from "../lib/reading";
 import { useDialog, ModalBackdrop } from "./dialog";
+import { UpdateSection } from "./UpdateSection";
 
 /** A hoisted no-op: literal props in callers would be a fresh function every render. */
 const noop = () => {};
@@ -125,7 +126,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
     <dialog
       ref={dialog}
       className="modal"
-      aria-labelledby="models-title"
+      aria-labelledby="settings-title"
       onClose={onClose}
       // Escape must not dismiss the sheet mid-download: the transfer keeps
       // running with nothing on screen to show it or to cancel it.
@@ -135,9 +136,15 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
       }}
     >
       <div className="modal-box max-w-lg">
-          <h3 id="models-title" className="text-base font-semibold">
-            分析模型
+          <h3 id="settings-title" className="text-base font-semibold">
+            设置
           </h3>
+
+        {/* 分析模型是设置的第一节；版本与更新（UpdateSection）跟在后面。 */}
+        <section aria-labelledby="models-title">
+          <h4 id="models-title" className="mt-2 text-sm font-semibold">
+            分析模型
+          </h4>
           <p className="mt-1 text-sm leading-relaxed text-base-content/65">
             主谓宾着色需要句子分析模型。下载一次，之后应用即可离线使用。两个版本可以同时存在
             于磁盘上——随时切换。
@@ -283,6 +290,9 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
             ? "移除模型不会影响你的书；它们只是不再着色，直到你下载或启用另一个模型。"
             : "两个版本都在本机运行，不会上传任何内容。"}
         </p>
+        </section>
+
+        <UpdateSection open={open} />
 
         <div className="modal-action">
           <button type="button" className="btn" onClick={onClose} disabled={busy !== null}>
