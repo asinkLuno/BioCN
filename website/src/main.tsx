@@ -1,0 +1,452 @@
+import { useEffect, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  ArrowDownToLine,
+  BookOpen,
+  Code2,
+  FileDown,
+  Laptop,
+  Layers,
+  LibraryBig,
+  Monitor,
+  Palette,
+  ShieldCheck,
+  Smartphone,
+  Terminal,
+  WifiOff,
+  type LucideIcon,
+} from 'lucide-react';
+import './index.css';
+
+// 发布元数据由 CI 的 scripts/pages-release.mjs 从 GitHub Releases 生成并写进部署目录；
+// 这里运行时读取并校验，不通过校验的数据一律退回到"前往 GitHub Releases"兜底。
+const base = import.meta.env.BASE_URL;
+const repository = 'https://github.com/asinkLuno/bioCN';
+const downloadPrefix = `${repository}/releases/download/`;
+
+type Platform = 'android' | 'windows' | 'macos' | 'linux';
+type Download = {
+  name: string;
+  platform: Platform;
+  size: number;
+  sha256: string;
+  download_url: string;
+};
+type Release = {
+  version: string;
+  published_at: string;
+  notes: string;
+  downloads: Download[];
+};
+
+const platformOrder: Platform[] = ['android', 'windows', 'macos', 'linux'];
+
+const platformMeta: Record<Platform, { label: string; hint: string; icon: LucideIcon }> = {
+  android: { label: 'Android', hint: 'Android 7.0+ · arm64-v8a', icon: Smartphone },
+  windows: { label: 'Windows', hint: 'Windows 10/11 · x64', icon: Monitor },
+  macos: { label: 'macOS', hint: 'macOS 13.0+ · Apple Silicon', icon: Laptop },
+  linux: { label: 'Linux', hint: 'x86_64', icon: Terminal },
+};
+
+const features: { icon: LucideIcon; title: string; body: string }[] = [
+  {
+    icon: LibraryBig,
+    title: '本地书库',
+    body: 'EPUB 导入后复制进应用、提取封面、书架网格展示，此后不再读取原文件位置。',
+  },
+  {
+    icon: BookOpen,
+    title: '逐章阅读',
+    body: '一次一章，带目录与方向键翻页；正文按 EPUB 自己的分段元素渲染，段落怎么断，由书自己决定。',
+  },
+  {
+    icon: Palette,
+    title: '主谓宾着色',
+    body: '每句经过分句、分词、词性标注与依存句法分析（三个本地 ONNX 模型），主语、谓语、宾语各着一色，与网页版同色。',
+  },
+  {
+    icon: Layers,
+    title: '整本书着色',
+    body: '书内菜单可给所有未着色章节着色：后台运行、进度条可取消，结果存入 SQLite，重读只是一次查询。',
+  },
+  {
+    icon: FileDown,
+    title: '导出着色 EPUB',
+    body: '把分析结果写回新的 EPUB：排版、图片、字体、原样式全部保留，CSS 可内联进每章或输出为外部 biocn.css。',
+  },
+  {
+    icon: WifiOff,
+    title: '完全离线',
+    body: '模型从 ModelScope 下载一次并通过 sha256 校验（67 / 78 MB），之后应用不再触碰网络。',
+  },
+];
+
+function validDownload(value: unknown): value is Download {
+  if (!value || typeof value !== 'object') return false;
+  const download = value as Record<string, unknown>;
+  return (
+    typeof download.name === 'string' &&
+    download.name.startsWith('BioCN') &&
+    !download.name.includes('..') &&
+    platformOrder.includes(download.platform as Platform) &&
+    typeof download.size === 'number' &&
+    download.size > 0 &&
+    typeof download.sha256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(download.sha256) &&
+    typeof download.download_url === 'string' &&
+    download.download_url.startsWith(downloadPrefix) &&
+    download.download_url.endsWith(download.name)
+  );
+}
+
+function validRelease(value: unknown): value is Release {
+  if (!value || typeof value !== 'object') return false;
+  const release = value as Record<string, unknown>;
+  return (
+    typeof release.version === 'string' &&
+    /^\d+\.\d+\.\d+$/.test(release.version) &&
+    typeof release.published_at === 'string' &&
+    Number.isFinite(Date.parse(release.published_at)) &&
+    typeof release.notes === 'string' &&
+    Array.isArray(release.downloads) &&
+    release.downloads.length > 0 &&
+    release.downloads.every(validDownload)
+  );
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('zh-CN');
+}
+
+function formatSize(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// 按钮上用短标签，避免长文件名把移动端卡片撑出横向滚动；完整文件名见校验信息折叠块。
+function formatLabel(name: string): string {
+  if (name.endsWith('.apk')) return 'APK 安装包';
+  if (name.endsWith('.exe')) return 'EXE 安装程序';
+  if (name.endsWith('.msi')) return 'MSI 安装包';
+  if (name.endsWith('.dmg')) return 'DMG 映像';
+  if (name.endsWith('.deb')) return 'DEB 包';
+  if (name.endsWith('.AppImage')) return 'AppImage';
+  if (name.endsWith('.rpm')) return 'RPM 包';
+  return name;
+}
+
+function DemoSentence() {
+  return (
+    <p className="text-lg leading-loose sm:text-xl">
+      <span className="svo-subject font-medium">Many readers</span>{' '}
+      <span className="svo-predicate font-medium">lose</span>{' '}
+      <span className="svo-object font-medium">the thread</span> of long English
+      sentences — <span className="svo-subject font-medium">BioCN</span>{' '}
+      <span className="svo-predicate font-medium">brings</span> it{' '}
+      <span className="svo-object font-medium">back</span>.
+    </p>
+  );
+}
+
+function SvoLegend() {
+  return (
+    <div className="flex flex-wrap gap-2">
+      <span className="badge badge-outline gap-1.5">
+        <span className="svo-subject">主语</span>
+      </span>
+      <span className="badge badge-outline gap-1.5">
+        <span className="svo-predicate">谓语</span>
+      </span>
+      <span className="badge badge-outline gap-1.5">
+        <span className="svo-object">宾语</span>
+      </span>
+    </div>
+  );
+}
+
+function PlatformDownloads({ downloads }: { downloads: Download[] }) {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      {platformOrder.map((platform) => {
+        const files = downloads.filter((download) => download.platform === platform);
+        const meta = platformMeta[platform];
+        const Icon = meta.icon;
+        return (
+          <div key={platform} className="card bg-base-200 shadow-sm">
+            <div className="card-body gap-3 p-5">
+              <div className="flex items-center gap-2">
+                <Icon aria-hidden="true" className="size-5" />
+                <h3 className="font-medium">{meta.label}</h3>
+              </div>
+              <p className="text-sm text-base-content/70">{meta.hint}</p>
+              <div className="flex flex-col gap-2">
+                {files.map((file, index) => (
+                  <a
+                    key={file.download_url}
+                    className={`btn btn-block ${index === 0 ? 'btn-primary' : 'btn-outline'}`}
+                    href={file.download_url}
+                    download={file.name}
+                    title={file.name}
+                  >
+                    <ArrowDownToLine aria-hidden="true" />
+                    下载 {formatLabel(file.name)}
+                    <span className="ml-auto text-xs opacity-70">{formatSize(file.size)}</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function App() {
+  const [release, setRelease] = useState<Release | null>(null);
+  const [history, setHistory] = useState<Release[]>([]);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    let disposed = false;
+    async function loadLatest() {
+      try {
+        const response = await fetch(`${base}latest.json`, { signal: controller.signal, cache: 'no-store' });
+        if (!response.ok) throw new Error('Latest release unavailable');
+        const value: unknown = await response.json();
+        if (!validRelease(value)) throw new Error('Invalid release metadata');
+        if (!disposed) {
+          setRelease(value);
+          setStatus('ready');
+        }
+      } catch {
+        if (!disposed) setStatus('error');
+      }
+    }
+    void loadLatest();
+    void fetch(`${base}releases.json`, { signal: controller.signal, cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : []))
+      .then((value: unknown) => {
+        if (!disposed && Array.isArray(value)) setHistory(value.filter(validRelease));
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-base-100 text-base-content">
+      <header className="navbar mx-auto max-w-6xl px-4 sm:px-6">
+        <div className="navbar-start">
+          <a className="btn btn-ghost px-2 text-lg font-semibold" href={base} aria-label="BioCN 首页">
+            <img src={`${base}brand/icon-128.png`} alt="" width={28} height={28} className="size-7" />
+            BioCN
+          </a>
+        </div>
+        <nav aria-label="主导航" className="navbar-end flex items-center gap-2">
+          <a className="btn btn-ghost" href="#features">
+            功能
+          </a>
+          <a className="btn btn-ghost" href="#download">
+            下载
+          </a>
+          <a className="btn btn-outline btn-sm hidden sm:flex" href={repository}>
+            <Code2 aria-hidden="true" /> GitHub
+          </a>
+        </nav>
+      </header>
+
+      <main className="mx-auto max-w-6xl space-y-20 px-4 pb-12 sm:px-6 sm:pb-20">
+        <section aria-labelledby="intro-title" className="hero py-10 md:py-16">
+          <div className="hero-content flex-col items-start gap-12 lg:flex-row lg:gap-16">
+            <div className="max-w-xl space-y-7">
+              <h1 id="intro-title" className="text-5xl font-semibold leading-tight tracking-tight sm:text-6xl">
+                读英文，
+                <br />
+                看得见句子结构。
+              </h1>
+              <p className="max-w-md text-lg leading-relaxed text-base-content/70">
+                BioCN 是一款桌面 EPUB 阅读器，逐句分析出主谓宾并着不同颜色，让你在长句里始终抓得住主线。
+                完全离线运行。
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <a className="btn btn-primary btn-lg" href="#download">
+                  <ArrowDownToLine aria-hidden="true" /> 下载 BioCN
+                </a>
+                <a className="btn btn-outline btn-lg" href={repository}>
+                  <Code2 aria-hidden="true" /> GitHub
+                </a>
+              </div>
+              <p className="text-sm text-base-content/60">Windows · macOS · Linux · Android</p>
+            </div>
+            <div className="card w-full max-w-md bg-base-200 shadow-xl">
+              <div className="card-body gap-4">
+                <h2 className="card-title text-base">着色是什么样？</h2>
+                <DemoSentence />
+                <SvoLegend />
+                <p className="text-sm leading-relaxed text-base-content/70">
+                  三种颜色来自网页版 bioCN：明度与色相都拉开距离，浅色深色主题下都看得清，对红绿色弱同样友好。
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="features" aria-labelledby="features-title" className="space-y-8">
+          <div className="max-w-xl space-y-3">
+            <h2 id="features-title" className="text-3xl font-semibold tracking-tight">
+              一本书，从导入到导出
+            </h2>
+            <p className="leading-relaxed text-base-content/70">
+              分析在你自己的电脑上完成，书和数据都不离开本机。
+            </p>
+          </div>
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {features.map((feature) => {
+              const Icon = feature.icon;
+              return (
+                <div key={feature.title} className="card bg-base-100 shadow-sm ring-1 ring-base-200">
+                  <div className="card-body gap-3">
+                    <div className="flex items-center gap-2">
+                      <Icon aria-hidden="true" className="size-5 text-primary" />
+                      <h3 className="card-title text-xl">{feature.title}</h3>
+                    </div>
+                    <p className="leading-relaxed text-base-content/70">{feature.body}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section id="download" aria-labelledby="download-title" className="scroll-mt-8">
+          <div className="card bg-base-100 shadow-sm ring-1 ring-base-200">
+            <div className="card-body gap-6">
+              <div className="space-y-2">
+                <h2 id="download-title" className="card-title text-3xl">
+                  下载 BioCN
+                </h2>
+                <p className="leading-relaxed text-base-content/70">
+                  所有安装包发布在 GitHub Releases，逐个附带 SHA-256 校验信息。
+                </p>
+              </div>
+
+              {status === 'loading' ? (
+                <div className="space-y-4" aria-label="正在读取最新版本">
+                  <div className="skeleton h-8 w-40" />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {platformOrder.map((platform) => (
+                      <div key={platform} className="skeleton h-44 w-full" />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {release ? (
+                <div className="space-y-6">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="badge badge-primary badge-lg">v{release.version}</span>
+                    <p className="text-sm text-base-content/70">
+                      发布于 {formatDate(release.published_at)}
+                    </p>
+                  </div>
+                  <PlatformDownloads downloads={release.downloads} />
+                </div>
+              ) : null}
+
+              {status === 'error' ? (
+                <div role="alert" className="alert alert-error">
+                  <span>暂时无法读取 GitHub 发布信息。</span>
+                  <a className="btn btn-outline btn-sm" href={`${repository}/releases/latest`}>
+                    前往 GitHub Releases
+                  </a>
+                </div>
+              ) : null}
+
+              {release ? (
+                <details className="collapse collapse-arrow bg-base-200">
+                  <summary className="collapse-title">
+                    <span className="flex items-center gap-2">
+                      <ShieldCheck aria-hidden="true" className="size-4" /> 安装包校验信息（SHA-256）
+                    </span>
+                  </summary>
+                  <div className="collapse-content space-y-3">
+                    {release.downloads.map((download) => (
+                      <div key={download.download_url} className="space-y-1">
+                        <p className="text-sm font-medium">{download.name}</p>
+                        <p className="font-mono text-xs break-all text-base-content/70">{download.sha256}</p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+
+              {history.length > 1 ? (
+                <details className="collapse collapse-arrow bg-base-200">
+                  <summary className="collapse-title">历史版本</summary>
+                  <div className="collapse-content">
+                    <table className="table table-sm">
+                      <thead>
+                        <tr>
+                          <th>版本</th>
+                          <th>发布日期</th>
+                          <th>下载</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {history.map((item) => (
+                          <tr key={item.version}>
+                            <td>v{item.version}</td>
+                            <td>{formatDate(item.published_at)}</td>
+                            <td>
+                              <a
+                                className="link link-hover text-primary"
+                                href={`${repository}/releases/tag/v${item.version}`}
+                              >
+                                GitHub Release
+                              </a>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              ) : null}
+
+              {release?.notes ? (
+                <div className="space-y-2">
+                  <p className="font-medium">v{release.version} 更新内容</p>
+                  {/* notes 来自 Release 说明，可能带长链接；anywhere 保证 token 内也能断行，不撑破移动端。 */}
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-base-content/70">
+                    {release.notes.replace(/^#{1,6} /gm, '')}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer className="footer footer-center bg-base-200 text-base-content/70 sm:p-10">
+        <nav className="flex gap-4">
+          <a className="link link-hover" href={repository}>
+            GitHub
+          </a>
+          <a className="link link-hover" href={`${repository}/issues`}>
+            反馈问题
+          </a>
+        </nav>
+        <aside>
+          <p>BioCN · 让每个句子，结构都看得见。</p>
+        </aside>
+      </footer>
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')!).render(<App />);

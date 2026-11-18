@@ -1,0 +1,52 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark;
+}
+
+@layer base {
+  html {
+    font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue",
+      Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-text-size-adjust: 100%;
+  }
+}
+
+@layer components {
+  /*
+   * 主谓宾 demo colors. Same six hex values as the desktop app
+   * (src/index.css) and the colored-EPUB stylesheet
+   * (src-tauri/src/export.rs `STYLESHEET`). The landing page's sample
+   * sentence must show exactly what the app shows — change all three
+   * files together.
+   *
+   * This is page content (the feature demo), not a hand-rolled control;
+   * every control on the page is a daisyUI component.
+   */
+  .svo-subject {
+    color: #d95f02;
+  }
+
+  .svo-predicate {
+    color: #1b9e77;
+  }
+
+  .svo-object {
+    color: #7570b3;
+  }
+
+  /* A slightly deeper set in dark mode, for contrast on a dark page. */
+  @media (prefers-color-scheme: dark) {
+    .svo-subject {
+      color: #f28e4b;
+    }
+
+    .svo-predicate {
+      color: #4ec6a3;
+    }
+
+    .svo-object {
+      color: #a99cf0;
+    }
+  }
+}
