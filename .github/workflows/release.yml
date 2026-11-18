@@ -493,10 +493,15 @@ jobs:
       - name: Build landing page
         run: yarn --cwd website build
 
+      - name: Read app version
+        id: version
+        run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
       - name: Generate GitHub Pages release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/pages-release.mjs --output website/dist --tag "v$(node -p 'require(\"./package.json\").version')"
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/pages-release.mjs --output website/dist --tag "v$APP_VERSION"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
