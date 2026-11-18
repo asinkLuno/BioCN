@@ -8,6 +8,7 @@ pub mod reader;
 pub mod reading;
 pub mod settings;
 pub mod text;
+pub mod update;
 
 use tauri::Manager;
 
@@ -50,6 +51,10 @@ pub fn run() {
             analyzer::book_has_coloring,
             analyzer::book_has_active_coloring,
             export::export_book,
+            update::check_update,
+            update::download_update,
+            update::reveal_update,
+            update::open_release_page,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
