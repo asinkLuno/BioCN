@@ -462,9 +462,12 @@ jobs:
   # （https://asinkluno.github.io/bioCN/）。pages-release.mjs 生成 latest.json /
   # releases.json 供页面运行时读取；release job 即使复用已有 Release 提前退出，
   # 这里的元数据也能照常重新生成，所以重跑同一工作流即可补部署。
+  # 本 workflow 不监听 main 的 push，ref == main 只可能来自 workflow_dispatch：
+  # 手动从 main 触发时其余 job 全部跳过，仅跑 pages + deploy，用于不动安装包
+  # 单独发布/修复发布页（比如现有 Release 还没上过 Pages 时）。
   pages:
     needs: release
-    if: github.ref == 'refs/heads/releases'
+    if: always() && (github.ref == 'refs/heads/releases' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -507,7 +510,7 @@ jobs:
 
   deploy:
     needs: pages
-    if: github.ref == 'refs/heads/releases'
+    if: always() && (github.ref == 'refs/heads/releases' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     permissions:
       pages: write
