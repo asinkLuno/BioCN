@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- BioCN 变体 5「B 字藤蔓」：字母 B 的极简几何构成，
+       绿色的茎向上长出一片叶、向下卷成一条卷须，
+       橙色的两个碗是 B 的轮廓 —— BioCN 的首字母活了。 -->
+  <g fill="none" stroke-width="6.5" stroke-linecap="round">
+    <!-- 茎 + 根部收尾 -->
+    <path d="M 40 30 V 76 C 40 83 38 88 32 89" stroke="#1b9e77"/>
+    <!-- B 的两个碗 -->
+    <path d="M 40 30 C 59 30 61 35 61 40 C 61 45 58 50 40 50" stroke="#d95f02"/>
+    <path d="M 40 50 C 63 50 67 56 67 63 C 67 70 62 76 40 76" stroke="#d95f02"/>
+  </g>
+  <!-- 茎顶的叶子 -->
+  <path d="M 40 30 C 39.5 24 43 19 50 18 C 50 24 46 28 40 30 Z" fill="#1b9e77"/>
+</svg>

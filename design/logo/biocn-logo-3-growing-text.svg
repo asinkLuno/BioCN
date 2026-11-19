@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" color="#71717a">
+  <!-- BioCN 变体 3「会生长的文本」：一页书的文本行，
+       三行被主谓宾三色点亮；绿色的那一行不满足于一行，
+       向上卷曲成卷须、长出一片叶子 —— 阅读让文本活过来。 -->
+  <g fill="none" stroke-width="6" stroke-linecap="round">
+    <path d="M 16 26 H 64" stroke="#d95f02"/>
+    <path d="M 16 42 H 66 C 74 42 80 38 82 31" stroke="#1b9e77"/>
+    <path d="M 16 58 H 78" stroke="#7570b3"/>
+    <path d="M 16 74 H 70" stroke="currentColor" opacity="0.25"/>
+    <path d="M 16 88 H 52" stroke="currentColor" opacity="0.25"/>
+  </g>
+  <!-- 从绿色文本行末梢长出的叶子 -->
+  <path d="M 82 31 C 82 24 86 18 93 16 C 93 23 89 29 82 31 Z" fill="#1b9e77"/>
+</svg>

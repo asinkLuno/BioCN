@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" color="#71717a">
+  <!-- BioCN 变体 6「文字之叶」：一片叶子由一行行文本剪裁而成，
+       其中三行被主谓宾三色点亮 —— 就像应用里散落在灰色正文中的
+       彩色词语。书页的文字，长成了一片叶子。 -->
+  <defs>
+    <clipPath id="biocn-leaf-clip">
+      <path d="M 50 10 C 30 24 22 44 28 62 C 33 78 42 88 50 88 C 58 88 67 78 72 62 C 78 44 70 24 50 10 Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#biocn-leaf-clip)" fill="none" stroke-width="4" stroke-linecap="round">
+    <line x1="14" y1="22" x2="86" y2="22" stroke="currentColor" opacity="0.22"/>
+    <line x1="14" y1="30" x2="86" y2="30" stroke="#d95f02"/>
+    <line x1="14" y1="38" x2="86" y2="38" stroke="currentColor" opacity="0.22"/>
+    <line x1="14" y1="46" x2="86" y2="46" stroke="#1b9e77"/>
+    <line x1="14" y1="54" x2="86" y2="54" stroke="currentColor" opacity="0.22"/>
+    <line x1="14" y1="62" x2="86" y2="62" stroke="#7570b3"/>
+    <line x1="14" y1="70" x2="86" y2="70" stroke="currentColor" opacity="0.22"/>
+    <line x1="14" y1="78" x2="86" y2="78" stroke="currentColor" opacity="0.22"/>
+  </g>
+  <path d="M 50 10 C 30 24 22 44 28 62 C 33 78 42 88 50 88 C 58 88 67 78 72 62 C 78 44 70 24 50 10 Z"
+        fill="none" stroke="#1b9e77" stroke-width="3"/>
+</svg>
