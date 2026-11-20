@@ -4,7 +4,9 @@ import tailwindcss from '@tailwindcss/vite';
 import { visualizer } from 'rollup-plugin-visualizer';
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // 发布页部署在 GitHub Pages 的项目路径（/bioCN/）下；dev 不挂子路径，相对路径同时兼容自定义域名。
+  base: command === 'build' ? './' : '/',
   plugins: [
     react(),
     tailwindcss(),
@@ -20,8 +22,5 @@ export default defineConfig({
         ]
       : []),
   ],
-  base: '/bioCN/',
-  build: {
-    target: 'es2020',
-  },
-});
+  build: { target: 'es2022' },
+}));
