@@ -23,6 +23,38 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // The minimal libonnxruntime is a bundled resource, so point the
+            // engine at it before anything initializes ORT: engine::builder()
+            // checks ORT_DYLIB_PATH first, then falls back to the executable
+            // directory (Windows ships resources beside the binary, dev builds
+            // run from the cargo output dir) and finally the bare SONAME.
+            #[cfg(not(target_os = "android"))]
+            {
+                // Each platform bundles its own library as res/libonnxruntime.<ext>
+                // (resources map in tauri.conf.json); resolve() handles the dev
+                // (cargo output dir) and installed ($RESOURCES) cases.
+                let ext = if cfg!(target_os = "macos") {
+                    "dylib"
+                } else if cfg!(windows) {
+                    "dll"
+                } else {
+                    "so"
+                };
+                let ort = app
+                    .path()
+                    .resolve(
+                        format!("res/libonnxruntime.{ext}"),
+                        tauri::path::BaseDirectory::Resource,
+                    )
+                    .ok()
+                    .filter(|p| p.is_file());
+                if let Some(ort) = ort {
+                    unsafe {
+                        // Single-threaded launch; read only by builder().
+                        std::env::set_var("ORT_DYLIB_PATH", ort);
+                    }
+                }
+            }
             app.manage(library::init(app.handle())?);
             // The analysis cache lives beside the models rather than inside the
             // library: it is derived data, so losing it with the weights (or by

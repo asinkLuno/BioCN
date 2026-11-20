@@ -22,9 +22,15 @@ carries only the kernels in an operator config and no ONNX parser at all. A
 minimal build can therefore only load ORT-format models, so `convert_ort.py` does
 the conversion on the desktop and the app downloads `.ort` files directly.
 
-The desktop app links a full ONNX Runtime and could read either format, but only
-one set of weights is published: `.onnx` stays a local intermediate and is
+The desktop app ships the same minimal `libonnxruntime` as Android (below), so
+only `.ort` is published there too: `.onnx` stays a local intermediate and is
 gitignored.
+
+`build_ort_desktop.py` compiles the per-platform minimal library in CI from the
+shared `ort_ops.config`; `tauri.<os>.conf.json` bundles the artifact as
+`res/libonnxruntime.<ext>` and the engine resolves it through `ORT_DYLIB_PATH`
+(`src-tauri/src/lib.rs`). The 15 MB of statically linked ExecutionProvider code
+that `download-binaries` used to link into every desktop binary is gone.
 
 ## Order
 

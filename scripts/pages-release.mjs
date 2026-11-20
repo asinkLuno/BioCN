@@ -29,7 +29,7 @@ const extensions = {
   android: ['.apk'],
   windows: ['.exe', '.msi'],
   macos: ['.dmg'],
-  linux: ['.deb', '.AppImage', '.rpm'],
+  linux: ['.deb', '.rpm'],
 };
 
 // 平台 → 缺少 asset.digest 时的回验来源：APK 有同名 .sha256，

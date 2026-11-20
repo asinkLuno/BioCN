@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "ort/windows/libonnxruntime.dll": "res/libonnxruntime.dll"
+    }
+  }
+}

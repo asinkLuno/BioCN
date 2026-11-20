@@ -24,8 +24,8 @@ pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
 
 /// 发布流程能生成的安装包扩展名（pages-release.mjs 的平台分类），
 /// 之外的 `releases.json` 条目一律不提供。
-const ASSET_EXTENSIONS: [&str; 7] = [
-    ".apk", ".exe", ".msi", ".dmg", ".deb", ".AppImage", ".rpm",
+const ASSET_EXTENSIONS: [&str; 6] = [
+    ".apk", ".exe", ".msi", ".dmg", ".deb", ".rpm",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -117,7 +117,7 @@ fn asset_file_name(url: &str) -> Option<String> {
 }
 
 /// 当前平台应提供的安装包：releases.json 里该平台的第一项——扩展名的
-/// 优先级（Windows .exe 先于 .msi，Linux .deb 先于 AppImage）由发布脚本
+/// 优先级（Windows .exe 先于 .msi，Linux .deb 先于 RPM）由发布脚本
 /// 排序，这里只取顺序。`os` 是参数以便测试；调用处传运行平台的 OS。
 fn pick_for(os: &str, assets: &[AssetInfo]) -> Option<AssetInfo> {
     if os == "android" {
@@ -368,7 +368,6 @@ mod tests {
             "BioCN_0.2.0_x64_en-US.msi",
             "BioCN_0.2.0_aarch64.dmg",
             "BioCN_0.2.0_amd64.deb",
-            "BioCN_0.2.0.AppImage",
             "BioCN_0.2.0_x86_64.rpm",
         ] {
             assert_eq!(asset_file_name(&format!("{TAG}/{name}")).as_deref(), Some(name));

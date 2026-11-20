@@ -136,7 +136,6 @@ function formatLabel(name: string): string {
   if (name.endsWith('.msi')) return 'MSI 安装包';
   if (name.endsWith('.dmg')) return 'DMG 映像';
   if (name.endsWith('.deb')) return 'DEB 包';
-  if (name.endsWith('.AppImage')) return 'AppImage';
   if (name.endsWith('.rpm')) return 'RPM 包';
   return name;
 }

@@ -54,16 +54,17 @@ encoding_rs = "0.8"
 # whose version is known to support WAL and the upserts the schema uses.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# ONNX Runtime for the 主谓宾 analyzer (src/analysis). Same features as upstream's
-# biocn-core: `download-binaries` fetches the official prebuilt library at build
-# time and `tls-rustls` matches reqwest so no openssl toolchain is needed.
-# Android ships its own minimal-build `libonnxruntime.so` in jniLibs and loads it
-# by SONAME at run time, because that 6 MB build (instead of 34 MB) only carries
-# the kernels these three graphs use.
+# ONNX Runtime for the 主谓宾 analyzer (src/analysis). All platforms use
+# `load-dynamic`: the binary ships a minimal-build `libonnxruntime` next to the
+# executable (or in the APK's jniLibs on Android), keeping the 15 MB of unused
+# ExecutionProvider code out of the binary. `tls-rustls` matches reqwest so no
+# openssl toolchain is needed. Build/retrieve the library with
+# tools/build_ort_desktop.py compiles the per-platform minimal library
+# (src-tauri/ort/<platform>/, gitignored, CI-only artifact).
 [target.'cfg(not(target_os = "android"))'.dependencies]
 ort = { version = "=2.0.0-rc.15", default-features = false, features = [
   "std",
-  "download-binaries",
+  "load-dynamic",
   "tls-rustls",
 ] }
 
@@ -72,6 +73,7 @@ ort = { version = "=2.0.0-rc.15", default-features = false, features = [
   "std",
   "load-dynamic",
 ] }
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

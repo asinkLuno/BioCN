@@ -1,0 +1,16 @@
+[package]
+name = "ortsmoke"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Same pinned crate + feature combo as src-tauri/Cargo.toml (load-dynamic), so
+# the smoke run exercises the exact loading path the app uses.
+[dependencies]
+ort = { version = "=2.0.0-rc.15", default-features = false, features = [
+  "std",
+  "load-dynamic",
+] }
+
+[profile.release]
+strip = true

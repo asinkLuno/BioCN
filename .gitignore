@@ -30,3 +30,7 @@ dist-ssr
 android-signing/
 *.keystore
 *.jks
+
+# Per-platform minimal ORT binaries, produced by build_ort_desktop.py in CI
+src-tauri/ort/
+tools/ortsmoke/target/

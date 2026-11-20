@@ -1,12 +1,12 @@
 //! Native inference: the three bioCN graphs on ONNX Runtime (`ort` crate).
 //!
-//! Android links ORT at run time (`load-dynamic`): the `libonnxruntime.so`
-//! shipped in the APK's `jniLibs` is found by bare SONAME through bionic's app
-//! namespace. That library is a *minimal build* — only the kernels these
-//! three graphs use, no ONNX parser — which is why it is 6 MB instead of 34 MB. It
-//! can therefore only load ORT-format models, hence `.ort` below
-//! (`tools/convert_ort.py`, `tools/build_ort_android.py`). Desktop builds
-//! link/download the full binary at build time and would load either format.
+//! Every platform links ORT at run time (`load-dynamic`): the app ships a
+//! *minimal-build* `libonnxruntime` library (only the kernels these three
+//! graphs use, no ONNX parser, a few MB instead of the 15 MB of ExecutionProvider
+//! code the full binary carries on desktop / 34 MB on Android). It can therefore
+//! only load ORT-format models, hence `.ort` below (`tools/convert_ort.py`).
+//! Android finds it by bare SONAME through bionic's app namespace
+//! (`jniLibs`); desktop finds it next to the executable (`builder` below).
 //!
 //! `Session::run` needs `&mut self`, so each graph sits behind a `Mutex` — the
 //! three graphs still run independently of each other.
@@ -76,7 +76,25 @@ fn builder() -> Result<ort::environment::EnvironmentBuilder> {
 
 #[cfg(not(target_os = "android"))]
 fn builder() -> Result<ort::environment::EnvironmentBuilder> {
-    Ok(ort::init())
+    // Desktop also loads ORT at run time: the app ships a minimal-build
+    // `libonnxruntime(.so/.dylib/.dll)` next to the executable (a few MB instead
+    // of the 15 MB of ExecutionProviders statically linked by `download-binaries`).
+    // `ORT_DYLIB_PATH` overrides it for debugging; bare SONAME covers system
+    // installs. Same file works for any variant of the shipped models.
+    if let Ok(path) = std::env::var("ORT_DYLIB_PATH") {
+        return ort::init_from(path).map_err(oerr);
+    }
+    if let Some(ort) = std::env::current_exe().ok().and_then(|exe| {
+        exe.parent()?.read_dir().ok()?.flatten().find(|entry| {
+            matches!(
+                entry.file_name().to_string_lossy().as_ref(),
+                "libonnxruntime.so" | "libonnxruntime.dylib" | "libonnxruntime.dll"
+            )
+        })
+    }) {
+        return ort::init_from(ort.path()).map_err(oerr);
+    }
+    ort::init_from("libonnxruntime.so").map_err(oerr)
 }
 
 /// Enough threads to matter, few enough not to fight the UI thread.
