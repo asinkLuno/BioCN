@@ -9,3 +9,6 @@ __pycache__/
 # convert_ort.py products (derived from the .onnx above, see tools/README.md)
 *.ort
 *.config
+# Exception: build_ort_desktop.py compiles the minimal desktop libonnxruntime
+# from the shared op config in CI, so it must be checked in (tools/README.md).
+!models/ort_ops.config
