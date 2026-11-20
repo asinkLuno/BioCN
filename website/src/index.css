@@ -4,6 +4,33 @@
 }
 
 @layer base {
+  .hero-brand-lockup {
+
+    display: grid;
+    grid-template-columns: 10rem minmax(0, 1fr);
+    align-items: start;
+    column-gap: 1.5rem;
+    width: 100%;
+  }
+
+  .hero-brand-mark {
+    display: grid;
+    width: 10rem;
+    height: 10rem;
+    place-items: start center;
+  }
+
+  @media (max-width: 639px) {
+    .hero-brand-lockup {
+      grid-template-columns: 6rem minmax(0, 1fr);
+      column-gap: 0.75rem;
+    }
+
+    .hero-brand-mark {
+      width: 6rem;
+      height: 6rem;
+    }
+  }
   html {
     font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue",
       Arial, sans-serif;
@@ -11,6 +38,42 @@
     -webkit-text-size-adjust: 100%;
   }
 }
+
+  .hero-brand-stage {
+    display: grid;
+    grid-template-columns: 6rem minmax(0, 1fr);
+    align-items: center;
+    column-gap: 1rem;
+    width: min(100%, 36rem);
+    min-height: 7.5rem;
+  }
+
+  .hero-brand-mark {
+    display: grid;
+    width: 6rem;
+    height: 6rem;
+    place-items: center;
+  }
+
+  .hero-brand-stage h1 {
+    display: grid;
+    width: 100%;
+    min-height: 1.35em;
+    align-items: center;
+  }
+
+  @media (max-width: 639px) {
+    .hero-brand-stage {
+      grid-template-columns: 4.5rem minmax(0, 1fr);
+      column-gap: 0.75rem;
+      min-height: 6rem;
+    }
+
+    .hero-brand-mark {
+      width: 4.5rem;
+      height: 4.5rem;
+    }
+  }
 
 @layer components {
   /*
@@ -49,4 +112,116 @@
       color: #a99cf0;
     }
   }
+  /*
+   * HeroTitle：hero 大标题的名字由来动画（中文仿生阅读 → Chinese Bionic Reading →
+   * 逐字消融 → CN 与 Bio 左右交换成 BioCN）。两组 grid 叠在同一格，
+   * stage 由 HeroTitle.tsx 定时器推进；颜色沿用主/谓/宾三色。
+   */
+  .brand-layer {
+    grid-area: 1 / 1;
+    visibility: hidden;
+  }
+
+  .brand-layer-active {
+    visibility: visible;
+    animation: brand-layer-in 0.55s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+
+  .brand-layer-out {
+    visibility: visible;
+    animation: brand-layer-out 0.55s ease forwards;
+  }
+
+  /* 消融：EN 层进入 stage ≥2 后，非 solid 的逐字 span 依次上飘、缩小、透明 */
+  .brand-char-melt {
+    display: inline-block;
+    transition: opacity 0.6s ease, transform 0.6s ease, filter 0.6s ease;
+  }
+
+  .brand-melt .brand-char-melt {
+    opacity: 0;
+    transform: translateY(-0.35em) scale(0.6);
+    filter: blur(3px);
+  }
+
+
+
+  .brand-melt .brand-char-keep {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+  /* 收场：stage 走完后历史层直接消失，终帧只有合体层 */
+  .brand-layer-drop {
+    display: none;
+  }
+
+  /* reduced-motion：不要入场/出场动画，直接只显示合体层 */
+  .brand-instant .brand-layer {
+    animation: none;
+    visibility: hidden;
+  }
+
+  .brand-instant .brand-layer:last-child {
+    visibility: visible;
+  }
+
+  /* 收场：stage 走完后历史层直接消失，终帧只有合体层 */
+
+  /* Swap CN and Bio inside one stable layer so the title does not jump. */
+  .brand-wordmark-layer {
+    z-index: 1;
+  }
+
+  .brand-wordmark {
+    position: relative;
+    left: 0;
+    min-height: 1em;
+    justify-content: flex-start;
+    column-gap: 0;
+  }
+
+  .brand-token {
+    display: inline-block;
+    transition: transform 0.7s cubic-bezier(0.65, 0, 0.25, 1);
+  }
+
+  .brand-group-cn {
+    order: 1;
+  }
+
+  .brand-group-bio {
+    order: 2;
+  }
+
+  .brand-token-swap-cn {
+    transform: translateX(1.5em);
+  }
+
+  .brand-token-swap-bio {
+    transform: translateX(-0.9em);
+  }
+  @keyframes brand-layer-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.25em);
+      filter: blur(2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      filter: blur(0);
+    }
+  }
+
+  /* 历史层：渐隐并向上让位 */
+  @keyframes brand-layer-out {
+    to {
+      opacity: 0;
+      transform: translateY(-0.35em);
+      filter: blur(2px);
+    }
+  }
+
+
 }

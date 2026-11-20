@@ -64,11 +64,12 @@ yarn build              # tsc + vite
 
 Analysis needs weights. A debug build reads them from `tools/models/<variant>/`
 when present (see `tools/README.md`), otherwise download them once from
-Settings → Models. `src-tauri/examples/` holds two diagnostic harnesses:
+Settings → Models. `src-tauri/examples/` holds three diagnostic harnesses:
 
 ```sh
 cargo run --release --example bookdump -- <book.epub>   # paragraph extraction
 cargo run --release --example colordump -- <book.epub> <chapter> <paragraphs>
+cargo run --release --example svodemo -- <in.txt>                       # plain text -> SVO spans
 ```
 
 ## Landing page

@@ -1,21 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { createRoot } from 'react-dom/client';
-import {
-  ArrowDownToLine,
-  BookOpen,
-  Code2,
-  FileDown,
-  Laptop,
-  Layers,
-  LibraryBig,
-  Monitor,
-  Palette,
-  ShieldCheck,
-  Smartphone,
-  Terminal,
-  WifiOff,
-  type LucideIcon,
-} from 'lucide-react';
+import ArrowDownToLine from 'lucide-react/icons/arrow-down-to-line';
+import Code2 from 'lucide-react/icons/code-2';
+import Laptop from 'lucide-react/icons/laptop';
+import Monitor from 'lucide-react/icons/monitor';
+import ShieldCheck from 'lucide-react/icons/shield-check';
+import Smartphone from 'lucide-react/icons/smartphone';
+import Terminal from 'lucide-react/icons/terminal';
+import type { LucideIcon } from 'lucide-react';
+
+
+import { HelixViewer } from './components/HelixViewer';
 import './index.css';
 
 // 发布元数据由 CI 的 scripts/pages-release.mjs 从 GitHub Releases 生成并写进部署目录；
@@ -48,39 +44,50 @@ const platformMeta: Record<Platform, { label: string; hint: string; icon: Lucide
   linux: { label: 'Linux', hint: 'x86_64', icon: Terminal },
 };
 
-const features: { icon: LucideIcon; title: string; body: string }[] = [
+// 演示文本出自鲁迅《故事新编·补天》。着色由仓库里的真实分析器生成
+// （src-tauri/examples/svodemo.rs），不是手标的，升级模型后可用它重新生成。
+const DEMO_PARAGRAPHS: { text: string; colored: boolean }[] = [
   {
-    icon: LibraryBig,
-    title: '本地书库',
-    body: 'EPUB 导入后复制进应用、提取封面、书架网格展示，此后不再读取原文件位置。',
+    colored: false,
+    text: '女娲忽然醒来了。',
   },
   {
-    icon: BookOpen,
-    title: '逐章阅读',
-    body: '一次一章，带目录与方向键翻页；正文按 EPUB 自己的分段元素渲染，段落怎么断，由书自己决定。',
+    colored: true,
+    text: '<span class="svo-subject font-medium">女娲</span>忽然<span class="svo-predicate font-medium">醒来</span>了。',
   },
   {
-    icon: Palette,
-    title: '主谓宾着色',
-    body: '每句经过分句、分词、词性标注与依存句法分析（三个本地 ONNX 模型），主语、谓语、宾语各着一色，与网页版同色。',
+    colored: false,
+    text: '伊似乎是从梦中惊醒的，然而已经记不清做了什么梦；只是很懊恼，觉得有什么不足，又觉得有什么太多了。煽动的和风，暖暾的将伊的气力吹得弥漫在宇宙里。',
   },
   {
-    icon: Layers,
-    title: '整本书着色',
-    body: '书内菜单可给所有未着色章节着色：后台运行、进度条可取消，结果存入 SQLite，重读只是一次查询。',
+    colored: true,
+    text: '<span class="svo-subject font-medium">伊</span>似乎是从梦中<span class="svo-predicate font-medium">惊醒</span>的，然而已经<span class="svo-predicate font-medium">记</span>不<span class="svo-predicate font-medium">清做</span>了什么<span class="svo-object font-medium">梦</span>；只是很<span class="svo-predicate font-medium">懊恼</span>，<span class="svo-predicate font-medium">觉得有</span>什么<span class="svo-object font-medium">不足</span>，又<span class="svo-predicate font-medium">觉得有</span><span class="svo-subject font-medium">什么</span>太<span class="svo-predicate font-medium">多</span>了。煽动的<span class="svo-subject font-medium">和风</span>，<span class="svo-predicate font-medium">暖</span>暾的将伊的<span class="svo-object font-medium">气力</span><span class="svo-predicate font-medium">吹</span>得<span class="svo-predicate font-medium">弥漫</span>在宇宙里。',
   },
   {
-    icon: FileDown,
-    title: '导出着色 EPUB',
-    body: '把分析结果写回新的 EPUB：排版、图片、字体、原样式全部保留，CSS 可内联进每章或输出为外部 biocn.css。',
+    colored: false,
+    text: '伊揉一揉自己的眼睛。',
   },
   {
-    icon: WifiOff,
-    title: '完全离线',
-    body: '模型从 ModelScope 下载一次并通过 sha256 校验（67 / 78 MB），之后应用不再触碰网络。',
+    colored: true,
+    text: '<span class="svo-subject font-medium">伊</span><span class="svo-predicate font-medium">揉</span>一<span class="svo-predicate font-medium">揉</span>自己的<span class="svo-object font-medium">眼睛</span>。',
+  },
+  {
+    colored: false,
+    text: '粉红的天空中，曲曲折折的漂着许多条石绿色的浮云，星便在那后面忽明忽灭的[目夹]眼。天边的血红的云彩里有一个光芒四射的太阳，如流动的金球包在荒古的熔岩中；那一边，却是一个生铁一般的冷而且白的月亮。然而伊并不理会谁是下去，和谁是上来。',
+  },
+  {
+    colored: true,
+    text: '粉红的天空中，曲曲折折的<span class="svo-predicate font-medium">漂</span>着许多条石绿色的<span class="svo-object font-medium">浮云</span>，<span class="svo-subject font-medium">星</span>便在那后面忽明忽灭的[<span class="svo-object font-medium">目</span><span class="svo-predicate font-medium">夹</span>]<span class="svo-object font-medium">眼</span>。天边的血红的云彩里<span class="svo-predicate font-medium">有</span>一个光芒四射的<span class="svo-object font-medium">太阳</span>，如流动的金球<span class="svo-predicate font-medium">包</span>在荒古的熔岩中；那一边，却<span class="svo-predicate font-medium">是</span>一个生铁一般的冷而且白的<span class="svo-object font-medium">月亮</span>。然而<span class="svo-subject font-medium">伊</span>并不<span class="svo-predicate font-medium">理会</span><span class="svo-subject font-medium">谁</span>是<span class="svo-predicate font-medium">下去</span>，和谁是上来。',
+  },
+  {
+    colored: false,
+    text: '地上都嫩绿了，便是不很换叶的松柏也显得格外的娇嫩。',
+  },
+  {
+    colored: true,
+    text: '<span class="svo-subject font-medium">地上</span>都<span class="svo-predicate font-medium">嫩绿</span>了，便是不很换叶的<span class="svo-subject font-medium">松柏</span>也显得格外的<span class="svo-predicate font-medium">娇嫩</span>。',
   },
 ];
-
 function validDownload(value: unknown): value is Download {
   if (!value || typeof value !== 'object') return false;
   const download = value as Record<string, unknown>;
@@ -134,16 +141,38 @@ function formatLabel(name: string): string {
   return name;
 }
 
-function DemoSentence() {
+function Paragraph({ html, colored }: { html: string; colored: boolean }) {
+  if (!colored) {
+    return <p className="leading-loose text-base-content/80">{html}</p>;
+  }
+  return <p className="leading-loose" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function DemoPanels() {
+  const [colored, setColored] = useState(true);
   return (
-    <p className="text-lg leading-loose sm:text-xl">
-      <span className="svo-subject font-medium">Many readers</span>{' '}
-      <span className="svo-predicate font-medium">lose</span>{' '}
-      <span className="svo-object font-medium">the thread</span> of long English
-      sentences — <span className="svo-subject font-medium">BioCN</span>{' '}
-      <span className="svo-predicate font-medium">brings</span> it{' '}
-      <span className="svo-object font-medium">back</span>.
-    </p>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="label cursor-pointer gap-2">
+          <span className="font-medium">仿生阅读</span>
+          <input
+            type="checkbox"
+            className="toggle toggle-primary"
+            checked={colored}
+            aria-label="仿生阅读开关"
+            onChange={(event) => setColored(event.target.checked)}
+          />
+        </label>
+        {colored ? <SvoLegend /> : null}
+      </div>
+      <div className="space-y-1.5 rounded-lg bg-base-100 px-4 py-3 ring-1 ring-base-300">
+        {DEMO_PARAGRAPHS.filter((paragraph) => paragraph.colored === colored).map(
+          (paragraph, index) => (
+            <Paragraph key={index} html={paragraph.text} colored={paragraph.colored} />
+          ),
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -248,9 +277,6 @@ function App() {
           </a>
         </div>
         <nav aria-label="主导航" className="navbar-end flex items-center gap-2">
-          <a className="btn btn-ghost" href="#features">
-            功能
-          </a>
           <a className="btn btn-ghost" href="#download">
             下载
           </a>
@@ -262,67 +288,50 @@ function App() {
 
       <main className="mx-auto max-w-6xl space-y-20 px-4 pb-12 sm:px-6 sm:pb-20">
         <section aria-labelledby="intro-title" className="hero py-10 md:py-16">
-          <div className="hero-content flex-col items-start gap-12 lg:flex-row lg:gap-16">
-            <div className="max-w-xl space-y-7">
-              <h1 id="intro-title" className="text-5xl font-semibold leading-tight tracking-tight sm:text-6xl">
-                读英文，
-                <br />
-                看得见句子结构。
-              </h1>
-              <p className="max-w-md text-lg leading-relaxed text-base-content/70">
-                BioCN 是一款桌面 EPUB 阅读器，逐句分析出主谓宾并着不同颜色，让你在长句里始终抓得住主线。
-                完全离线运行。
-              </p>
-              <div className="flex flex-wrap gap-3">
-                <a className="btn btn-primary btn-lg" href="#download">
-                  <ArrowDownToLine aria-hidden="true" /> 下载 BioCN
-                </a>
-                <a className="btn btn-outline btn-lg" href={repository}>
-                  <Code2 aria-hidden="true" /> GitHub
-                </a>
+          <div className="hero-content flex-col items-start gap-12 lg:flex-row lg:items-center lg:gap-16">
+            <div className="hero-brand-lockup max-w-xl">
+              <div className="hero-brand-mark" aria-hidden="true">
+                <HelixViewer size={160} speed={60} />
               </div>
-              <p className="text-sm text-base-content/60">Windows · macOS · Linux · Android</p>
-            </div>
-            <div className="card w-full max-w-md bg-base-200 shadow-xl">
-              <div className="card-body gap-4">
-                <h2 className="card-title text-base">着色是什么样？</h2>
-                <DemoSentence />
-                <SvoLegend />
-                <p className="text-sm leading-relaxed text-base-content/70">
-                  三种颜色来自网页版 bioCN：明度与色相都拉开距离，浅色深色主题下都看得清，对红绿色弱同样友好。
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="features" aria-labelledby="features-title" className="space-y-8">
-          <div className="max-w-xl space-y-3">
-            <h2 id="features-title" className="text-3xl font-semibold tracking-tight">
-              一本书，从导入到导出
-            </h2>
-            <p className="leading-relaxed text-base-content/70">
-              分析在你自己的电脑上完成，书和数据都不离开本机。
-            </p>
-          </div>
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {features.map((feature) => {
-              const Icon = feature.icon;
-              return (
-                <div key={feature.title} className="card bg-base-100 shadow-sm ring-1 ring-base-200">
-                  <div className="card-body gap-3">
-                    <div className="flex items-center gap-2">
-                      <Icon aria-hidden="true" className="size-5 text-primary" />
-                      <h3 className="card-title text-xl">{feature.title}</h3>
-                    </div>
-                    <p className="leading-relaxed text-base-content/70">{feature.body}</p>
-                  </div>
+              <div className="space-y-7">
+                <h1
+                  id="intro-title"
+                  className="space-y-2 font-semibold"
+                >
+                  <span className="block text-[2.75rem] leading-tight tracking-tight sm:text-6xl"><span className="text-[#1b9e77]">Bio</span><span className="text-[#7570b3]">CN</span></span>
+                  <span className="block text-xl leading-snug tracking-tight text-base-content/70 sm:text-2xl">中文仿生阅读</span>
+                </h1>
+                <div className="flex flex-wrap gap-3">
+                  <a className="btn btn-primary btn-lg" href="#download">
+                    <ArrowDownToLine aria-hidden="true" /> 下载 BioCN
+                  </a>
+                  <a className="btn btn-outline btn-lg" href={repository}>
+                    <Code2 aria-hidden="true" /> GitHub
+                  </a>
                 </div>
-              );
-            })}
+              </div>
+            </div>
+            <div className="flex w-full max-w-md flex-col items-center gap-6">
+              <div className="card w-full bg-base-200 shadow-xl">
+                <div className="card-body gap-4">
+                  <h2 className="card-title text-base">仿生阅读是什么样？</h2>
+                  <DemoPanels />
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
+        <section aria-labelledby="why-title" className="space-y-4">
+          <h2 id="why-title" className="text-3xl font-semibold tracking-tight">
+            为什么做这个应用？
+          </h2>
+          <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
+            英文仿生阅读是加粗每个单词的开头；中文没有单词的边界，BioCN
+            改用句法分析，把每句的主谓宾染上颜色——为 ADHD 与容易分心的读者设计，眼睛循着颜色，长句里也抓得住主线。
+          </p>
+          <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">完全离线运行。</p>
+        </section>
         <section id="download" aria-labelledby="download-title" className="scroll-mt-8">
           <div className="card bg-base-100 shadow-sm ring-1 ring-base-200">
             <div className="card-body gap-6">
