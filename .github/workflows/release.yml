@@ -282,11 +282,22 @@ jobs:
             libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
 
+      # ORT 的 build.bat 在 Ninja 生成器下要求 MSVC 开发者环境（cl 必须在 PATH，
+      # 官方文档要求从 Developer Command Prompt 运行），runner 的普通终端没有，
+      # 先注入；macOS/Windows runner 镜像自带 Ninja 与 CMake。
+      - name: Setup MSVC dev environment
+        if: matrix.label == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       # The app loads ONNX Runtime at run time: compile the minimal
       # libonnxruntime for this platform (tools/ortsmoke then proves it serves
       # all six shipped graphs) and drop it where tauri.<os>.conf.json picks
       # the artifact up as a bundled resource.
       - name: Build minimal ONNX Runtime
+        env:
+          # macOS runner 的 python3 是 Homebrew 版，系统级 pip 安装被 PEP 668
+          # 拦截（ubuntu-24.04 镜像已预置同名变量，windows 无此限制，设置无害）。
+          PIP_BREAK_SYSTEM_PACKAGES: '1'
         run: |
           set -euo pipefail
           python3 -m pip install --quiet flatbuffers==25.2.10 || python3 -m pip install --quiet flatbuffers

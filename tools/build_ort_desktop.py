@@ -24,10 +24,13 @@ Usage:
 The build step drops its artifact at src-tauri/ort/<platform>/, which the
 platform config (tauri.<os>.conf.json) bundles as res/libonnxruntime.<ext>.
 
-The official git clone is 403/404 from some networks; when the pinned
-`microsoft/onnxruntime` checkout is unavailable the script fetches the Intel
-mirror (`intel/onnxruntime`), which tracks upstream 1:1 (VERSION_NUMBER,
-API version and the tools/ tree used here all match the pinned release).
+microsoft/onnxruntime vanished from GitHub entirely (404 for everyone since
+2026-11, no rename/move; PyPI only ships wheels). The sources therefore come
+from forks of the deleted repo: `ossia/onnxruntime` and `Krozark/onnxruntime`
+still carry the pinned tag, their tag SHAs agree, so either is the genuine
+tree. microsoft stays first in case it ever returns; `intel/onnxruntime` is
+the historical mirror but its tags follow Intel's own v5.x line, so it only
+ever served local `--source` builds.
 """
 
 from __future__ import annotations
@@ -45,8 +48,11 @@ HERE = Path(__file__).parent
 CONFIG = HERE / "models" / "ort_ops.config"
 
 ORT_VERSION = "1.31.1"
-UPSTREAM = f"https://github.com/microsoft/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip"
-MIRROR = f"https://github.com/intel/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip"
+SOURCES = [
+    f"https://github.com/microsoft/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip",
+    f"https://github.com/ossia/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip",
+    f"https://github.com/Krozark/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip",
+]
 
 # Flags shared by every platform. `--include_ops_by_config` + reduced type
 # support is what makes the build "minimal": the kernels are filtered down to
@@ -104,10 +110,10 @@ def build(platform: str, out: Path, source: Path | None, python: str | None = No
         src = work if (work / "build.sh").exists() else src
     if not src.exists():
         print(f"fetching onnxruntime {ORT_VERSION} ...")
-        for candidate in (UPSTREAM, MIRROR):
+        for candidate in SOURCES:
             if extract(candidate, work):
                 break
-            print(f"  retrying with mirror ...")
+            print(f"  retrying with next source ...")
         else:
             raise SystemExit("could not download onnxruntime sources")
     print(f"using sources from {src}")
@@ -133,6 +139,10 @@ def build(platform: str, out: Path, source: Path | None, python: str | None = No
             # Arch box carries all three and re2's CMakeLists pulls system absl
             # in while ORT builds its own -> duplicate target errors).
             "--cmake_extra_defines=FETCHCONTENT_TRY_FIND_PACKAGE_MODE=NEVER",
+            # Every dependency is a pinned FetchContent URL (cmake/deps.txt),
+            # and the source tree is an archive checkout with no .git, so
+            # submodule sync is neither possible nor needed.
+            "--skip_submodule_sync",
         ]
         + COMMON_CMAKE
         + ["--update", "--build"],
@@ -153,6 +163,7 @@ def build(platform: str, out: Path, source: Path | None, python: str | None = No
 
 def extract(url: str, work: Path) -> bool:
     import urllib.request
+    import zipfile
 
     archive = work / "ort.zip"
     try:
@@ -161,9 +172,19 @@ def extract(url: str, work: Path) -> bool:
     except OSError as error:
         print(f"  download failed: {error}")
         return False
-    subprocess.run(["unzip", "-q", "-o", str(archive), "-d", str(work)], check=True)
+    # zipfile instead of the unzip binary: Git Bash on the Windows runner has
+    # no unzip, and sources need no exec bits (build.sh runs via `bash`).
+    with zipfile.ZipFile(archive) as bundle:
+        bundle.extractall(work)
     archive.unlink()
-    return (work / f"onnxruntime-{ORT_VERSION}").exists()
+    expected = work / f"onnxruntime-{ORT_VERSION}"
+    if not expected.exists():
+        # Archive roots are `{repo}-{ref}`; tolerate naming drift (a leading
+        # `v` kept or stripped) by adopting the single extracted top-level dir.
+        top = [p for p in work.iterdir() if p.is_dir() and (p / "build.sh").exists()]
+        if len(top) == 1:
+            top[0].rename(expected)
+    return expected.exists()
 
 
 def find_artifact(build_dir: Path, platform: str) -> Path:
