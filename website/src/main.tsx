@@ -5,7 +5,6 @@ import ArrowDownToLine from 'lucide-react/icons/arrow-down-to-line';
 import Code2 from 'lucide-react/icons/code-2';
 import Laptop from 'lucide-react/icons/laptop';
 import Monitor from 'lucide-react/icons/monitor';
-import ShieldCheck from 'lucide-react/icons/shield-check';
 import Smartphone from 'lucide-react/icons/smartphone';
 import Terminal from 'lucide-react/icons/terminal';
 import type { LucideIcon } from 'lucide-react';
@@ -19,7 +18,7 @@ const HelixViewer = lazy(() =>
 import './index.css';
 
 // 发布元数据由 CI 的 scripts/pages-release.mjs 从 GitHub Releases 生成并写进部署目录；
-// 这里运行时读取并校验，不通过校验的数据一律退回到"前往 GitHub Releases"兜底。
+// 这里运行时读取并校验，不通过校验的数据一律退回到兜底视图。
 const base = import.meta.env.BASE_URL;
 const repository = 'https://github.com/asinkLuno/bioCN';
 const downloadPrefix = `${repository}/releases/download/`;
@@ -29,7 +28,6 @@ type Download = {
   name: string;
   platform: Platform;
   size: number;
-  sha256: string;
   download_url: string;
 };
 type Release = {
@@ -102,8 +100,6 @@ function validDownload(value: unknown): value is Download {
     platformOrder.includes(download.platform as Platform) &&
     typeof download.size === 'number' &&
     download.size > 0 &&
-    typeof download.sha256 === 'string' &&
-    /^[a-f0-9]{64}$/.test(download.sha256) &&
     typeof download.download_url === 'string' &&
     download.download_url.startsWith(downloadPrefix) &&
     download.download_url.endsWith(download.name)
@@ -133,7 +129,7 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// 按钮上用短标签，避免长文件名把移动端卡片撑出横向滚动；完整文件名见校验信息折叠块。
+// 按钮上用短标签，避免长文件名把移动端卡片撑出横向滚动。
 function formatLabel(name: string): string {
   if (name.endsWith('.apk')) return 'APK 安装包';
   if (name.endsWith('.exe')) return 'EXE 安装程序';
@@ -346,7 +342,7 @@ function App() {
                   下载 BioCN
                 </h2>
                 <p className="leading-relaxed text-base-content/70">
-                  所有安装包发布在 GitHub Releases，逐个附带 SHA-256 校验信息。
+                  所有安装包发布在 GitHub Releases。
                 </p>
               </div>
 
@@ -382,23 +378,6 @@ function App() {
                 </div>
               ) : null}
 
-              {release ? (
-                <details className="collapse collapse-arrow bg-base-200">
-                  <summary className="collapse-title">
-                    <span className="flex items-center gap-2">
-                      <ShieldCheck aria-hidden="true" className="size-4" /> 安装包校验信息（SHA-256）
-                    </span>
-                  </summary>
-                  <div className="collapse-content space-y-3">
-                    {release.downloads.map((download) => (
-                      <div key={download.download_url} className="space-y-1">
-                        <p className="text-sm font-medium">{download.name}</p>
-                        <p className="font-mono text-xs break-all text-base-content/70">{download.sha256}</p>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              ) : null}
 
               {history.length > 1 ? (
                 <details className="collapse collapse-arrow bg-base-200">
