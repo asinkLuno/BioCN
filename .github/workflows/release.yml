@@ -274,6 +274,11 @@ jobs:
           workspaces: src-tauri
           key: desktop-${{ matrix.label }}
 
+      # tauri-action 只调 `yarn tauri build`，不会装依赖；没有这一步
+      # node_modules 缺失，yarn script 里的 tauri 二进制找不到（exit 127）。
+      - name: Install frontend dependencies
+        run: yarn install --frozen-lockfile
+
       - name: Install Linux build dependencies
         if: matrix.label == 'linux'
         run: |
@@ -288,6 +293,15 @@ jobs:
       - name: Setup MSVC dev environment
         if: matrix.label == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
+
+      # Git bash 步骤的 PATH 把 Git 目录排在最前，rustc 会解析到 Git 自带的
+      # GNU coreutils link.exe 而不是 MSVC 链接器（"/usr/bin/link: extra
+      # operand"，ort-sys build script 链接失败）。删除它，rustc 落回
+      # vswhere 自动定位 MSVC 链接器；本 workflow 没有别的步骤用到 coreutils
+      # link。
+      - name: Remove GNU link.exe shadowing the MSVC linker
+        if: matrix.label == 'windows'
+        run: rm -f "/c/Program Files/Git/usr/bin/link.exe"
 
       # The app loads ONNX Runtime at run time: compile the minimal
       # libonnxruntime for this platform (tools/ortsmoke then proves it serves

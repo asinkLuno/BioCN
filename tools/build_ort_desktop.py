@@ -66,6 +66,10 @@ COMMON_CMAKE = [
     "--enable_reduced_operator_type_support",
     "--disable_rtti",
     "--disable_exceptions",
+    # Apple clang treats an unused constexpr in the kleidiai halfgemm TU as an
+    # error under -Werror (-Wunused-const-variable), which comes and goes with
+    # the runner's Xcode version; the shipped library does not care.
+    "--compile_no_warning_as_error",
     "--parallel=0",
 ]
 
