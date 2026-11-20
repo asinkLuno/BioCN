@@ -99,9 +99,13 @@ def pick_python(explicit: str | None) -> str:
         return str(candidate)
     return sys.executable or "python3"
 
-def build(platform: str, out: Path, source: Path | None, python: str | None = None) -> Path:
+def build(platform: str, out: Path | None, source: Path | None, python: str | None = None) -> Path:
     if not CONFIG.exists():
         raise SystemExit(f"missing {CONFIG}; run tools/convert_ort.py first")
+
+    if out is None:
+        # tauri.<os>.conf.json picks the artifact up from the per-platform dir.
+        out = HERE.parent / "src-tauri" / "ort" / platform
 
     work = source or Path(tempfile.mkdtemp(prefix="ort-build-"))
     src = work / f"onnxruntime-{ORT_VERSION}"
@@ -139,6 +143,11 @@ def build(platform: str, out: Path, source: Path | None, python: str | None = No
             # Arch box carries all three and re2's CMakeLists pulls system absl
             # in while ORT builds its own -> duplicate target errors).
             "--cmake_extra_defines=FETCHCONTENT_TRY_FIND_PACKAGE_MODE=NEVER",
+            # ORT's CMake builds the gtest suite by default
+            # (onnxruntime_BUILD_UNIT_TESTS defaults ON). Only the runtime
+            # matters here, and Windows cannot even compile one of the tests
+            # (env_test.cc / gsl::narrow), so exclude them on every platform.
+            "--cmake_extra_defines=onnxruntime_BUILD_UNIT_TESTS=OFF",
             # Every dependency is a pinned FetchContent URL (cmake/deps.txt),
             # and the source tree is an archive checkout with no .git, so
             # submodule sync is neither possible nor needed.
@@ -238,7 +247,8 @@ def main() -> None:
 
     build_cmd = sub.add_parser("build")
     build_cmd.add_argument("--platform", choices=("linux", "macos", "windows"), default=host_default())
-    build_cmd.add_argument("--out", type=Path, default=HERE.parent / "src-tauri" / "ort")
+    build_cmd.add_argument("--out", type=Path, default=None,
+                           help="output dir (default: src-tauri/ort/<platform>)")
     build_cmd.add_argument("--source", type=Path, default=None, help="re-use an extracted onnxruntime tree")
     build_cmd.add_argument("--python", dest="python", default=None, help="interpreter that drives ORT's build.py (needs flatbuffers)")
 
