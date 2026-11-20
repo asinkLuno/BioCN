@@ -8,7 +8,6 @@ interface HelixViewerProps {
 
 export function HelixViewer({ size = 200, speed = 1 }: HelixViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -17,7 +16,6 @@ export function HelixViewer({ size = 200, speed = 1 }: HelixViewerProps) {
     const scene = new THREE.Scene();
     // 透明画布，跟随页面主题（浅色/深色都直接透出背景）
     scene.background = null;
-    scene.fog = null;
     const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
     camera.position.z = 105;
 
@@ -37,17 +35,11 @@ export function HelixViewer({ size = 200, speed = 1 }: HelixViewerProps) {
     }
     renderer.setSize(size, size);
     renderer.setPixelRatio(window.devicePixelRatio);
-    rendererRef.current = renderer;
     containerRef.current.appendChild(renderer.domElement);
 
-    // Lighting setup
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
-    scene.add(ambientLight);
-    
+    scene.add(new THREE.AmbientLight(0xffffff, 0.65));
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.55);
     dirLight.position.set(15, 15, 25);
-    dirLight.shadow.mapSize.width = 512;
-    dirLight.shadow.mapSize.height = 512;
     scene.add(dirLight);
 
     // Main helix group
@@ -60,6 +52,8 @@ export function HelixViewer({ size = 200, speed = 1 }: HelixViewerProps) {
     const radius = 16;
     const segments = 300;
 
+    const tubeRadius = 0.9;
+    const geometryAssets: { geometry: THREE.BufferGeometry; material: THREE.Material }[] = [];
     const createStrand = (phaseOffset: number, color: number) => {
       const points: THREE.Vector3[] = [];
       for (let i = 0; i <= segments; i++) {
@@ -71,26 +65,31 @@ export function HelixViewer({ size = 200, speed = 1 }: HelixViewerProps) {
         points.push(new THREE.Vector3(x, y, z));
       }
 
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      
-      // Use LineBasicMaterial with higher linewidth
-      const material = new THREE.LineBasicMaterial({
+      // 细圆柱管代替 Line：WebGL 里 linewidth 恒为 1px，两链交叠时只有后画
+      // 的那条能赢；管子有真实体积，交叉处由深度测试裁决，旋转时绿、橙自然
+      // 轮流压过对方。tubeRadius/radiusSegments 配合现有灯光可有立体感。
+      const geometry = new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3(points),
+        segments,
+        tubeRadius,
+        4,
+        false
+      );
+      const material = new THREE.MeshStandardMaterial({
         color,
-        linewidth: 8,
+        roughness: 0.55,
+        metalness: 0.05,
         fog: true,
       });
 
-      const line = new THREE.Line(geometry, material);
-      return line;
+      geometryAssets.push({ geometry, material });
+      return new THREE.Mesh(geometry, material);
     };
 
     // Create both strands (phase offset by π = 180°)
-    const strand1 = createStrand(0, 0xda854b); // Amber
-    const strand2 = createStrand(Math.PI, 0x4da78a); // Jade
-    helix.add(strand1);
-    helix.add(strand2);
+    helix.add(createStrand(0, 0xda854b)); // Amber
+    helix.add(createStrand(Math.PI, 0x4da78a)); // Jade
 
-    // Create connecting rungs (purple)
     // Create connecting rungs (purple)
     const rungCount = 5;
 
@@ -110,25 +109,35 @@ export function HelixViewer({ size = 200, speed = 1 }: HelixViewerProps) {
         radius * Math.sin(angle2)
       );
 
-      const geometry = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-      const material = new THREE.LineBasicMaterial({
-        color: 0x79739e,
-        linewidth: 5,
-      });
+      const dir = new THREE.Vector3().subVectors(p2, p1);
+      const len = dir.length();
 
-      const line = new THREE.Line(geometry, material);
-      helix.add(line);
+      // 横档也用细圆柱，粗细与链身（半径 0.9）成比例；openEnded 省掉两端
+      // 盖片，端头本来就埋进链身的管子里。
+      const geometry = new THREE.CylinderGeometry(0.45, 0.45, len, 4, 1, true);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x79739e,
+        roughness: 0.55,
+        metalness: 0.05,
+        fog: true,
+      });
+      geometryAssets.push({ geometry, material });
+      const rung = new THREE.Mesh(geometry, material);
+      rung.position.copy(p1).addScaledVector(dir, 0.5);
+      rung.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        dir.clone().normalize()
+      );
+      helix.add(rung);
     }
-    // Animation loop with proper rotation direction
+    const rotationSpeed = (speed * Math.PI * 2) / 240;
     let rafId = 0;
     let previousFrame = 0;
-    const rotationSpeed = (speed * Math.PI * 2) / 240;
     const animate = (now: number) => {
       rafId = requestAnimationFrame(animate);
       const elapsed = previousFrame ? Math.min(now - previousFrame, 50) : 0;
       previousFrame = now;
       helix.rotation.y += (rotationSpeed * elapsed) / 1000;
-      const phase = (helix.rotation.y % (Math.PI * 2)) / (Math.PI * 2);
       renderer.render(scene, camera);
     };
 
@@ -138,6 +147,10 @@ export function HelixViewer({ size = 200, speed = 1 }: HelixViewerProps) {
     return () => {
       cancelAnimationFrame(rafId);
       renderer.dispose();
+      geometryAssets.forEach(({ geometry, material }) => {
+        geometry.dispose();
+        material.dispose();
+      });
       containerRef.current?.removeChild(renderer.domElement);
     };
   }, [size, speed]);

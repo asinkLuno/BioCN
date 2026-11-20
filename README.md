@@ -111,4 +111,10 @@ most of the disagreement is where upstream breaks inside a quoted clause.
 
 ## License
 
-The models are derived from HanLP, which is Apache-2.0; see `tools/LICENSE`.
+BioCN is licensed under [GPL-3.0-or-later](LICENSE).
+
+- The analysis models are derived from HanLP, which is Apache-2.0; see
+  `tools/LICENSE`.
+- The web demo's serif font is a subset of Source Han Serif SC (思源宋体),
+  licensed under the SIL Open Font License 1.1
+  (`website/public/fonts/OFL-1.1.txt`).

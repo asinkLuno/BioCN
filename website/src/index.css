@@ -1,11 +1,11 @@
 @import "tailwindcss";
+@import './fonts.css';
 @plugin "daisyui" {
   themes: light --default, dark --prefersdark;
 }
 
 @layer base {
   .hero-brand-lockup {
-
     display: grid;
     grid-template-columns: 10rem minmax(0, 1fr);
     align-items: start;
@@ -37,7 +37,20 @@
     -webkit-font-smoothing: antialiased;
     -webkit-text-size-adjust: 100%;
   }
-}
+  /* 全局字号放大一档（daisyUI 工具类均为 rem，随根字号整体缩放）：
+     demo 卡里的正文是“仿生阅读”的主角，优先保证可读。 */
+  /* 全局字号（demo 卡里的正文是“仿生阅读”的主角，优先保证可读）。
+     思源宋体（Noto Serif SC）字号天然偏大，root 回落到 1rem/1.0625rem。 */
+  html {
+    font-size: 1rem;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-serif: 'Noto Serif SC', 'Source Han Serif SC', ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  }
+  @media (min-width: 1024px) {
+    html {
+      font-size: 1.0625rem;
+    }
+  }
 
   .hero-brand-stage {
     display: grid;
@@ -74,6 +87,7 @@
       height: 4.5rem;
     }
   }
+}
 
 @layer components {
   /*

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { createRoot } from 'react-dom/client';
 import ArrowDownToLine from 'lucide-react/icons/arrow-down-to-line';
@@ -11,7 +11,11 @@ import Terminal from 'lucide-react/icons/terminal';
 import type { LucideIcon } from 'lucide-react';
 
 
-import { HelixViewer } from './components/HelixViewer';
+// HelixViewer 内含 three.js（~160KB gzip），拆成独立 chunk 首屏不阻塞解析：
+// 静态 import 会让 hero 上方整页等它下载完才可交互。
+const HelixViewer = lazy(() =>
+  import('./components/HelixViewer').then((m) => ({ default: m.HelixViewer })),
+);
 import './index.css';
 
 // 发布元数据由 CI 的 scripts/pages-release.mjs 从 GitHub Releases 生成并写进部署目录；
@@ -73,11 +77,11 @@ const DEMO_PARAGRAPHS: { text: string; colored: boolean }[] = [
   },
   {
     colored: false,
-    text: '粉红的天空中，曲曲折折的漂着许多条石绿色的浮云，星便在那后面忽明忽灭的[目夹]眼。天边的血红的云彩里有一个光芒四射的太阳，如流动的金球包在荒古的熔岩中；那一边，却是一个生铁一般的冷而且白的月亮。然而伊并不理会谁是下去，和谁是上来。',
+    text: '粉红的天空中，曲曲折折的漂着许多条石绿色的浮云，星便在那后面忽明忽灭的䀹眼。天边的血红的云彩里有一个光芒四射的太阳，如流动的金球包在荒古的熔岩中；那一边，却是一个生铁一般的冷而且白的月亮。然而伊并不理会谁是下去，和谁是上来。',
   },
   {
     colored: true,
-    text: '粉红的天空中，曲曲折折的<span class="svo-predicate font-medium">漂</span>着许多条石绿色的<span class="svo-object font-medium">浮云</span>，<span class="svo-subject font-medium">星</span>便在那后面忽明忽灭的[<span class="svo-object font-medium">目</span><span class="svo-predicate font-medium">夹</span>]<span class="svo-object font-medium">眼</span>。天边的血红的云彩里<span class="svo-predicate font-medium">有</span>一个光芒四射的<span class="svo-object font-medium">太阳</span>，如流动的金球<span class="svo-predicate font-medium">包</span>在荒古的熔岩中；那一边，却<span class="svo-predicate font-medium">是</span>一个生铁一般的冷而且白的<span class="svo-object font-medium">月亮</span>。然而<span class="svo-subject font-medium">伊</span>并不<span class="svo-predicate font-medium">理会</span><span class="svo-subject font-medium">谁</span>是<span class="svo-predicate font-medium">下去</span>，和谁是上来。',
+    text: '粉红的天空中，曲曲折折的<span class="svo-predicate font-medium">漂</span>着许多条石绿色的<span class="svo-object font-medium">浮云</span>，<span class="svo-subject font-medium">星</span>便在那后面忽明忽灭的<span class="svo-object font-medium">䀹眼</span>。天边的血红的云彩里<span class="svo-predicate font-medium">有</span>一个光芒四射的<span class="svo-object font-medium">太阳</span>，如流动的金球<span class="svo-predicate font-medium">包</span>在荒古的熔岩中；那一边，却<span class="svo-predicate font-medium">是</span>一个生铁一般的冷而且白的<span class="svo-object font-medium">月亮</span>。然而<span class="svo-subject font-medium">伊</span>并不<span class="svo-predicate font-medium">理会</span><span class="svo-subject font-medium">谁</span>是<span class="svo-predicate font-medium">下去</span>，和谁是上来。',
   },
   {
     colored: false,
@@ -140,12 +144,11 @@ function formatLabel(name: string): string {
   if (name.endsWith('.rpm')) return 'RPM 包';
   return name;
 }
-
 function Paragraph({ html, colored }: { html: string; colored: boolean }) {
   if (!colored) {
-    return <p className="leading-loose text-base-content/80">{html}</p>;
+    return <p className="font-serif text-lg leading-loose text-base-content/80">{html}</p>;
   }
-  return <p className="leading-loose" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <p className="font-serif text-lg leading-loose" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function DemoPanels() {
@@ -269,7 +272,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-base-100 text-base-content">
-      <header className="navbar mx-auto max-w-6xl px-4 sm:px-6">
+      <header className="navbar mx-auto max-w-7xl px-4 sm:px-6 2xl:max-w-[96rem]">
         <div className="navbar-start">
           <a className="btn btn-ghost px-2 text-lg font-semibold" href={base} aria-label="BioCN 首页">
             <img src={`${base}brand/icon-128.png`} alt="" width={28} height={28} className="size-7" />
@@ -286,12 +289,15 @@ function App() {
         </nav>
       </header>
 
-      <main className="mx-auto max-w-6xl space-y-20 px-4 pb-12 sm:px-6 sm:pb-20">
+      <main className="mx-auto max-w-7xl space-y-20 px-4 pb-12 sm:px-6 sm:pb-20 2xl:max-w-[96rem]">
         <section aria-labelledby="intro-title" className="hero py-10 md:py-16">
           <div className="hero-content flex-col items-start gap-12 lg:flex-row lg:items-center lg:gap-16">
             <div className="hero-brand-lockup max-w-xl">
               <div className="hero-brand-mark" aria-hidden="true">
-                <HelixViewer size={160} speed={60} />
+                {/* 拆 chunk 的加载占位：透明方块，布局不跳（尺寸已由 hero-brand-mark 固定） */}
+                <Suspense fallback={<div style={{ width: 160, height: 160 }} />}>
+                  <HelixViewer size={160} speed={60} />
+                </Suspense>
               </div>
               <div className="space-y-7">
                 <h1
@@ -442,16 +448,14 @@ function App() {
       </main>
 
       <footer className="footer footer-center bg-base-200 text-base-content/70 sm:p-10">
-        <nav className="flex gap-4">
-          <a className="link link-hover" href={repository}>
-            GitHub
-          </a>
-          <a className="link link-hover" href={`${repository}/issues`}>
-            反馈问题
-          </a>
-        </nav>
         <aside>
-          <p>BioCN · 让每个句子，结构都看得见。</p>
+          <p>
+            © 2026 BioCN contributors · GPL-3.0-or-later
+            {' · '}
+            <a className="link link-hover" href={`${repository}/blob/main/LICENSE`}>
+              GPL-3.0
+            </a>
+          </p>
         </aside>
       </footer>
     </div>

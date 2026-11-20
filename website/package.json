@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "build:font": "node scripts/build-font-subset.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.66.0",
@@ -20,6 +21,8 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
     "daisyui": "^5.8.1",
+    "rollup-plugin-visualizer": "^7.1.3",
+    "subset-font": "^2.4.0",
     "tailwindcss": "^4.3.5",
     "typescript": "~6.0.3",
     "vite": "^8.0.16"
