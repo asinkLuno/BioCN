@@ -24,7 +24,7 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     compileSdk = 37
-    namespace = "ink.syncmoon.biocn"
+    namespace = "io.github.asinkluno.biocn"
     signingConfigs {
         create("release") {
             keyAlias = keystoreProperties["keyAlias"] as? String
@@ -35,7 +35,7 @@ android {
     }
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "ink.syncmoon.biocn"
+        applicationId = "io.github.asinkluno.biocn"
         minSdk = 24
         targetSdk = 37
         // Release tags reserve a monotonically increasing build number for Android upgrades.

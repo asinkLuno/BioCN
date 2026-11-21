@@ -1,4 +1,4 @@
-package ink.syncmoon.biocn
+package io.github.asinkluno.biocn
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

@@ -181,7 +181,7 @@ jobs:
           "$tools/apksigner" verify --verbose "$apk"
           metadata=$("$tools/aapt" dump badging "$apk")
           expected_code=$((1000000000 + BIOCN_BUILD_NUMBER))
-          if [[ "$metadata" != *"package: name='ink.syncmoon.biocn' versionCode='$expected_code'"* ]]; then
+          if [[ "$metadata" != *"package: name='io.github.asinkluno.biocn' versionCode='$expected_code'"* ]]; then
             echo "::error::Unexpected application id or versionCode (expected $expected_code)"
             printf '%s\n' "$metadata"
             exit 1
