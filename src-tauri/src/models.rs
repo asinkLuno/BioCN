@@ -218,7 +218,7 @@ fn dir_bytes(dir: &Path) -> u64 {
 
 /// The HTTP client every ModelScope call shares.
 fn client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+    crate::net::builder()
         .user_agent(concat!("biocn/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(std::time::Duration::from_secs(20))
         // A CDN that accepts the connection and then stops sending would

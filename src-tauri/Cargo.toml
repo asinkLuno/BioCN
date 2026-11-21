@@ -81,6 +81,12 @@ ort = { version = "=2.0.0-rc.15", default-features = false, features = [
   "std",
   "load-dynamic",
 ] }
+# reqwest's `rustls` feature needs a JVM-side init on Android that BioCN does
+# not perform (src/net.rs): point rustls at the bundled webpki roots instead.
+# Versions match the rustls reqwest itself pulls, so the preconfigured
+# ClientConfig is accepted by `tls_backend_preconfigured`.
+rustls = "0.23"
+webpki-roots = "1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

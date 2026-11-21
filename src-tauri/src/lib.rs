@@ -4,6 +4,7 @@ pub mod cache;
 pub mod export;
 pub mod library;
 pub mod models;
+pub(crate) mod net;
 pub mod reader;
 pub mod reading;
 pub mod settings;

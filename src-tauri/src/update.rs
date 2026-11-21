@@ -187,7 +187,7 @@ fn request_error(error: &reqwest::Error) -> String {
 #[tauri::command]
 pub async fn check_update(app: AppHandle) -> Result<UpdateStatus, String> {
     let current_version = app.package_info().version.to_string();
-    let client = reqwest::Client::builder()
+    let client = crate::net::builder()
         .timeout(Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("BioCN-Update-Check")
@@ -239,7 +239,7 @@ pub async fn download_update(
     let target = dir.join(&file_name);
     let partial = dir.join(format!("{file_name}.part"));
 
-    let client = reqwest::Client::builder()
+    let client = crate::net::builder()
         .connect_timeout(Duration::from_secs(20))
         .read_timeout(Duration::from_secs(60))
         .user_agent("BioCN-Update-Download")
