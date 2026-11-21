@@ -1,7 +1,13 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
 import { bookHasColoring, bookHasActiveColoring, type ColoringProgress } from "../lib/reading";
 import { ExportDialog } from "./ExportDialog";
+
+// HelixViewer 内含 three.js（~136KB gzip）：染色动画是低频场景，拆成独立
+// chunk，书架首屏不为它买单（与 website/src/main.tsx 对同一组件的做法一致）。
+const HelixViewer = lazy(() =>
+  import("./HelixViewer").then((m) => ({ default: m.HelixViewer })),
+);
 import { useDialog, ModalBackdrop } from "./dialog";
 
 interface Props {
@@ -180,6 +186,15 @@ export const BookTile = memo(function BookTile({
               aria-label="着色进度"
               className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-base-100/85 px-2.5 py-1.5 backdrop-blur-sm"
             >
+              {/* 品牌双螺旋转起来，作为染色的加载动画。它只是装饰：读屏
+                  用户要的信息由进度条与百分比承担，所以整体 aria-hidden。
+                  占位 span 钉住 32px，chunk 加载前后条高不跳。
+                  speed 与网站首页一致（60 ≈ 4 秒一圈）。 */}
+              <span aria-hidden="true" className="flex-none size-8">
+                <Suspense fallback={null}>
+                  <HelixViewer size={32} speed={60} />
+                </Suspense>
+              </span>
               <progress
                 className="progress progress-primary h-1.5 w-full flex-1"
                 // `max` is the book's sentence count; a bar with no total is

@@ -158,6 +158,14 @@ describe("library", () => {
     await waitFor(() => expect(jobStrip(tile)).toBeInTheDocument());
     expect(within(header()).queryByRole("status", { name: "着色进度" })).not.toBeInTheDocument();
     expect(jobStrip(tile)).toHaveTextContent("25%");
+    // The strip's loader animation is the brand helix. jsdom has no WebGL, so
+    // HelixViewer shows its static fallback image; this is the same spot a real
+    // WebView renders as the rotating three.js helix, so seeing it proves the
+    // helix loader is mounted on the job's strip. It is lazy-loaded, so wait
+    // for the chunk.
+    await waitFor(() =>
+      expect(jobStrip(tile).querySelector('img[src$="helix-launch.svg"]')).not.toBeNull(),
+    );
     // A job holds its book: opening it is what the user must not be able to do
     // while the job and the reader would analyze the same chapters.
     expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeDisabled();
