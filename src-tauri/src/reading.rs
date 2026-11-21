@@ -52,10 +52,6 @@ pub struct ChapterSummary {
 pub struct BookView {
     pub id: String,
     pub title: String,
-    /// Where the stored EPUB lives on disk. The webview renders the book
-    /// itself (foliate-js) and fetches this path through the asset protocol,
-    /// whose scope covers exactly this directory; analysis stays Rust-side.
-    pub file_path: std::path::PathBuf,
     pub chapters: Vec<ChapterSummary>,
 }
 
@@ -144,10 +140,6 @@ pub async fn book_open<R: Runtime>(app: AppHandle<R>, id: String) -> Result<Book
         return Err("book-coloring: 这本书正在着色全书中，请等它完成".into());
     }
     let chapters = parse_book(&app, &id).await?;
-    let file_path = app
-        .state::<Library>()
-        .book_file(&id)
-        .ok_or_else(|| format!("book-missing: 书库里没有这本书（{id}）"))?;
     Ok(BookView {
         title: title_of(&app, &id),
         chapters: chapters
@@ -158,7 +150,6 @@ pub async fn book_open<R: Runtime>(app: AppHandle<R>, id: String) -> Result<Book
                 paragraphs: chapter.paragraphs.len(),
             })
             .collect(),
-        file_path,
         id,
     })
 }

@@ -39,13 +39,6 @@ export interface ChapterSummary {
 export interface BookView {
   id: string;
   title: string;
-  /**
-   * The stored EPUB's path on disk. The renderer (foliate-js) fetches it
-   * through the asset protocol, whose scope covers exactly the library's
-   * files directory, so the webview can lay the book out while analysis
-   * stays Rust-side.
-   */
-  filePath: string;
   chapters: ChapterSummary[];
 }
 

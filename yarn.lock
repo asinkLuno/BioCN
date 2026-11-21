@@ -595,11 +595,6 @@ chai@^6.3.0:
   resolved "https://registry.yarnpkg.com/chai/-/chai-6.3.0.tgz#91f89eb789c2bb1ae1787d78c8518e1d3cebfc07"
   integrity sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==
 
-construct-style-sheets-polyfill@^3.1.0:
-  version "3.1.0"
-  resolved "https://registry.yarnpkg.com/construct-style-sheets-polyfill/-/construct-style-sheets-polyfill-3.1.0.tgz#c490abd79efdb359fafa62ec14ea55232be0eecf"
-  integrity sha512-HBLKP0chz8BAY6rBdzda11c3wAZeCZ+kIG4weVC2NM3AXzxx09nhe8t0SQNdloAvg5GLuHwq/0SPOOSPvtCcKw==
-
 css.escape@^1.5.1:
   version "1.5.1"
   resolved "https://registry.yarnpkg.com/css.escape/-/css.escape-1.5.1.tgz#42e27d4fa04ae32f931a4b4d4191fa9cddee97cb"
@@ -687,13 +682,6 @@ fflate@~0.8.3:
   version "0.8.3"
   resolved "https://registry.yarnpkg.com/fflate/-/fflate-0.8.3.tgz#bc27d8eb30343d4d512abb03480202ce65d825fc"
   integrity sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==
-
-foliate-js@1.0.1:
-  version "1.0.1"
-  resolved "https://registry.yarnpkg.com/foliate-js/-/foliate-js-1.0.1.tgz#bcd143845d2ee184c37aedccc271af0c6a0110b1"
-  integrity sha512-Cj4h2ub5aVA+yUgbhvVhCyxwi0GPF4pyNBa6Lw9+6WKY1ReBxipItn2kEBO6u7Vu/xYXjK711R74+t+yW/0u5w==
-  dependencies:
-    construct-style-sheets-polyfill "^3.1.0"
 
 fsevents@~2.3.3:
   version "2.3.3"

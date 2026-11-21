@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   MODEL_MISSING,
   bookChapter,
@@ -7,14 +7,10 @@ import {
   message,
   type BookView,
   type ChapterView,
+  type ColoredParagraph,
+  type ColoredSentence,
+  type Role,
 } from "../lib/reading";
-import {
-  BOOK_STYLESHEET,
-  paintChapter,
-} from "../lib/overlay";
-import { createBookView, fetchBookBlob, flattenToc, type TocEntry } from "../lib/foliate";
-
-// `FoliateView` is an ambient global from `src/types/foliate-js.d.ts`.
 
 interface Props {
   id: string;
@@ -27,97 +23,50 @@ interface Props {
 }
 
 /**
- * The reading view: the book's own layout, rendered by foliate-js, with the
- * analyzer's colors painted on top.
+ * The reading view: one chapter at a time, with a chapter list.
  *
- * The Rust side still owns the text: `book_open` hands over the stored EPUB
- * (which foliate lays out through the asset protocol) plus the chapter list,
- * and `book_chapter` delivers one chapter's colored paragraphs when its
- * section loads. Painting is overlay-only — a paragraph that cannot be
- * matched is left uncolored, never mis-colored — so the reader degrades to
- * the book's plain layout while everything else keeps working.
+ * Text arrives already split into sentences and colored spans, so this component
+ * only lays markup out — it never measures or splits strings. Spans come from
+ * the Rust side with UTF-16 offsets; rendering them directly keeps the DOM
+ * identical to what those offsets describe, which is what a later scroll
+ * position or annotation will rely on.
  */
 export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   const [book, setBook] = useState<BookView | null>(null);
-  const [toc, setToc] = useState<TocEntry[] | null>(null);
-  const [at, setAt] = useState<number | null>(null);
+  const [chapter, setChapter] = useState<ChapterView | null>(null);
+  const [index, setIndex] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [missingModel, setMissingModel] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
-  // A section's coloring failing is not a book failure: the layout is already
-  // on screen, so the alert rides above it.
-  const [chapterError, setChapterError] = useState<string | null>(null);
-  const [chapterMissingModel, setChapterMissingModel] = useState(false);
-  // Bumped to re-ask for the current section's coloring. Downloading a model
-  // in settings is the common reason a chapter failed, and the reader must
-  // not sit on that error until the user navigates away and back.
+  // Bumped to re-ask for the chapter. Downloading a model in settings is the
+  // common reason a chapter failed, and the reader must not sit on that error
+  // until the user navigates away and back.
   const [attempt, setAttempt] = useState(0);
+  const wasOpen = useRef(modelsOpen);
+  const content = useRef<HTMLDivElement>(null);
 
-  const host = useRef<HTMLDivElement>(null);
-  const view = useRef<FoliateView | null>(null);
-  // Colored chapters are cached per spine index: flipping back and forth
-  // must not re-run the analyzer for text it has already answered.
-  const chapters = useRef(new Map<number, ChapterView>());
-  // The section on screen, and the document foliate loaded for it — what a
-  // retry paints into, and what a late-arriving chapter checks against.
-  const section = useRef<{ index: number; doc: Document } | null>(null);
-  // A painted document must never be painted again: a second pass would wrap
-  // spans in spans. Foliate hands over a fresh document per section load, so
-  // this only guards against a retry re-entering on the same one.
-  const painted = useRef(new WeakSet<Document>());
-
-  // One parse (and one file fetch) per book: everything else is sections
-  // loading as foliate paginates through them.
+  // Opening a book is the only parse that has to happen before anything shows.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError(null);
-    setAt(null);
-    setToc(null);
-    setChapterError(null);
-    setChapterMissingModel(false);
-    chapters.current.clear();
-    section.current = null;
+    // The previous book's chapter belongs to a book the page is no longer
+    // showing, and `index` will point into the new one in a moment.
+    setChapter(null);
+    setIndex(null);
     bookOpen(id)
-      .then(async (opened) => {
+      .then((opened) => {
         if (cancelled) return;
         setBook(opened);
         // The first chapter with text: a book usually starts with a cover page
         // and a title page, and landing on those looks like a failure.
         const first =
           opened.chapters.find((entry) => entry.paragraphs > 0) ?? opened.chapters[0] ?? null;
-        if (!first) {
+        setIndex(first ? first.index : null);
+        if (first === null || first === undefined) {
           setLoading(false);
           setError("这本书没有可阅读的正文。");
-          return;
         }
-        const blob = await fetchBookBlob(opened.filePath);
-        if (cancelled) return;
-        const bookView = await createBookView(blob, {
-          onLoad: ({ doc, index }) => {
-            // `cancelled` is the only guard needed: the effect runs once per
-            // `id`, and a switch to another book cancels it before the new
-            // one's events can fire.
-            if (cancelled) return;
-            section.current = { index, doc };
-            doc.addEventListener("keydown", onKeyDown);
-            loadSection(index, doc);
-          },
-          onRelocate: (detail) => setAt(detail.index),
-        });
-        if (cancelled) {
-          bookView.close();
-          return;
-        }
-        // fxl (pre-paginated books) has no setStyles — optional call, or the TypeError
-        // gets misreported as "this book cannot be opened".
-        bookView.renderer.setStyles?.(BOOK_STYLESHEET);
-        view.current = bookView;
-        host.current?.appendChild(bookView);
-        setToc(flattenToc(bookView.book));
-        await bookView.goTo(first.index);
-        if (cancelled) return;
-        setLoading(false);
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
@@ -126,89 +75,76 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
       });
     return () => {
       cancelled = true;
-      view.current?.close();
-      view.current = null;
-      if (host.current) host.current.textContent = "";
     };
-    // The effect runs once per `id`: everything it closes over (`book`, the
-    // handlers) is either set within it or arrives through refs.
   }, [id]);
 
-  /**
-   * One section's coloring: cached, or fetched, then painted into its doc.
-   *
-   * The doc may already have been unloaded by the time the chapter arrives
-   * (a fast page-flip), so painting checks against the section on screen.
-   */
-  const loadSection = (index: number, doc: Document) => {
-    // A new section's state is clean: a previous section's failure must not
-    // ride above a chapter that has nothing to do with it.
-    setChapterError(null);
-    setChapterMissingModel(false);
-    const cached = chapters.current.get(index);
-    if (cached) {
-      paintInto(doc, index, cached);
-      return;
-    }
+  useEffect(() => {
+    // `index === null` is the gap between opening a book and knowing its first
+    // chapter. Requiring the loaded book to be this book is what keeps a
+    // switch from asking for the previous book's chapter number: `index` is
+    // cleared above, but the render that still carries the old value must not
+    // fire a request either.
+    if (index === null || book?.id !== id) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
     bookChapter(id, index)
-      .then((chapter) => {
-        chapters.current.set(index, chapter);
-        paintInto(doc, index, chapter);
+      .then((loaded) => {
+        if (cancelled) return;
+        setChapter(loaded);
+        setLoading(false);
+        // A chapter that arrived means whatever failed before no longer does;
+        // leaving the flag set would make the next trip to settings refetch a
+        // chapter for no reason.
+        setMissingModel(false);
       })
       .catch((cause: unknown) => {
+        if (cancelled) return;
+        setLoading(false);
         // A missing model is not a failure to show a raw error for: it is
         // something the user can fix, and the prompt says how.
-        setChapterError(message(cause));
-        setChapterMissingModel(commandPrefix(cause) === MODEL_MISSING);
+        setMissingModel(commandPrefix(cause) === MODEL_MISSING);
+        setError(message(cause));
       });
-  };
+    return () => {
+      cancelled = true;
+    };
+    // `book` enters as the primitive `book?.id`: the guard below is the only
+    // use, and a dependency on the object would re-run this effect on every
+    // parse that lands, for a fetch the previous run already decided against
+    // (rerender-dependencies).
+  }, [id, index, book?.id, attempt]);
 
-  const paintInto = (doc: Document, index: number, chapter: ChapterView) => {
-    if (section.current?.index !== index || section.current.doc !== doc) return;
-    if (painted.current.has(doc)) return;
-    painted.current.add(doc);
-    const stats = paintChapter(doc, chapter.paragraphs);
-    // A drift the look-ahead cannot absorb shows up as skips; say so rather
-    // than failing silently, without interrupting the read.
-    if (stats.skipped > 0) console.warn(`overlay: ${stats.skipped} 段未匹配，保持无色`);
-  };
-
-  // Coming back from settings after a failed section is worth one more try:
+  // Coming back from settings after a failed chapter is worth one more try:
   // "download a model" is the reason the prompt sent the user there.
-  const wasOpen = useRef(modelsOpen);
   useEffect(() => {
-    if (wasOpen.current && !modelsOpen && chapterMissingModel) setAttempt((n) => n + 1);
+    if (wasOpen.current && !modelsOpen && missingModel) setAttempt((n) => n + 1);
     wasOpen.current = modelsOpen;
-  }, [modelsOpen, chapterMissingModel]);
+  }, [modelsOpen, missingModel]);
 
+  // A new chapter starts at the top, the way turning a page does. `scrollTop`
+  // rather than `scrollTo`: the assignment is a no-op where smooth scrolling is
+  // unavailable (old webviews, jsdom) instead of a crash.
   useEffect(() => {
-    if (attempt === 0) return;
-    const current = section.current;
-    if (current) loadSection(current.index, current.doc);
-    // `loadSection` reads only refs and the primitive `id`.
-  }, [attempt]);
+    if (content.current) content.current.scrollTop = 0;
+  }, [chapter]);
 
   const position = useMemo(() => {
-    if (!book || at === null) return null;
-    const current = book.chapters.findIndex((entry) => entry.index === at);
-    if (current < 0) return null;
+    if (!book || index === null) return null;
+    const at = book.chapters.findIndex((entry) => entry.index === index);
+    if (at < 0) return null;
     return {
-      at: current,
+      at,
       total: book.chapters.length,
-      previous: book.chapters[current - 1] ?? null,
-      next: book.chapters[current + 1] ?? null,
+      previous: book.chapters[at - 1],
+      next: book.chapters[at + 1],
     };
-  }, [book, at]);
+  }, [book, index]);
 
-  const goTo = useCallback((index: number) => {
-    setTocOpen(false);
-    view.current?.goTo(index).catch(() => {});
-  }, []);
-
-  // Arrow keys and Escape — attached to the window and, because the book's
-  // iframe takes focus once clicked, to every section document as well. The
-  // handler reads `position`/`tocOpen` through refs, so one function serves
-  // every listener without re-binding.
+  // Arrow keys and Escape, but never while the user is typing or has a menu open.
+  // The handler reads `position`/`tocOpen` through refs, so the listener is
+  // attached once for the page's lifetime instead of on every chapter flip or
+  // contents-panel toggle (rerender-dependencies / advanced-use-latest).
   const positionRef = useRef(position);
   const tocRef = useRef(tocOpen);
   useEffect(() => {
@@ -216,8 +152,8 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
     tocRef.current = tocOpen;
   });
 
-  const onKeyDown = useCallback(
-    (event: KeyboardEvent) => {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       const tag = (event.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -229,22 +165,15 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         else onClose();
       } else if (event.key === "ArrowRight") {
         const next = positionRef.current?.next;
-        if (next) goTo(next.index);
+        if (next) setIndex(next.index);
       } else if (event.key === "ArrowLeft") {
         const previous = positionRef.current?.previous;
-        if (previous) goTo(previous.index);
+        if (previous) setIndex(previous.index);
       }
-    },
-    [onClose, goTo],
-  );
-
-  useEffect(() => {
+    };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onKeyDown]);
-
-  const chapterTitle =
-    book && position ? (book.chapters[position.at].title ?? null) : null;
+  }, [onClose]);
 
   return (
     <div className="flex min-h-dvh flex-col bg-base-100 text-base-content">
@@ -271,8 +200,8 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
                   old book while opening the new one would be a lie. */}
               {book?.id === id ? book.title : "正在打开…"}
             </p>
-            {chapterTitle && (
-              <p className="truncate text-xs text-base-content/55">{chapterTitle}</p>
+            {chapter?.title && (
+              <p className="truncate text-xs text-base-content/55">{chapter.title}</p>
             )}
           </div>
           <button
@@ -286,90 +215,85 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         </div>
       </header>
 
-      {tocOpen && toc !== null && (
-        <nav aria-label="章节目录" className="border-b border-base-content/10 bg-base-200/50">
+      {tocOpen && book && (
+        <nav
+          aria-label="章节目录"
+          className="border-b border-base-content/10 bg-base-200/50"
+        >
           <ul className="menu mx-auto w-full max-w-3xl max-h-[60vh] flex-nowrap overflow-y-auto px-2 py-2">
-            {toc.map((entry) => {
-              const summary = book?.chapters.find((c) => c.index === entry.index);
-              return (
-                <li key={`${entry.index}:${entry.label}`}>
-                  <button
-                    type="button"
-                    className={entry.index === at ? "menu-active" : undefined}
-                    style={entry.depth > 0 ? { paddingLeft: `${entry.depth * 1.25}rem` } : undefined}
-                    onClick={() => goTo(entry.index)}
-                  >
-                    <span className="min-w-0 flex-1 truncate text-left">{entry.label}</span>
-                    {summary?.paragraphs === 0 && (
-                      <span className="badge badge-ghost badge-sm">无正文</span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
+            {book.chapters.map((entry) => (
+              <li key={entry.index}>
+                <button
+                  type="button"
+                  className={entry.index === index ? "menu-active" : undefined}
+                  // A spine document with no prose (a cover, a copyright page) is
+                  // still listed: hiding it would renumber the chapter list away
+                  // from the book's own numbering.
+                  disabled={entry.paragraphs === 0}
+                  onClick={() => {
+                    setIndex(entry.index);
+                    setTocOpen(false);
+                  }}
+                >
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {entry.title ?? `第 ${entry.index} 节`}
+                  </span>
+                  {entry.paragraphs === 0 && (
+                    <span className="badge badge-ghost badge-sm">无正文</span>
+                  )}
+                </button>
+              </li>
+            ))}
           </ul>
         </nav>
       )}
 
-      {chapterError !== null && (
-        <div role="alert" className="alert mx-auto w-full max-w-3xl items-start px-4 py-3">
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">
-              {chapterMissingModel ? "主谓宾着色需要分析模型" : "无法为这一章着色"}
-            </p>
-            <p className="mt-1 text-sm break-words opacity-80">
-              {chapterMissingModel
-                ? "在设置中下载一次；之后应用即可离线使用。"
-                : chapterError}
-            </p>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <button type="button" className="btn btn-sm" onClick={() => setAttempt((n) => n + 1)}>
-              重试
-            </button>
-            {chapterMissingModel && (
-              <button type="button" className="btn btn-sm btn-primary" onClick={onOpenSettings}>
-                打开设置
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <main className="relative flex-1 overflow-hidden" aria-busy={loading}>
-        {/* The foliate view stays mounted and sized from the first render:
-            the paginator measures its host, so it must never be hidden while
-            loading. The skeleton and the fatal error are opaque layers above
-            it; the coloring alert rides above a readable book. */}
-        <div ref={host} className="absolute inset-0" />
+      <main
+        ref={content}
+        className="mx-auto w-full max-w-3xl flex-1 px-5 py-6 sm:px-8 sm:py-10"
+        aria-busy={loading}
+      >
         {error !== null ? (
-          <div className="absolute inset-0 bg-base-100">
-            <div className="mx-auto w-full max-w-3xl px-5 py-10">
-              <div role="alert" className="alert alert-error items-start">
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium">无法打开这本书</p>
-                  <p className="mt-1 text-sm break-words opacity-80">{error}</p>
-                </div>
-                <button type="button" className="btn btn-sm" onClick={onClose}>
-                  返回书架
+          <div role="alert" className="alert alert-error items-start">
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">
+                {missingModel ? "主谓宾着色需要分析模型" : "无法打开这一章"}
+              </p>
+              <p className="mt-1 text-sm break-words opacity-80">
+                {missingModel
+                  ? "在设置中下载一次；之后应用即可离线使用。"
+                  : error}
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button type="button" className="btn btn-sm" onClick={() => setAttempt((n) => n + 1)}>
+                重试
+              </button>
+              {missingModel && (
+                <button type="button" className="btn btn-sm btn-primary" onClick={onOpenSettings}>
+                  打开设置
                 </button>
-              </div>
+              )}
             </div>
           </div>
-        ) : loading ? (
-          <div className="absolute inset-0 z-10 bg-base-100">
-            <div className="mx-auto w-full max-w-3xl space-y-4 px-5 py-10">
-              {Array.from({ length: 8 }, (_, line) => (
-                <div
-                  key={line}
-                  className="skeleton h-4 rounded"
-                  // Ragged line lengths, so the placeholder looks like prose.
-                  style={{ width: `${[100, 96, 99, 88, 100, 94, 72, 100][line]}%` }}
-                />
-              ))}
-            </div>
+        ) : loading || chapter === null ? (
+          <div className="space-y-4">
+            {Array.from({ length: 8 }, (_, line) => (
+              <div
+                key={line}
+                className="skeleton h-4 rounded"
+                // Ragged line lengths, so the placeholder looks like prose.
+                style={{ width: `${[100, 96, 99, 88, 100, 94, 72, 100][line]}%` }}
+              />
+            ))}
           </div>
-        ) : null}
+        ) : (
+          <article className="space-y-4 text-[17px] leading-[1.85] sm:text-lg">
+            {chapter.paragraphs.map((paragraph, at) => (
+              <Paragraph key={at} paragraph={paragraph} />
+            ))}
+          </article>
+        )}
       </main>
 
       <footer className="sticky bottom-0 border-t border-base-content/10 bg-base-100/90 backdrop-blur">
@@ -378,7 +302,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={!position?.previous}
-            onClick={() => position?.previous && goTo(position.previous.index)}
+            onClick={() => position?.previous && setIndex(position.previous.index)}
           >
             上一章
           </button>
@@ -389,7 +313,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={!position?.next}
-            onClick={() => position?.next && goTo(position.next.index)}
+            onClick={() => position?.next && setIndex(position.next.index)}
           >
             下一章
           </button>
@@ -397,4 +321,79 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
       </footer>
     </div>
   );
+}
+
+/**
+ * One paragraph: its sentences, each split into role spans.
+ *
+ * `normal` spans are rendered as plain text with no color rather than given a
+ * class: a class on every span of every paragraph is a lot of markup for no
+ * visual difference.
+ *
+ * There is no color-switch prop: whether spans exist is decided by the analyzer
+ * (coloring off returns paragraphs with no segments), so this component renders
+ * whatever it is given and the page never disagrees with the setting.
+ */
+function Paragraph({ paragraph }: { paragraph: ColoredParagraph }) {
+  if (paragraph.sentences.length === 0) {
+    return <p>{paragraph.text}</p>;
+  }
+  // The sentences are trimmed, so the space between two of them — "He slept.
+  // She woke." — belongs to neither. It is taken from the paragraph text by
+  // offset, which is why sentence offsets are carried at all.
+  const pieces: ReactNode[] = [];
+  let at = 0;
+  paragraph.sentences.forEach((sentence, index) => {
+    if (sentence.start > at) {
+      pieces.push(paragraph.text.slice(at, sentence.start));
+    }
+    pieces.push(<span key={`${sentence.start}:${index}`}>{sentenceBody(sentence)}</span>);
+    at = sentence.start + sentence.text.length;
+  });
+  if (at < paragraph.text.length) pieces.push(paragraph.text.slice(at));
+  return <p>{pieces}</p>;
+}
+
+/**
+ * A sentence's spans, with the sentence text filling any gap between them.
+ *
+ * The spans come from the analyzer, and an analyzer that skipped a character
+ * (or emitted offsets the renderer does not expect) must not silently drop it
+ * from the page: the sentence text is the authority, and the spans only say
+ * which parts of it are colored. Slicing by `segment.start` — the same
+ * technique the paragraph uses between sentences — makes the two agree by
+ * construction.
+ */
+function sentenceBody(sentence: ColoredSentence): ReactNode {
+  if (sentence.segments.length === 0) {
+    // No spans means the paragraph came back uncolored: coloring is off, or the
+    // analyzer rejected this sentence. The sentence text is still the text, so
+    // it must still be shown.
+    return sentence.text;
+  }
+  const pieces: ReactNode[] = [];
+  let at = 0;
+  sentence.segments.forEach((segment, index) => {
+    if (segment.start > at) {
+      pieces.push(sentence.text.slice(at, segment.start));
+    }
+    if (segment.role === "normal") {
+      pieces.push(segment.text);
+    } else {
+      pieces.push(
+        <span key={index} className={roleClass(segment.role)}>
+          {segment.text}
+        </span>,
+      );
+    }
+    at = Math.max(at, segment.start + segment.text.length);
+  });
+  if (at < sentence.text.length) pieces.push(sentence.text.slice(at));
+  return pieces;
+}
+
+function roleClass(role: Role): string {
+  // daisyUI has no 主谓宾 tokens, and these colors come from BioCN itself so the
+  // desktop app reads like the web version: see `index.css`.
+  return `svo svo-${role}`;
 }

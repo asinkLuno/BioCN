@@ -27,10 +27,9 @@
    * distinguishable in both themes and for deuteranopes.
    *
    * These six hex values are copied verbatim by the colored-EPUB stylesheet
-   * (src-tauri/src/export.rs `STYLESHEET`, which the backend test pins to a
-   * sample of them) and by the reader's injected stylesheet
-   * (src/lib/overlay.ts `BOOK_STYLESHEET`). Change all three together or
-   * exports and the reader stop matching each other.
+   * (src-tauri/src/export.rs `STYLESHEET`), which the backend test pins to a
+   * sample of them. Change the two files together or exports stop matching
+   * the app.
    */
   .svo-subject {
     color: #d95f02;
@@ -59,16 +58,3 @@
     }
   }
 }
-
-/*
- * The foliate-js view element: a custom element with no daisyUI equivalent.
- * Its internal paginator fills the host (`:host { width/height: 100% }` in
- * its shadow root), so the host itself must be a sized block or the book
- * renders at zero height.
- */
-foliate-view {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
