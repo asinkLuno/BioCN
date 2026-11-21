@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use biocn_lib::analysis::engine::Sessions;
-use biocn_lib::analysis::{BioCNResources, analyze_sentence};
+use biocn_lib::analysis::{BioCNResources, analyze_all};
 use biocn_lib::text::sentences;
 
 fn models_dir() -> PathBuf {
@@ -35,10 +35,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!();
             continue;
         }
-        for sentence in sentences(paragraph) {
-            let Some(segments) = analyze_sentence(&resources, &sessions, &sentence)? else {
-                print!("{sentence}");
-                continue;
+        let batch = sentences(paragraph);
+        for (_sentence, answer) in analyze_all(&resources, &sessions, &batch) {
+            let segments = match answer {
+                Ok(Some(segments)) => segments,
+                // One odd sentence prints plain, like the reader renders it.
+                Ok(None) | Err(_) => {
+                    if let Err(error) = answer {
+                        eprintln!("analyze: {error}");
+                    }
+                    continue;
+                }
             };
             for segment in &segments {
                 let class = match segment.role {

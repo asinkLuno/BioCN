@@ -98,9 +98,23 @@ fn builder() -> Result<ort::environment::EnvironmentBuilder> {
 }
 
 /// Enough threads to matter, few enough not to fight the UI thread.
+///
+/// The pipeline runs three stages concurrently, so each session gets few
+/// intra threads on purpose: measured on desktop (9700X, int8, per stage),
+/// two is the sweet spot and it falls off monotonically past that — 3 intra
+/// threads −6%, 4 −12% — while the old serial layout cratered at 8 (−65%).
+/// `ORT_INTRA_THREADS` overrides the default — same spirit as
+/// `ORT_DYLIB_PATH`: a knob for benches and odd hardware, read when a session
+/// commits, so a bench can reload per configuration.
 fn threads() -> usize {
+    let overridden = std::env::var("ORT_INTRA_THREADS")
+        .ok()
+        .and_then(|n| n.parse::<usize>().ok());
+    if let Some(n) = overridden.filter(|n| *n >= 1) {
+        return n;
+    }
     std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(1).clamp(1, 4))
+        .map(|n| n.get().saturating_sub(1).clamp(1, 2))
         .unwrap_or(2)
 }
 

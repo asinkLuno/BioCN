@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use biocn_lib::analysis::engine::Sessions;
-use biocn_lib::analysis::{BioCNResources, analyze_sentence};
+use biocn_lib::analysis::{BioCNResources, analyze_all};
 
 fn models_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("BIOCN_MODELS") {
@@ -72,11 +72,21 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         analyzed += 1;
         println!("\n--- {}", paragraph.text);
-        for range in ranges {
-            sentences += 1;
-            let sentence = &paragraph.text[range.clone()];
-            let start = biocn_lib::analysis::utf16::utf16_len(&paragraph.text[..range.start]);
-            match analyze_sentence(&resources, &sessions, sentence)? {
+        let batch: Vec<&str> = ranges
+            .iter()
+            .map(|range| &paragraph.text[range.clone()])
+            .collect();
+        sentences += batch.len();
+        for (index, (sentence, answer)) in
+            analyze_all(&resources, &sessions, &batch).into_iter().enumerate()
+        {
+            let start = biocn_lib::analysis::utf16::utf16_len(&paragraph.text[..ranges[index].start]);
+            let Ok(segments) = answer else {
+                missing += 1;
+                println!("  [{start}] {sentence}  (失败)");
+                continue;
+            };
+            match segments {
                 Some(segments) => {
                     let spans: Vec<String> = segments
                         .iter()

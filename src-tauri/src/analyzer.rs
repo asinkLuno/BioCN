@@ -28,7 +28,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::analysis::engine::Sessions;
-use crate::analysis::{BioCNResources, Segment, analyze_sentence};
+use crate::analysis::{BioCNResources, Segment, analyze_all};
 use crate::cache::AnalysisCache;
 
 type Result<T> = std::result::Result<T, String>;
@@ -231,7 +231,7 @@ impl AnalyzerState {
 struct PreparedChapter {
     paragraphs: Vec<String>,
     split: Vec<Vec<std::ops::Range<usize>>>,
-    /// Every sentence of the chapter, in reading order, across paragraphs.
+    /// Distinct lookup keys, in first-occurrence order.
     sentences: Vec<String>,
 }
 
@@ -241,14 +241,17 @@ impl PreparedChapter {
             .iter()
             .map(|paragraph| crate::text::split(paragraph))
             .collect();
+        let mut seen = std::collections::HashSet::new();
         let sentences = paragraphs
             .iter()
             .zip(split.iter())
             .flat_map(|(paragraph, ranges)| {
                 ranges
                     .iter()
-                    .map(move |range| paragraph[range.clone()].to_owned())
+                    .map(move |range| &paragraph[range.clone()])
             })
+            .filter(|sentence| seen.insert(*sentence))
+            .map(str::to_owned)
             .collect();
         Self {
             paragraphs,
@@ -281,21 +284,26 @@ impl Analyzer {
         cached: HashMap<String, Option<Vec<Segment>>>,
     ) -> Result<Vec<ColoredParagraph>> {
         // Analyze what missed, without holding any lock over the model work.
-        let mut fresh: Vec<(String, Option<Vec<Segment>>)> = Vec::new();
+        // The misses stream through the three-graph pipeline (`analyze_all`):
+        // one dedicated thread per graph, answers back in input order, each
+        // sentence's failure isolated to that sentence.
         let mut answers = cached;
+        let misses: Vec<&str> = prepared
+            .sentences
+            .iter()
+            .filter(|sentence| !answers.contains_key(*sentence))
+            .map(String::as_str)
+            .collect();
+        let mut fresh: Vec<(String, Option<Vec<Segment>>)> = Vec::new();
         let mut failure: Option<String> = None;
         let mut failed = 0usize;
         let mut analyzed = 0usize;
-        for sentence in &prepared.sentences {
-            if answers.contains_key(sentence) {
-                continue;
-            }
-            let answer = analyze_sentence(&self.resources, &self.sessions, sentence);
+        for (sentence, answer) in analyze_all(&self.resources, &self.sessions, &misses) {
             analyzed += 1;
             match answer {
                 Ok(segments) => {
-                    fresh.push((sentence.clone(), segments.clone()));
-                    answers.insert(sentence.clone(), segments);
+                    fresh.push((sentence.to_owned(), segments.clone()));
+                    answers.insert(sentence.to_owned(), segments);
                 }
                 Err(error) => {
                     // One odd paragraph must cost that paragraph its colours,
@@ -305,8 +313,8 @@ impl Analyzer {
                     // attempt retries it — a model hiccup must not become a
                     // permanent "this sentence has no 主谓宾".
                     failed += 1;
-                    failure.get_or_insert(err(error));
-                    answers.insert(sentence.clone(), None);
+                    failure.get_or_insert(error);
+                    answers.insert(sentence.to_owned(), None);
                 }
             }
         }
@@ -799,6 +807,14 @@ mod tests {
     use super::*;
     use crate::analysis::Role;
 
+    #[test]
+    fn repeated_sentences_share_work_but_keep_every_rendered_occurrence() {
+        let chapter = PreparedChapter::new(vec!["甲。乙。甲。".into(), "乙。".into()]);
+        assert_eq!(chapter.sentences, ["甲。", "乙。"]);
+        let paragraphs = assemble(chapter, &HashMap::new());
+        assert_eq!(paragraphs[0].sentences[2].start, 4);
+        assert_eq!(paragraphs[1].sentences[0].text, "乙。");
+    }
     /// The progress unit is the sentence, because that is what the model
     /// processes and what the cache is keyed by: a one-line paragraph heading
     /// and a two-thousand-character block must not weigh the same.
