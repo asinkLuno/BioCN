@@ -29,6 +29,22 @@ pub const MAX_SUBS: usize = 508;
 /// Max words fed to POS/DEP per call (<= 510 per README).
 pub const MAX_WORDS: usize = 500;
 
+/// One DEP chunk: the packed tensors plus the word count that produced them.
+type DepPack = (PackedWords, usize);
+
+/// What stage two hands stage three: the utf16 text, stage one's decoded
+/// tokens, their POS tags, and one pack per word chunk.
+type PosBundle = (Vec<u16>, Vec<String>, Vec<String>, Vec<DepPack>);
+
+/// One sentence's final answer: `Ok(Some(..))` carries the 主谓宾 segments,
+/// `Ok(None)` marks "analyzed, nothing to paint", `Err` fails that one
+/// sentence alone.
+type SentenceAnswer = std::result::Result<Option<Vec<Segment>>, String>;
+
+/// `(index, answer)` pairs a stage reports for the sentences it finished,
+/// FIFO over its slice of the input.
+type StageDone = Vec<(usize, SentenceAnswer)>;
+
 /// Stage one: the TOK graph. Tokenizes `sentence`, runs every subword chunk
 /// through the graph, decodes the words. `None` means there is nothing to
 /// color — empty input, or input that decodes to no words.
@@ -75,7 +91,7 @@ pub fn pos_stage(
     sessions: &Sessions,
     text: Vec<u16>,
     words: Vec<Word>,
-) -> Result<(Vec<u16>, Vec<String>, Vec<String>, Vec<(PackedWords, usize)>)> {
+) -> Result<PosBundle> {
     let mut pos: Vec<String> = Vec::new();
     let mut packs: Vec<(PackedWords, usize)> = Vec::new();
     let mut w0 = 0;
@@ -158,7 +174,7 @@ pub fn analyze_all<'s>(
     res: &BioCNResources,
     sessions: &Sessions,
     sentences: &[&'s str],
-) -> Vec<(&'s str, std::result::Result<Option<Vec<Segment>>, String>)> {
+) -> Vec<(&'s str, SentenceAnswer)> {
     if sentences.is_empty() {
         return Vec::new();
     }
@@ -167,12 +183,9 @@ pub fn analyze_all<'s>(
     // a sentence's answer comes from exactly one stage, whichever stops
     // carrying it. Scoped threads borrow all three; the caller is a blocking
     // thread that has nothing else to do until the join anyway.
-    let mut tok_done: Vec<(usize, std::result::Result<Option<Vec<Segment>>, String>)> =
-        Vec::new();
-    let mut pos_done: Vec<(usize, std::result::Result<Option<Vec<Segment>>, String>)> =
-        Vec::new();
-    let mut dep_done: Vec<(usize, std::result::Result<Option<Vec<Segment>>, String>)> =
-        Vec::new();
+    let mut tok_done: StageDone = Vec::new();
+    let mut pos_done: StageDone = Vec::new();
+    let mut dep_done: StageDone = Vec::new();
 
     std::thread::scope(|scope| {
         let res = &res;
@@ -227,7 +240,7 @@ pub fn analyze_all<'s>(
     // three are ascending by index and every sentence lands in exactly one
     // slot; a gap would mean a stage dropped a sentence, which no path above
     // does.
-    let mut finished: Vec<Option<std::result::Result<Option<Vec<Segment>>, String>>> =
+    let mut finished: Vec<Option<SentenceAnswer>> =
         (0..sentences.len()).map(|_| None).collect();
     for (index, answer) in tok_done {
         finished[index] = Some(answer);

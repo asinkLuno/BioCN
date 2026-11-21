@@ -81,8 +81,8 @@ fn token_char_starts(sentence: &[u16], tokens: &[String]) -> Vec<usize> {
 fn reachable_core(rels: &[String], heads: &[i32]) -> Vec<usize> {
     let n = heads.len();
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
-    for i in 0..n {
-        let h = heads[i].max(0) as usize;
+    for (i, &head) in heads.iter().enumerate() {
+        let h = head.max(0) as usize;
         if h <= n {
             children[h].push(i);
         }
@@ -207,9 +207,9 @@ pub fn char_roles(
             }
             let begin = starts[ti];
             let end = begin + crate::analysis::utf16::utf16_len(&tokens[ti]);
-            for ci in begin..end.min(sentence.len()) {
-                if role.priority() > roles[ci].priority() {
-                    roles[ci] = role;
+            for slot in roles.iter_mut().take(end.min(sentence.len())).skip(begin) {
+                if role.priority() > slot.priority() {
+                    *slot = role;
                 }
             }
         }

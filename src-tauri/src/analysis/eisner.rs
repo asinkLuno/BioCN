@@ -36,10 +36,10 @@ pub fn is_projective(sequence: &[i32]) -> bool {
             if lj <= hi && hi <= rj && hj == di {
                 return false;
             }
-            if (li < lj && lj < ri) || (li < rj && rj < ri) {
-                if (li - lj) * (ri - rj) > 0 {
-                    return false;
-                }
+            if ((li < lj && lj < ri) || (li < rj && rj < ri))
+                && (li - lj) * (ri - rj) > 0
+            {
+                return false;
             }
         }
     }

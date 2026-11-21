@@ -346,6 +346,9 @@ struct StageTimes {
     roles: Duration,
 }
 
+/// One report row: label + getter for that stage's time.
+type StageRow = (&'static str, fn(&StageTimes) -> Duration);
+
 impl StageTimes {
     fn total(&self) -> Duration {
         self.utf16_tok_prep
@@ -360,7 +363,7 @@ impl StageTimes {
             + self.roles
     }
 
-    const ROWS: [(&'static str, fn(&StageTimes) -> Duration); 10] = [
+    const ROWS: [StageRow; 10] = [
         ("utf16+tok_prep", |t| t.utf16_tok_prep),
         ("run_tok", |t| t.run_tok),
         ("decode_words", |t| t.decode_words),
