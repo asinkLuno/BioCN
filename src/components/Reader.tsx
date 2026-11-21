@@ -42,6 +42,56 @@ interface OpenedBook {
   book: Awaited<ReturnType<typeof openBook>>;
 }
 
+/**
+ * The chapter viewport: an srcdoc iframe holding the book's own document.
+ *
+ * An iframe has no intrinsic height, and an srcdoc document does not size
+ * `h-fit` — without measuring, a long chapter gets an inner scrollbar and the
+ * page looks cut off. So the frame reports its content height on load and
+ * keeps watching the document (images decode late, book CSS reflows late),
+ * and `main` above stays the only scroller — no pagination engine in between.
+ */
+function Frame({ srcdoc, title }: { srcdoc: string; title: string }) {
+  const [height, setHeight] = useState<number | null>(null);
+  // Exactly one ResizeObserver stays alive per frame; a chapter swap replaces
+  // the document, so the previous one is disconnected when the new arrives.
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  return (
+    <iframe
+      // srcdoc content cannot reach tauri: IPC, but it also cannot navigate
+      // away; the sandbox is for scripts the book ships.
+      sandbox="allow-same-origin"
+      title={title}
+      className="w-full border-0 bg-transparent"
+      style={{ height: height ?? "50vh" }}
+      srcDoc={srcdoc}
+      onLoad={(event) => {
+        const frame = event.currentTarget;
+        const doc = frame.contentDocument;
+        if (!doc?.body) return;
+        const read = () =>
+          setHeight(
+            Math.max(
+              doc.body.scrollHeight,
+              doc.documentElement.scrollHeight,
+              200,
+            ),
+          );
+        read();
+        // Images decode late; book CSS can reflow late too.
+        doc.fonts?.ready.then(read);
+        const observer = new ResizeObserver(read);
+        observer.observe(doc.body);
+        // A chapter swap replaces the document; disconnect the previous
+        // observer so exactly one is watching the live one.
+        observerRef.current?.disconnect();
+        observerRef.current = observer;
+      }}
+    />
+  );
+}
+
 export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   const [opened, setOpened] = useState<OpenedBook | null>(null);
   const [chapter, setChapter] = useState<ChapterView | null>(null);
@@ -175,6 +225,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   }, [opened, index]);
 
   // Arrow keys and Escape, but never while the user is typing or has a menu open.
+
   // The handler reads `position`/`tocOpen` through refs, so the listener is
   // attached once for the page's lifetime instead of on every chapter flip or
   // contents-panel toggle (rerender-dependencies / advanced-use-latest).
@@ -321,17 +372,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             ))}
           </div>
         ) : (
-          // The chapter document itself; the book's CSS and images come with
-          // it. Height follows the content, so `main` owns the scrolling —
-          // no pagination engine in between.
-          <iframe
-            // srcdoc content cannot reach tauri: IPC, but it also cannot
-            // navigate away; the sandbox is for scripts the book ships.
-            sandbox="allow-same-origin"
-            title={chapter?.title ?? "章节内容"}
-            className="h-fit min-h-[50vh] w-full border-0 bg-transparent"
-            srcDoc={srcdoc}
-          />
+          <Frame srcdoc={srcdoc} title={chapter?.title ?? "章节内容"} />
         )}
       </main>
 
