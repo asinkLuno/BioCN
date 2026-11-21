@@ -1,8 +1,16 @@
+/**
+ * Reader behavior against the new architecture: foliate as parser only, the
+ * chapter document rendered into a srcdoc iframe. The parser and the asset
+ * fetch are mocked at module boundaries; everything between open → chapter →
+ * rendered iframe is real.
+ */
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Reader } from "./Reader";
 import * as reading from "../lib/reading";
+import * as epub from "../lib/epub";
+import { paintChapter } from "../lib/overlay";
 
 vi.mock("../lib/reading", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/reading")>()),
@@ -10,11 +18,50 @@ vi.mock("../lib/reading", async (importOriginal) => ({
   bookChapter: vi.fn(),
 }));
 
+vi.mock("../lib/epub", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/epub")>()),
+  openBook: vi.fn(),
+  fetchBookBlob: vi.fn(),
+}));
+
 const openMock = vi.mocked(reading.bookOpen);
 const chapterMock = vi.mocked(reading.bookChapter);
+const openBookMock = vi.mocked(epub.openBook);
+const fetchBlobMock = vi.mocked(epub.fetchBookBlob);
+
+/** A fake parsed book: sections load lazily, one Document per call. */
+function fakeBook(sectionDocs: (string | null)[]) {
+  const created: Document[] = [];
+  return {
+    created,
+    book: {
+      sections: sectionDocs.map((src) => ({
+        linear: "yes",
+        size: 0,
+        load: async () => {
+          if (src === null) return new Blob();
+          const doc = new DOMParser().parseFromString(
+            `<html><head><title>t</title></head><body>${src}</body></html>`,
+            "text/html",
+          );
+          created.push(doc);
+          return doc;
+        },
+        unload: () => {},
+      })),
+      toc: [],
+      resolveHref: () => null,
+      isExternal: () => false,
+      destroy: () => {},
+    },
+  };
+}
 
 const book: reading.BookView = {
   id: "dune",
+  // The stored file must exist for the reader to even parse the book; the seam
+  // under test here is parse+render, so a path belongs in the happy fixture.
+  filePath: "dune.epub",
   title: "Dune",
   chapters: [
     { index: 0, title: null, paragraphs: 0 },
@@ -44,15 +91,6 @@ const chapter: reading.ChapterView = {
   ],
 };
 
-/** The prose is split into spans, so its text is not one DOM node. */
-async function prose() {
-  return waitFor(() => {
-    const article = document.querySelector("article");
-    expect(article).not.toBeNull();
-    return article!;
-  });
-}
-
 function renderReader(overrides: Partial<Parameters<typeof Reader>[0]> = {}) {
   return render(
     <Reader
@@ -68,56 +106,47 @@ function renderReader(overrides: Partial<Parameters<typeof Reader>[0]> = {}) {
 describe("reader", () => {
   beforeEach(() => {
     openMock.mockResolvedValue(book);
+    openBookMock.mockResolvedValue(fakeBook([null, "<p>他走了。</p>", "<p>再会。</p>"]).book);
+    fetchBlobMock.mockResolvedValue(new File(["PK"], "book.epub"));
     chapterMock.mockResolvedValue(chapter);
+  });
+
+  it("renders the colored chapter document into the iframe", async () => {
+    renderReader();
+    const frame = await screen.findByTitle("One");
+    // jsdom does not load srcdoc documents, so the contract is checked on the
+    // attribute: React must pass the full serialized chapter through. What
+    // that document contains is pinned by lib/overlay.test.ts and below.
+    const srcdoc = frame.getAttribute("srcdoc");
+    expect(srcdoc).toContain("<!DOCTYPE html>");
+    // Coloring splits the sentence into spans, so the text never appears
+    // contiguous — the pieces and their spans are the contract.
+    expect(srcdoc).toContain(">他</span>");
+    expect(srcdoc).toContain(">走</span>");
+    expect(srcdoc).toContain("了。</p>");
+  });
+
+  it("colors subjects and predicates inside the document", async () => {
+    renderReader();
+    const frame = await screen.findByTitle("One");
+    const doc = new DOMParser().parseFromString(
+      frame.getAttribute("srcdoc")!,
+      "text/html",
+    );
+    // The parsed doc is detached from the jsdom tree, so jest-dom matchers
+    // that need a live document are out — plain textContent checks instead.
+    expect(doc.querySelector(".svo-subject")?.textContent).toBe("他");
+    expect(doc.querySelector(".svo-predicate")?.textContent).toBe("走");
+    expect(doc.querySelectorAll(".svo")).toHaveLength(2);
   });
 
   it("opens at the first chapter that has text", async () => {
     renderReader();
+    await screen.findByTitle("One");
     // Chapter 0 is a cover page with no prose, so chapter 1 is what opens.
-    expect(await prose()).toHaveTextContent("他走了。");
-    await waitFor(() => expect(chapterMock).toHaveBeenCalledWith("dune", 1));
-    // The counter is the spine position, not the index among readable
-    // chapters: a book's cover page still occupies slot one.
+    expect(chapterMock).toHaveBeenCalledWith("dune", 1);
+    // The counter is the spine position: a cover page still occupies slot one.
     expect(screen.getByText("2 / 3")).toBeInTheDocument();
-  });
-
-  it("colors subjects and predicates but leaves punctuation alone", async () => {
-    const { container } = renderReader();
-    await prose();
-    expect(container.querySelector(".svo-subject")).toHaveTextContent("他");
-    expect(container.querySelector(".svo-predicate")).toHaveTextContent("走");
-    // `normal` spans are plain text: no class, no color.
-    expect(container.querySelectorAll(".svo")).toHaveLength(2);
-  });
-
-  it("keeps the space between two sentences", async () => {
-    // Sentences are trimmed, so the whitespace between them belongs to the
-    // paragraph, not to either sentence: dropping it would run the words
-    // together ("slept.She").
-    chapterMock.mockResolvedValue({
-      ...chapter,
-      paragraphs: [
-        {
-          text: "He slept. She woke.",
-          sentences: [
-            {
-              text: "He slept.",
-              start: 0,
-              // Segments cover the whole sentence, punctuation included.
-              segments: [
-                { text: "He ", start: 0, role: "normal" },
-                { text: "slept", start: 3, role: "predicate" },
-                { text: ".", start: 8, role: "normal" },
-              ],
-            },
-            { text: "She woke.", start: 10, segments: [] },
-          ],
-        },
-      ],
-    });
-    renderReader();
-    await prose();
-    expect(await prose()).toHaveTextContent(/He slept\. She woke\./);
   });
 
   it("offers settings instead of a raw error when no model is installed", async () => {
@@ -139,88 +168,40 @@ describe("reader", () => {
       `${reading.MODEL_MISSING}: 尚未下载模型（设置 → 分析模型）`,
     );
     const { rerender } = render(
-      <Reader
-        id="dune"
-        onClose={() => {}}
-        onOpenSettings={() => {}}
-          modelsOpen={false}
-      />,
+      <Reader id="dune" onClose={() => {}} onOpenSettings={() => {}} modelsOpen={false} />,
     );
     await screen.findByRole("alert");
 
     rerender(
-      <Reader
-        id="dune"
-        onClose={() => {}}
-        onOpenSettings={() => {}}
-          modelsOpen
-      />,
+      <Reader id="dune" onClose={() => {}} onOpenSettings={() => {}} modelsOpen />,
     );
     rerender(
-      <Reader
-        id="dune"
-        onClose={() => {}}
-        onOpenSettings={() => {}}
-          modelsOpen={false}
-      />,
+      <Reader id="dune" onClose={() => {}} onOpenSettings={() => {}} modelsOpen={false} />,
     );
     // The model was just downloaded, so the page must come back on its own.
-    expect(await prose()).toHaveTextContent("他走了。");
-  });
-
-  it("keeps every character when the spans do not cover the sentence", async () => {
-    // The spans come from the model; the sentence text is what the splitter
-    // found. If the two disagree, the page must still show the sentence — a
-    // dropped character is a wrong book, a missing color is not.
-    chapterMock.mockResolvedValue({
-      ...chapter,
-      paragraphs: [
-        {
-          text: "他走了。",
-          sentences: [
-            {
-              text: "他走了。",
-              start: 0,
-              // The period is not covered by any span.
-              segments: [
-                { text: "他", start: 0, role: "subject" },
-                { text: "走", start: 1, role: "predicate" },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-    const { container } = renderReader();
-    await prose();
-    expect(await prose()).toHaveTextContent("他走了。");
-    expect(container.querySelector(".svo-subject")).toHaveTextContent("他");
+    await screen.findByTitle("One");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("does not ask the new book for the old book's chapter number", async () => {
     const { rerender } = renderReader();
-    await prose();
-    await waitFor(() => expect(chapterMock).toHaveBeenCalledWith("dune", 1));
+    await screen.findByTitle("One");
+    expect(chapterMock).toHaveBeenCalledWith("dune", 1);
 
-    // The second book's readable chapter is number 7 — not 1, which is where
-    // the previous book was left. Asking for it would flash "no chapter 1".
-    const other: reading.BookView = {
+    const second = fakeBook([null, null, null, null, null, null, null, "<p>七</p>"]);
+    openMock.mockResolvedValue({
       id: "emma",
+      filePath: "emma.epub",
       title: "Emma",
       chapters: [
         { index: 0, title: null, paragraphs: 0 },
         { index: 7, title: "Seven", paragraphs: 1 },
       ],
-    };
-    openMock.mockResolvedValue(other);
+    });
+    openBookMock.mockResolvedValue(second.book);
     chapterMock.mockClear();
     rerender(
-      <Reader
-        id="emma"
-        onClose={() => {}}
-        onOpenSettings={() => {}}
-          modelsOpen={false}
-      />,
+      <Reader id="emma" onClose={() => {}} onOpenSettings={() => {}} modelsOpen={false} />,
     );
 
     await waitFor(() => expect(chapterMock).toHaveBeenCalledWith("emma", 7));
@@ -231,28 +212,40 @@ describe("reader", () => {
   it("lists every spine document, including ones with no text", async () => {
     const user = userEvent.setup();
     renderReader();
-    await prose();
+    await screen.findByTitle("One");
 
     await user.click(screen.getByRole("button", { name: "目录" }));
     const nav = screen.getByRole("navigation", { name: "章节目录" });
-    // Hiding a text-less document would renumber the list away from the book.
-    const rows = within(nav).getAllByRole("button");
-    expect(rows).toHaveLength(3);
+    expect(within(nav).getAllByRole("button")).toHaveLength(3);
     expect(within(nav).getByText("无正文")).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /第 0 节/ })).toBeDisabled();
   });
 
   it("turns pages with the arrow keys and stops at the ends", async () => {
-    chapterMock.mockResolvedValue({ ...chapter, index: 2, title: "Two" });
     renderReader();
-    await prose();
+    await screen.findByTitle("One");
 
+    chapterMock.mockResolvedValue({ ...chapter, index: 2, title: "Two" });
     await userEvent.keyboard("{ArrowRight}");
-    await waitFor(() => expect(chapterMock).toHaveBeenCalledWith("dune", 2));
+    await screen.findByTitle("Two");
 
-    chapterMock.mockClear();
     // Chapter 2 is the last one: the right arrow must not wrap or overshoot.
+    chapterMock.mockClear();
     await userEvent.keyboard("{ArrowRight}");
     await waitFor(() => expect(chapterMock).not.toHaveBeenCalled());
+    expect(screen.queryByTitle(/第/)).not.toBeInTheDocument();
+  });
+
+  it("paints only what matches: overlay stays honest on a foreign doc", () => {
+    // A document whose text does not match the analyzer's paragraphs must be
+    // left uncolored — a missing color is fine, a wrong one is not.
+    const doc = new DOMParser().parseFromString(
+      "<html><body><p>完全无关的文本。</p></body></html>",
+      "text/html",
+    );
+    const stats = paintChapter(doc, chapter.paragraphs);
+    expect(stats.painted).toBe(0);
+    expect(doc.querySelector(".svo")).toBeNull();
+    expect(doc.querySelector("body")?.textContent).toContain("完全无关的文本。");
   });
 });

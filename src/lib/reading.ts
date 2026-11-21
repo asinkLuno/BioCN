@@ -38,6 +38,8 @@ export interface ChapterSummary {
 
 export interface BookView {
   id: string;
+  /** Book file path, for the asset-protocol fetch that feeds the EPUB parser. */
+  filePath: string | null;
   title: string;
   chapters: ChapterSummary[];
 }

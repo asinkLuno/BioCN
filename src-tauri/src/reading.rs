@@ -51,6 +51,10 @@ pub struct ChapterSummary {
 #[serde(rename_all = "camelCase")]
 pub struct BookView {
     pub id: String,
+    /// Absolute path of the stored EPUB, for the frontend's asset-protocol
+    /// fetch (format rendering needs the original file; the IPC channel must
+    /// not carry a whole book).
+    pub file_path: Option<String>,
     pub title: String,
     pub chapters: Vec<ChapterSummary>,
 }
@@ -140,6 +144,10 @@ pub async fn book_open<R: Runtime>(app: AppHandle<R>, id: String) -> Result<Book
         return Err("book-coloring: 这本书正在着色全书中，请等它完成".into());
     }
     let chapters = parse_book(&app, &id).await?;
+    let file_path = app
+        .state::<Library>()
+        .book_file(&id)
+        .map(|path| path.to_string_lossy().into_owned());
     Ok(BookView {
         title: title_of(&app, &id),
         chapters: chapters
@@ -150,6 +158,7 @@ pub async fn book_open<R: Runtime>(app: AppHandle<R>, id: String) -> Result<Book
                 paragraphs: chapter.paragraphs.len(),
             })
             .collect(),
+        file_path,
         id,
     })
 }

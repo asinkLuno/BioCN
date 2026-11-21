@@ -1,4 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+/**
+ * The reading view: one chapter at a time, with the book's own formatting.
+ *
+ * Architecture (after the foliate-attempt rollback — see
+ * docs/rfc/reader-foliate-retrospective.md): foliate-js is used ONLY as an
+ * EPUB parser. Each chapter's document (with the book's images and CSS, whose
+ * URLs the parser rewrites to blob:s) is colored in place by the overlay and
+ * rendered into an `<iframe srcdoc>`. Scrolling, navigation and keyboard stay
+ * in React — the closed-shadow-DOM black box that killed the first attempt is
+ * not involved.
+ *
+ * Coloring spans arrive from the Rust analyzer with UTF-16 offsets and are
+ * verified against the document text before painting; a paragraph that cannot
+ * be matched stays uncolored rather than mis-colored.
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MODEL_MISSING,
   bookChapter,
@@ -7,10 +22,9 @@ import {
   message,
   type BookView,
   type ChapterView,
-  type ColoredParagraph,
-  type ColoredSentence,
-  type Role,
 } from "../lib/reading";
+import { fetchBookBlob, openBook } from "../lib/epub";
+import { renderSection } from "../lib/section";
 
 interface Props {
   id: string;
@@ -22,19 +36,17 @@ interface Props {
   modelsOpen: boolean;
 }
 
-/**
- * The reading view: one chapter at a time, with a chapter list.
- *
- * Text arrives already split into sentences and colored spans, so this component
- * only lays markup out — it never measures or splits strings. Spans come from
- * the Rust side with UTF-16 offsets; rendering them directly keeps the DOM
- * identical to what those offsets describe, which is what a later scroll
- * position or annotation will rely on.
- */
+/** One open book: the parsed TOC plus the parser instance behind it. */
+interface OpenedBook {
+  view: BookView;
+  book: Awaited<ReturnType<typeof openBook>>;
+}
+
 export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
-  const [book, setBook] = useState<BookView | null>(null);
+  const [opened, setOpened] = useState<OpenedBook | null>(null);
   const [chapter, setChapter] = useState<ChapterView | null>(null);
   const [index, setIndex] = useState<number | null>(null);
+  const [srcdoc, setSrcdoc] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [missingModel, setMissingModel] = useState(false);
@@ -46,22 +58,31 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   const wasOpen = useRef(modelsOpen);
   const content = useRef<HTMLDivElement>(null);
 
-  // Opening a book is the only parse that has to happen before anything shows.
+  // Opening a book: TOC (with chapter paragraphs) via IPC, EPUB file via the
+  // asset protocol into the parser. Either may fail; both are fatal for now.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    // The previous book's chapter belongs to a book the page is no longer
-    // showing, and `index` will point into the new one in a moment.
     setChapter(null);
     setIndex(null);
+    setSrcdoc(null);
     bookOpen(id)
-      .then((opened) => {
-        if (cancelled) return;
-        setBook(opened);
+      .then(async (view) => {
+        if (cancelled) return null;
+        if (!view.filePath) throw new Error("book-missing: 书库缺少这本书的文件");
+        const file = await fetchBookBlob(view.filePath);
+        const book = await openBook(file);
+        return { view, book };
+      })
+      .then((value) => {
+        if (cancelled || !value) return;
+        setOpened(value);
         // The first chapter with text: a book usually starts with a cover page
         // and a title page, and landing on those looks like a failure.
         const first =
-          opened.chapters.find((entry) => entry.paragraphs > 0) ?? opened.chapters[0] ?? null;
+          value.view.chapters.find((entry) => entry.paragraphs > 0) ??
+          value.view.chapters[0] ??
+          null;
         setIndex(first ? first.index : null);
         if (first === null || first === undefined) {
           setLoading(false);
@@ -84,13 +105,25 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
     // switch from asking for the previous book's chapter number: `index` is
     // cleared above, but the render that still carries the old value must not
     // fire a request either.
-    if (index === null || book?.id !== id) return;
+    if (index === null || opened?.view.id !== id) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
     bookChapter(id, index)
-      .then((loaded) => {
+      .then(async (loaded) => {
         if (cancelled) return;
+        // Parser sections and Rust chapters share the spine index (rbook
+        // keeps dangling spine items, foliate filters them — a warning here
+        // beats silently coloring the wrong chapter on a broken book).
+        const section = opened.book.sections[index];
+        if (!section) throw new Error("book-chapter: 这一章不在书文件里");
+        const doc = await section.load();
+        if (cancelled) {
+          section.unload();
+          return;
+        }
+        if (!(doc instanceof Document)) throw new Error("book-chapter: 这一章不是文档");
+        setSrcdoc(renderSection(doc, loaded.paragraphs));
         setChapter(loaded);
         setLoading(false);
         // A chapter that arrived means whatever failed before no longer does;
@@ -109,11 +142,11 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
     return () => {
       cancelled = true;
     };
-    // `book` enters as the primitive `book?.id`: the guard below is the only
-    // use, and a dependency on the object would re-run this effect on every
-    // parse that lands, for a fetch the previous run already decided against
-    // (rerender-dependencies).
-  }, [id, index, book?.id, attempt]);
+    // `opened` enters as the primitive `opened?.view.id`: the guard below is
+    // the only use, and a dependency on the object would re-run this effect on
+    // every parse that lands, for a fetch the previous run already decided
+    // against (rerender-dependencies).
+  }, [id, index, opened?.view.id, opened?.book, attempt]);
 
   // Coming back from settings after a failed chapter is worth one more try:
   // "download a model" is the reason the prompt sent the user there.
@@ -130,16 +163,16 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   }, [chapter]);
 
   const position = useMemo(() => {
-    if (!book || index === null) return null;
-    const at = book.chapters.findIndex((entry) => entry.index === index);
+    if (!opened || index === null) return null;
+    const at = opened.view.chapters.findIndex((entry) => entry.index === index);
     if (at < 0) return null;
     return {
       at,
-      total: book.chapters.length,
-      previous: book.chapters[at - 1],
-      next: book.chapters[at + 1],
+      total: opened.view.chapters.length,
+      previous: opened.view.chapters[at - 1],
+      next: opened.view.chapters[at + 1],
     };
-  }, [book, index]);
+  }, [opened, index]);
 
   // Arrow keys and Escape, but never while the user is typing or has a menu open.
   // The handler reads `position`/`tocOpen` through refs, so the listener is
@@ -196,9 +229,9 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
           </button>
           <div className="min-w-0 flex-1 text-center">
             <p className="truncate text-sm font-medium">
-              {/* `book` lags the switch (the parse is what sets it): naming the
+              {/* `opened` lags the switch (the parse is what sets it): naming the
                   old book while opening the new one would be a lie. */}
-              {book?.id === id ? book.title : "正在打开…"}
+              {opened?.view.id === id ? opened.view.title : "正在打开…"}
             </p>
             {chapter?.title && (
               <p className="truncate text-xs text-base-content/55">{chapter.title}</p>
@@ -215,13 +248,13 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         </div>
       </header>
 
-      {tocOpen && book && (
+      {tocOpen && opened && (
         <nav
           aria-label="章节目录"
           className="border-b border-base-content/10 bg-base-200/50"
         >
           <ul className="menu mx-auto w-full max-w-3xl max-h-[60vh] flex-nowrap overflow-y-auto px-2 py-2">
-            {book.chapters.map((entry) => (
+            {opened.view.chapters.map((entry) => (
               <li key={entry.index}>
                 <button
                   type="button"
@@ -250,7 +283,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
 
       <main
         ref={content}
-        className="mx-auto w-full max-w-3xl flex-1 px-5 py-6 sm:px-8 sm:py-10"
+        className="mx-auto w-full max-w-3xl flex-1 overflow-y-auto px-5 py-6 sm:px-8 sm:py-10"
         aria-busy={loading}
       >
         {error !== null ? (
@@ -276,7 +309,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
               )}
             </div>
           </div>
-        ) : loading || chapter === null ? (
+        ) : loading || srcdoc === null ? (
           <div className="space-y-4">
             {Array.from({ length: 8 }, (_, line) => (
               <div
@@ -288,11 +321,17 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             ))}
           </div>
         ) : (
-          <article className="space-y-4 text-[17px] leading-[1.85] sm:text-lg">
-            {chapter.paragraphs.map((paragraph, at) => (
-              <Paragraph key={at} paragraph={paragraph} />
-            ))}
-          </article>
+          // The chapter document itself; the book's CSS and images come with
+          // it. Height follows the content, so `main` owns the scrolling —
+          // no pagination engine in between.
+          <iframe
+            // srcdoc content cannot reach tauri: IPC, but it also cannot
+            // navigate away; the sandbox is for scripts the book ships.
+            sandbox="allow-same-origin"
+            title={chapter?.title ?? "章节内容"}
+            className="h-fit min-h-[50vh] w-full border-0 bg-transparent"
+            srcDoc={srcdoc}
+          />
         )}
       </main>
 
@@ -323,77 +362,3 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   );
 }
 
-/**
- * One paragraph: its sentences, each split into role spans.
- *
- * `normal` spans are rendered as plain text with no color rather than given a
- * class: a class on every span of every paragraph is a lot of markup for no
- * visual difference.
- *
- * There is no color-switch prop: whether spans exist is decided by the analyzer
- * (coloring off returns paragraphs with no segments), so this component renders
- * whatever it is given and the page never disagrees with the setting.
- */
-function Paragraph({ paragraph }: { paragraph: ColoredParagraph }) {
-  if (paragraph.sentences.length === 0) {
-    return <p>{paragraph.text}</p>;
-  }
-  // The sentences are trimmed, so the space between two of them — "He slept.
-  // She woke." — belongs to neither. It is taken from the paragraph text by
-  // offset, which is why sentence offsets are carried at all.
-  const pieces: ReactNode[] = [];
-  let at = 0;
-  paragraph.sentences.forEach((sentence, index) => {
-    if (sentence.start > at) {
-      pieces.push(paragraph.text.slice(at, sentence.start));
-    }
-    pieces.push(<span key={`${sentence.start}:${index}`}>{sentenceBody(sentence)}</span>);
-    at = sentence.start + sentence.text.length;
-  });
-  if (at < paragraph.text.length) pieces.push(paragraph.text.slice(at));
-  return <p>{pieces}</p>;
-}
-
-/**
- * A sentence's spans, with the sentence text filling any gap between them.
- *
- * The spans come from the analyzer, and an analyzer that skipped a character
- * (or emitted offsets the renderer does not expect) must not silently drop it
- * from the page: the sentence text is the authority, and the spans only say
- * which parts of it are colored. Slicing by `segment.start` — the same
- * technique the paragraph uses between sentences — makes the two agree by
- * construction.
- */
-function sentenceBody(sentence: ColoredSentence): ReactNode {
-  if (sentence.segments.length === 0) {
-    // No spans means the paragraph came back uncolored: coloring is off, or the
-    // analyzer rejected this sentence. The sentence text is still the text, so
-    // it must still be shown.
-    return sentence.text;
-  }
-  const pieces: ReactNode[] = [];
-  let at = 0;
-  sentence.segments.forEach((segment, index) => {
-    if (segment.start > at) {
-      pieces.push(sentence.text.slice(at, segment.start));
-    }
-    if (segment.role === "normal") {
-      pieces.push(segment.text);
-    } else {
-      pieces.push(
-        <span key={index} className={roleClass(segment.role)}>
-          {segment.text}
-        </span>,
-      );
-    }
-    at = Math.max(at, segment.start + segment.text.length);
-  });
-  if (at < sentence.text.length) pieces.push(sentence.text.slice(at));
-  return pieces;
-}
-
-function roleClass(role: Role): string {
-  // daisyUI has no 主谓宾 tokens, and these colors come from BioCN itself so the
-  // desktop app reads like the web version: see `index.css`.
-  return `svo svo-${role}`;
-}
