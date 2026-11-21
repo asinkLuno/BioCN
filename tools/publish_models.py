@@ -143,7 +143,7 @@ language:
 - zh
 ---
 
-# bioCN Reader 模型
+# BioCN Reader 模型
 
 [biocn-reader](https://github.com/asinkLuno/biocn-reader) 的中文句法分析权重：
 粗分词（BMES）、CTB9 词性、CTB9 依存句法，供应用内的主谓宾标注使用。

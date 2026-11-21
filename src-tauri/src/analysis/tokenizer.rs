@@ -1,4 +1,4 @@
-//! Exact Rust port of the HF-BERT tokenizer used by the bioCN models
+//! Exact Rust port of the HF-BERT tokenizer used by the BioCN models
 //! (reference: `tools/verify_onnx.py` `basic_pieces` / `wordpiece_strs` /
 //! `encode`, itself asserted byte-for-byte against HanLP's own tensors).
 //!

@@ -1,5 +1,5 @@
-//! bioCN sentence analysis: preprocessing -> ONNX session calls -> decoding
-//! -> bioCN 主谓宾 segments. The three model calls live on the `Sessions`
+//! BioCN sentence analysis: preprocessing -> ONNX session calls -> decoding
+//! -> BioCN 主谓宾 segments. The three model calls live on the `Sessions`
 //! side (engine.rs); if a test ever needs to replay recorded tensors instead
 //! of running ONNX, re-introduce a runner trait there — no mock exists yet,
 //! so the indirection was removed as dead weight.

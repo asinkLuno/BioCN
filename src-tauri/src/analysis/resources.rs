@@ -1,4 +1,4 @@
-//! bioCN model resources: vocab / normalization table / label lists.
+//! BioCN model resources: vocab / normalization table / label lists.
 //!
 //! Mirrors `src/lib/biocn/resources.ts`. File-format quirks (see
 //! `tools/README.md`):

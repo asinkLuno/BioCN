@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// 发布流程随 Pages 部署的元数据（ BioCN 安装包的清单）。
-const RELEASES_URL: &str = "https://asinkluno.github.io/bioCN/releases.json";
+const RELEASES_URL: &str = "https://asinkluno.github.io/BioCN/releases.json";
 /// 安装包只接受这个仓库的 GitHub Release 附件，绝不下载任意链接。
-const DOWNLOAD_PREFIX: &str = "https://github.com/asinkLuno/bioCN/releases/download/";
+const DOWNLOAD_PREFIX: &str = "https://github.com/asinkLuno/BioCN/releases/download/";
 /// 应用内没有对应安装包（Android）或检查失败时展示的发布页。
-const RELEASES_PAGE: &str = "https://github.com/asinkLuno/bioCN/releases/latest";
+const RELEASES_PAGE: &str = "https://github.com/asinkLuno/BioCN/releases/latest";
 /// 下载进度事件：`{ received, total }`，total 未知时为 0。前端
 /// （`src/lib/update.ts`）监听同一个字面量。
 pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
@@ -334,7 +334,7 @@ pub fn open_release_page(app: AppHandle) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    const TAG: &str = "https://github.com/asinkLuno/bioCN/releases/download/v0.2.0";
+    const TAG: &str = "https://github.com/asinkLuno/BioCN/releases/download/v0.2.0";
 
     fn asset(name: &str, platform: &str, sha256: Option<&str>) -> WebsiteAsset {
         WebsiteAsset {
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(asset_file_name(&format!("{TAG}/Other_1.0.0.apk")), None);
         assert_eq!(asset_file_name(&format!("{TAG}/BioCN_1.0.0..apk")), None);
         // 缺少 tag 或资产名。
-        assert_eq!(asset_file_name("https://github.com/asinkLuno/bioCN/releases/download/"), None);
+        assert_eq!(asset_file_name("https://github.com/asinkLuno/BioCN/releases/download/"), None);
     }
 
     #[test]

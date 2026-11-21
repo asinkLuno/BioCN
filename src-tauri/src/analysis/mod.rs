@@ -1,4 +1,4 @@
-//! bioCN 主谓宾 analysis: the three HanLP graphs, ported to Rust.
+//! BioCN 主谓宾 analysis: the three HanLP graphs, ported to Rust.
 //!
 //! This is upstream's `src-tauri/biocn-core`, moved inside the app instead of a
 //! workspace member: the pipeline is only ever consumed through the reader, and

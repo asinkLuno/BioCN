@@ -1,4 +1,4 @@
-"""Export bioCN's three HanLP models (TOK/POS/DEP) to Android-ready ONNX.
+"""Export BioCN's three HanLP models (TOK/POS/DEP) to Android-ready ONNX.
 
 Models (all chinese-electra-180g-small-discriminator backbones, no CRF):
   - tok: coarse_electra_small_zh   -> per-subword BMES logits [B, S, 4]

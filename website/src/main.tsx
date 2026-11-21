@@ -20,7 +20,7 @@ import './index.css';
 // 发布元数据由 CI 的 scripts/pages-release.mjs 从 GitHub Releases 生成并写进部署目录；
 // 这里运行时读取并校验，不通过校验的数据一律退回到兜底视图。
 const base = import.meta.env.BASE_URL;
-const repository = 'https://github.com/asinkLuno/bioCN';
+const repository = 'https://github.com/asinkLuno/BioCN';
 const downloadPrefix = `${repository}/releases/download/`;
 
 type Platform = 'android' | 'windows' | 'macos' | 'linux';

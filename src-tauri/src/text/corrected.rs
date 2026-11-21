@@ -1,6 +1,6 @@
 //! The sentence splitter the reader uses.
 //!
-//! Upstream bioCN splits each paragraph with `hanlp.utils.rules.split_sentence`
+//! Upstream BioCN splits each paragraph with `hanlp.utils.rules.split_sentence`
 //! (a plain regex pass, no model). This module is the app's own rules on the
 //! same contract: one paragraph in, contiguous trimmed ranges out. Where the
 //! two disagree (`「走吧。」「好。」`, `？！`), this module is right; splitting is

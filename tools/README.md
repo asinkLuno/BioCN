@@ -9,7 +9,7 @@ Ported from `https://github.com/asinkLuno/biocn-reader` (branch
 
 ## Why three ONNX graphs
 
-bioCN runs three HanLP models per sentence: a tokenizer (`tok`), a part-of-speech
+BioCN runs three HanLP models per sentence: a tokenizer (`tok`), a part-of-speech
 tagger (`pos`) and a dependency parser (`dep`). The parser's output is what the
 coloring comes from — `nsubj`/`nobj`/`root` become 主 / 宾 / 谓. They are exported
 separately because each has its own shape and its own input length limit; the

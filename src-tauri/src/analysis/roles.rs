@@ -1,4 +1,4 @@
-//! Port of bioCN `src/analyzer.py` role mapping (MIT, vendored at
+//! Port of BioCN `src/analyzer.py` role mapping (MIT, vendored at
 //! `tools/ref/biocn_analyzer.py`): dependency relations -> 主谓宾 char roles.
 //!
 //! `nsubj`/`top` -> subject; `root`/`dep`/`conj`/`ccomp`/`xcomp`/`rcomp`
@@ -176,7 +176,7 @@ fn sv_roles(rels: &[String], heads: &[i32], preds: &[usize]) -> (Vec<usize>, Vec
     )
 }
 
-/// bioCN `_token_spans` + `_fill_roles`: per-character roles for one
+/// BioCN `_token_spans` + `_fill_roles`: per-character roles for one
 /// sentence, predicate > subject > object priority.
 pub fn char_roles(
     sentence: &[u16],
@@ -217,7 +217,7 @@ pub fn char_roles(
     roles
 }
 
-/// bioCN `_to_segments`: fold the per-char role array into contiguous runs.
+/// BioCN `_to_segments`: fold the per-char role array into contiguous runs.
 pub fn to_segments(sentence: &[u16], roles: &[Role]) -> Vec<Segment> {
     if sentence.is_empty() || roles.is_empty() {
         return Vec::new();

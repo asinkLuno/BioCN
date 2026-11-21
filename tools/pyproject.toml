@@ -1,11 +1,11 @@
 [project]
 name = "biocn-tools"
 version = "0.1.0"
-description = "Export bioCN's HanLP models (TOK/POS/DEP) to Android-ready ONNX"
+description = "Export BioCN's HanLP models (TOK/POS/DEP) to Android-ready ONNX"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    # Version combo mirrors bioCN's uv.lock (hanlp 2.1.3 + torch 2.9.x + transformers 4.57.x).
+    # Version combo mirrors BioCN's uv.lock (hanlp 2.1.3 + torch 2.9.x + transformers 4.57.x).
     "hanlp==2.1.3",
     "loguru>=0.7.3",
     "onnx>=1.19.0",

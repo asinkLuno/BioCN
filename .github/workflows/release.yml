@@ -488,7 +488,7 @@ jobs:
             -f draft=false -F make_latest=true > /dev/null
 
   # 发布页（website/ 独立 React 项目）：Release 发布成功后构建并部署到 GitHub Pages
-  # （https://asinkluno.github.io/bioCN/）。pages-release.mjs 生成 latest.json /
+  # （https://asinkluno.github.io/BioCN/）。pages-release.mjs 生成 latest.json /
   # releases.json 供页面运行时读取；release job 即使复用已有 Release 提前退出，
   # 这里的元数据也能照常重新生成，所以重跑同一工作流即可补部署。
   # 本 workflow 不监听 main 的 push，ref == main 只可能来自 workflow_dispatch：

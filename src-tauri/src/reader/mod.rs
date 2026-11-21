@@ -1,7 +1,7 @@
 //! Chapter text out of an EPUB, paragraph by paragraph.
 //!
 //! The reader does not need the whole book at once, but it does need it in
-//! spine order and it needs paragraph boundaries, because bioCN analyzes one
+//! spine order and it needs paragraph boundaries, because BioCN analyzes one
 //! paragraph at a time: a sentence cannot be coloured without knowing where the
 //! sentence is, and a sentence cannot be found without knowing where the
 //! paragraph is.

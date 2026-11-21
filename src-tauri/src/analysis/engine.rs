@@ -1,4 +1,4 @@
-//! Native inference: the three bioCN graphs on ONNX Runtime (`ort` crate).
+//! Native inference: the three BioCN graphs on ONNX Runtime (`ort` crate).
 //!
 //! Every platform links ORT at run time (`load-dynamic`): the app ships a
 //! *minimal-build* `libonnxruntime` library (only the kernels these three

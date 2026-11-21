@@ -12,7 +12,7 @@ function option(name) {
 
 const output = option('--output') ?? 'website/dist';
 const tag = option('--tag');
-const repo = process.env.GITHUB_REPOSITORY ?? 'asinkLuno/bioCN';
+const repo = process.env.GITHUB_REPOSITORY ?? 'asinkLuno/BioCN';
 const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
 if (!token) throw new Error('缺少 GH_TOKEN 或 GITHUB_TOKEN');
 

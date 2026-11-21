@@ -21,7 +21,7 @@
 
 @layer components {
   /*
-   * 主谓宾 colors. These come from bioCN (the web app) rather than daisyUI:
+   * 主谓宾 colors. These come from BioCN (the web app) rather than daisyUI:
    * the whole point is that the same book reads the same way here as there.
    * Three hues far apart in lightness as well as hue, so they stay
    * distinguishable in both themes and for deuteranopes.

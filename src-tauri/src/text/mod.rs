@@ -1,6 +1,6 @@
 //! Sentence splitting: EPUB paragraphs in, sentence ranges out.
 //!
-//! Upstream bioCN (the web version) calls HanLP's `split_sentence` here. The
+//! Upstream BioCN (the web version) calls HanLP's `split_sentence` here. The
 //! reader keeps the same contract — paragraph-local, contiguous ranges so a
 //! caller can map a sentence to the offsets the DOM highlights — and its own
 //! rules ([`corrected`]), which fix the two bugs that mattered on real books:

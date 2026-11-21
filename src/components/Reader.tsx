@@ -393,7 +393,7 @@ function sentenceBody(sentence: ColoredSentence): ReactNode {
 }
 
 function roleClass(role: Role): string {
-  // daisyUI has no 主谓宾 tokens, and these colors come from bioCN itself so the
+  // daisyUI has no 主谓宾 tokens, and these colors come from BioCN itself so the
   // desktop app reads like the web version: see `index.css`.
   return `svo svo-${role}`;
 }
