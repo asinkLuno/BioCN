@@ -17,9 +17,8 @@ import type { ColoredParagraph } from "./reading";
 const READER_STYLESHEET = `
 :root { color-scheme: light dark; }
 body {
-  margin: 0 auto;
-  padding: 1rem 1.25rem 4rem;
-  max-width: 42rem;
+  margin: 0;
+  padding: 1.25rem 2rem 4rem;
   font-size: 1.0625rem;
   line-height: 1.9;
   overflow-wrap: break-word;

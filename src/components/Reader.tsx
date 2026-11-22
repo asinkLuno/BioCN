@@ -63,7 +63,7 @@ function Frame({ srcdoc, title }: { srcdoc: string; title: string }) {
       // away; the sandbox is for scripts the book ships.
       sandbox="allow-same-origin"
       title={title}
-      className="w-full border-0 bg-transparent"
+      className="block w-full border-0 bg-transparent"
       style={{ height: height ?? "50vh" }}
       srcDoc={srcdoc}
       onLoad={(event) => {
