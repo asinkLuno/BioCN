@@ -16,13 +16,24 @@ import { message } from "../lib/reading";
 /** Update metadata survives remounts (shelf ⇄ reader): one check per app run. */
 let cachedStatus: UpdateStatus | null = null;
 
+/** Resets cached update metadata between unit tests. */
+export function resetUpdateCacheForTests(): void {
+  cachedStatus = null;
+}
+
 /**
  * 设置 → 版本与更新：当前版本、检查更新、应用内下载。安装包来自 GitHub
  * Releases 并由 Rust 侧边下边校验 SHA-256；下载完成后在文件管理器中显示。
  * Android 没有安装交接（BioCN 还没有 MusicDan 那套 install_apk），只给
  * 发布页链接。
  */
-export function UpdateSection({ open }: { open: boolean }) {
+export function UpdateSection({
+  open,
+  onBusyChange,
+}: {
+  open: boolean;
+  onBusyChange?: (busy: boolean) => void;
+}) {
   const [status, setStatus] = useState<UpdateStatus | null>(cachedStatus);
   // `attempted` counts a failed check too: the open effect must not retry on
   // its own, or an unreachable Pages site would re-request in a tight loop.
@@ -33,6 +44,13 @@ export function UpdateSection({ open }: { open: boolean }) {
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [downloaded, setDownloaded] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    onBusyChange?.(downloading);
+    return () => {
+      if (downloading) onBusyChange?.(false);
+    };
+  }, [downloading, onBusyChange]);
 
   const check = useCallback(async () => {
     setAttempted(true);
@@ -63,6 +81,14 @@ export function UpdateSection({ open }: { open: boolean }) {
     }
   };
 
+  const openReleases = async () => {
+    try {
+      await openReleasePage();
+    } catch (error) {
+      setProblem(message(error));
+    }
+  };
+
   const latest = status?.latest ?? null;
   const asset = latest?.download ?? null;
   const hasUpdate =
@@ -85,8 +111,10 @@ export function UpdateSection({ open }: { open: boolean }) {
       // listener attached afterwards is told.
       unlisten = await onUpdateProgress((event) => setProgress(event));
       const file = await downloadUpdate(asset.url, asset.sha256);
-      await revealUpdate(file.path);
+      // Persist the verified download path BEFORE opening the file manager so
+      // an opener failure still lets the user retry "再次打开".
       setDownloaded(file.path);
+      await revealUpdate(file.path);
     } catch (error) {
       setProblem(message(error));
     } finally {
@@ -132,10 +160,15 @@ export function UpdateSection({ open }: { open: boolean }) {
           <button
             type="button"
             className="btn btn-ghost btn-sm mt-1"
-            onClick={() => void openReleasePage()}
+            onClick={() => void openReleases()}
           >
             到发布页下载
           </button>
+          {problem !== null && (
+            <div role="alert" className="alert alert-error alert-soft mt-2 text-sm">
+              <span className="min-w-0 break-words">{problem}</span>
+            </div>
+          )}
         </>
       )}
 
@@ -164,7 +197,7 @@ export function UpdateSection({ open }: { open: boolean }) {
               <button
                 type="button"
                 className="btn btn-sm"
-                onClick={() => void openReleasePage()}
+                onClick={() => void openReleases()}
               >
                 到发布页下载
               </button>

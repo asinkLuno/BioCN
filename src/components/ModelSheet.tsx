@@ -45,14 +45,20 @@ interface Props {
  * the bar is the sum over the variant's files: `done` of the current file plus
  * every byte already finished. The Rust side emits one event per chunk.
  */
+type Operation =
+  | { kind: "install"; variant: VariantId; progress: ModelProgress | null }
+  | { kind: "activate"; variant: VariantId }
+  | { kind: "remove"; variant: VariantId };
+
 export function ModelSheet({ open, onClose, onChange = noop }: Props) {
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"install" | "activate" | "remove" | null>(null);
-  const [working, setWorking] = useState<VariantId>("int8");
-  const [progress, setProgress] = useState<ModelProgress | null>(null);
+  const [op, setOp] = useState<Operation | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const [theme, setTheme] = useState<AppTheme>(() => loadAppTheme());
   const dialog = useRef<HTMLDialogElement>(null);
+
+  const isBusy = op !== null || updateBusy;
 
   const selectTheme = (next: AppTheme) => {
     setTheme(next);
@@ -60,12 +66,8 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
     applyAppTheme(next);
   };
 
-  // Toggled open and closed by `open`: the shelf keeps the sheet mounted.
+  // Toggled open and closed by `open`: the app keeps a single sheet mounted.
   useDialog(dialog, open);
-  useEffect(() => {
-    const element = dialog.current;
-    if (!open && element?.open) element.close();
-  }, [open]);
 
   // Read the status whenever the sheet opens: another window (or a crashed
   // download) may have changed what is on disk.
@@ -88,34 +90,37 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
   }, [open]);
 
   const install = async (variant: VariantId) => {
-    setBusy("install");
-    setWorking(variant);
+    setOp({ kind: "install", variant, progress: null });
     setProblem(null);
-    setProgress(null);
     // Everything from the subscription on is guarded: if listening fails,
-    // `busy` still clears, or every button in the sheet would stay disabled.
+    // `op` still clears, or every button in the sheet would stay disabled.
     let unlisten: (() => void) | undefined;
     try {
       // Subscribe before the command: a debug build copies from disk and can
       // finish every file before a listener attached afterwards is told.
-      unlisten = await onModelProgress((event) => setProgress(event));
+      unlisten = await onModelProgress((event) =>
+        setOp((prev) =>
+          prev?.kind === "install" && prev.variant === variant
+            ? { ...prev, progress: event }
+            : prev,
+        ),
+      );
       setStatus(await modelsInstall(variant));
       onChange();
     } catch (error) {
       setProblem(message(error));
-      // A failed download keeps its partial file; re-reading the status is what
-      // puts the "resume" size on screen.
-      setStatus(await modelsStatus().catch(() => null));
+      // A failed download keeps its partial file; re-reading the status puts
+      // the resume size on screen without wiping previous status on error.
+      const refreshed = await modelsStatus().catch(() => null);
+      if (refreshed !== null) setStatus(refreshed);
     } finally {
       unlisten?.();
-      setBusy(null);
-      setProgress(null);
+      setOp(null);
     }
   };
 
   const activate = async (variant: VariantId) => {
-    setWorking(variant);
-    setBusy("activate");
+    setOp({ kind: "activate", variant });
     setProblem(null);
     try {
       setStatus(await modelsActivate(variant));
@@ -123,13 +128,12 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
     } catch (error) {
       setProblem(message(error));
     } finally {
-      setBusy(null);
+      setOp(null);
     }
   };
 
   const remove = async (variant: VariantId) => {
-    setBusy("remove");
-    setWorking(variant);
+    setOp({ kind: "remove", variant });
     setProblem(null);
     try {
       setStatus(await modelsRemove(variant));
@@ -137,7 +141,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
     } catch (error) {
       setProblem(message(error));
     } finally {
-      setBusy(null);
+      setOp(null);
     }
   };
 
@@ -150,14 +154,14 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
       // Escape must not dismiss the sheet mid-download: the transfer keeps
       // running with nothing on screen to show it or to cancel it.
       onCancel={(event) => {
-        if (busy !== null) event.preventDefault();
+        if (isBusy) event.preventDefault();
         else onClose();
       }}
     >
       <div className="modal-box max-w-lg">
-          <h3 id="settings-title" className="text-base font-semibold">
-            设置
-          </h3>
+        <h3 id="settings-title" className="text-base font-semibold">
+          设置
+        </h3>
 
         <section
           aria-labelledby="appearance-title"
@@ -207,157 +211,162 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
             于磁盘上——随时切换。
           </p>
 
-        {status?.manifestError && (
-          <div role="alert" className="alert alert-warning mt-4 text-sm">
-            <span>
-              无法读取下载大小（{status.manifestError}）。你仍可安装模型，只是无法提前知道
-              大小。
-            </span>
-          </div>
-        )}
+          {status?.manifestError && (
+            <div role="alert" className="alert alert-warning mt-4 text-sm">
+              <span>
+                无法读取下载大小（{status.manifestError}）。你仍可安装模型，只是无法提前知道
+                大小。
+              </span>
+            </div>
+          )}
 
-        {problem && (
-          <div role="alert" className="alert alert-error mt-4 text-sm">
-            <span className="break-words">{problem}</span>
-          </div>
-        )}
+          {problem && (
+            <div role="alert" className="alert alert-error mt-4 text-sm">
+              <span className="break-words">{problem}</span>
+            </div>
+          )}
 
-        {status?.warning && (
-          <div role="status" className="alert alert-warning mt-4 text-sm">
-            <span className="break-words">{status.warning}</span>
-          </div>
-        )}
+          {status?.warning && (
+            <div role="status" className="alert alert-warning mt-4 text-sm">
+              <span className="break-words">{status.warning}</span>
+            </div>
+          )}
 
-        {status === null ? (
-          <div className="mt-4 space-y-3">
-            <div className="skeleton h-16 rounded-box" />
-            <div className="skeleton h-16 rounded-box" />
-          </div>
-        ) : (
-          <ul className="mt-4 space-y-3">
-            {status.variants.map((variant) => {
-              const isInstalled = status.installed.includes(variant.id);
-              const isActive = status.active === variant.id;
-              const isDownloading = busy === "install" && working === variant.id;
-              const isRemoving = busy === "remove" && working === variant.id;
-              // `done` counts every file of the variant, so it is already the
-              // number this bar wants: the Rust side adds the bytes of the
-              // files it has finished to the ones it is writing now.
-              const ratio =
-                isDownloading && progress?.variant === variant.id && variant.bytes > 0
-                  ? Math.min(1, progress.done / variant.bytes)
-                  : 0;
-              return (
-                <li key={variant.id}>
-                  {/* Not a <button>: a button may not contain buttons, and a
-                      disabled parent would swallow the child clicks on some
-                      webviews. The card itself becomes clickable (activate)
-                      only when that is possible. */}
-                  <div
-                    role="button"
-                    tabIndex={isInstalled && !isActive && busy === null ? 0 : undefined}
-                    aria-disabled={!isInstalled || isActive || busy !== null}
-                    onClick={(event) => {
-                      // Clicks on 移除/下载 bubble here; the guard plus the
-                      // event-target check keep those from also activating.
-                      const target = event.target as HTMLElement;
-                      if (target.closest("button")) return;
-                      if (isInstalled && !isActive && busy === null) void activate(variant.id);
-                    }}
-                    onKeyDown={(event) => {
-                      if (
-                        (event.key === "Enter" || event.key === " ") &&
-                        isInstalled &&
-                        !isActive &&
-                        busy === null
-                      ) {
-                        event.preventDefault();
-                        void activate(variant.id);
-                      }
-                    }}
-                    className={`card border w-full bg-base-100 text-left transition-colors duration-200 ${
-                      isInstalled && !isActive && busy === null
-                        ? "cursor-pointer hover:bg-base-200"
-                        : ""
-                    } ${isActive ? "border-primary" : "border-base-content/10"}`}
-                  >
-                    <div className="card-body gap-2 p-4">
-                      <div className="flex items-start gap-3">
-                        <div className="min-w-0 flex-1">
-                          <h4 className="text-sm font-semibold">{variant.label}</h4>
-                          <p className="mt-0.5 text-xs leading-relaxed text-base-content/60">
-                            {variant.description}
-                          </p>
-                          <p className="mt-1 text-xs text-base-content/50">
-                            {formatBytes(variant.bytes)}
-                            {variant.partial > 0 && !isInstalled && (
-                              <> · 已下载 {formatBytes(variant.partial)} </>
-                            )}
-                          </p>
-                        </div>
-                        {isInstalled ? (
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-sm text-error"
-                            disabled={busy !== null}
-                            onClick={() => void remove(variant.id)}
-                          >
-                            {isRemoving ? <span className="loading loading-spinner loading-xs" /> : "移除"}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-sm"
-                            disabled={busy !== null}
-                            onClick={() => void install(variant.id)}
-                          >
-                            {isDownloading ? (
-                              <span className="loading loading-spinner loading-xs" />
-                            ) : variant.partial > 0 ? (
-                              "继续下载"
+          {status === null ? (
+            <div className="mt-4 space-y-3">
+              <div className="skeleton h-16 rounded-box" />
+              <div className="skeleton h-16 rounded-box" />
+            </div>
+          ) : (
+            <ul className="mt-4 space-y-3">
+              {status.variants.map((variant) => {
+                const isInstalled = status.installed.includes(variant.id);
+                const isActive = status.active === variant.id;
+                const isDownloading = op?.kind === "install" && op.variant === variant.id;
+                const isActivating = op?.kind === "activate" && op.variant === variant.id;
+                const isRemoving = op?.kind === "remove" && op.variant === variant.id;
+                const progress = isDownloading ? op.progress : null;
+                const totalBytes = progress?.total || variant.bytes;
+                const ratio =
+                  isDownloading && progress?.variant === variant.id && totalBytes > 0
+                    ? Math.min(1, progress.done / totalBytes)
+                    : 0;
+                const displaySize = isInstalled
+                  ? variant.size || variant.bytes
+                  : variant.bytes;
+                return (
+                  <li key={variant.id}>
+                    <div
+                      className={`card w-full border bg-base-100 text-left transition-colors duration-200 ${
+                        isActive ? "border-primary" : "border-base-content/10"
+                      }`}
+                    >
+                      <div className="card-body gap-2 p-4">
+                        <div className="flex items-start gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <h5 className="text-sm font-semibold">{variant.label}</h5>
+                              {isActive && (
+                                <span className="badge badge-primary badge-xs">使用中</span>
+                              )}
+                            </div>
+                            <p className="mt-0.5 text-xs leading-relaxed text-base-content/60">
+                              {variant.description}
+                            </p>
+                            <p className="mt-1 text-xs text-base-content/50">
+                              {formatBytes(displaySize)}
+                              {variant.partial > 0 && !isInstalled && (
+                                <> · 已下载 {formatBytes(variant.partial)} </>
+                              )}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {isInstalled ? (
+                              <>
+                                {!isActive && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-soft btn-sm"
+                                    disabled={op !== null}
+                                    onClick={() => void activate(variant.id)}
+                                  >
+                                    {isActivating ? (
+                                      <span className="loading loading-spinner loading-xs" />
+                                    ) : (
+                                      "启用"
+                                    )}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm text-error"
+                                  disabled={op !== null}
+                                  onClick={() => void remove(variant.id)}
+                                >
+                                  {isRemoving ? (
+                                    <span className="loading loading-spinner loading-xs" />
+                                  ) : (
+                                    "移除"
+                                  )}
+                                </button>
+                              </>
                             ) : (
-                              "下载"
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                disabled={op !== null}
+                                onClick={() => void install(variant.id)}
+                              >
+                                {isDownloading ? (
+                                  <span className="loading loading-spinner loading-xs" />
+                                ) : variant.partial > 0 ? (
+                                  "继续下载"
+                                ) : (
+                                  "下载"
+                                )}
+                              </button>
                             )}
-                          </button>
+                          </div>
+                        </div>
+                        {isDownloading && (
+                          <>
+                            <progress
+                              className="progress progress-primary w-full"
+                              value={ratio}
+                              max={1}
+                              aria-label={`正在下载 ${variant.label}`}
+                            />
+                            <p className="text-xs text-base-content/55">
+                              {progress
+                                ? `${progress.file} · ${Math.round(ratio * 100)}%`
+                                : "开始中…"}
+                            </p>
+                          </>
                         )}
                       </div>
-                      {isDownloading && (
-                        <>
-                          <progress
-                            className="progress progress-primary w-full"
-                            value={ratio}
-                            max={1}
-                            aria-label={`正在下载 ${variant.label}`}
-                          />
-                          <p className="text-xs text-base-content/55">
-                            {progress ? `${progress.file} · ${Math.round(ratio * 100)}%` : "开始中…"}
-                          </p>
-                        </>
-                      )}
                     </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
 
-        <p className="mt-4 text-xs leading-relaxed text-base-content/50">
-          {status !== null && status.installed.length > 0
-            ? "移除模型不会影响你的书；它们只是不再着色，直到你下载或启用另一个模型。"
-            : "两个版本都在本机运行，不会上传任何内容。"}
-        </p>
+          <p className="mt-4 text-xs leading-relaxed text-base-content/50">
+            {status !== null && status.installed.length > 0
+              ? "移除模型不会影响你的书；它们只是不再着色，直到你下载或启用另一个模型。"
+              : "两个版本都在本机运行，不会上传任何内容。"}
+          </p>
         </section>
 
-        <UpdateSection open={open} />
+        <UpdateSection open={open} onBusyChange={setUpdateBusy} />
 
         <div className="modal-action">
-          <button type="button" className="btn" onClick={onClose} disabled={busy !== null}>
-            {busy !== null ? "处理中…" : "完成"}
+          <button type="button" className="btn" onClick={onClose} disabled={isBusy}>
+            {isBusy ? "处理中…" : "完成"}
           </button>
         </div>
       </div>
-      <ModalBackdrop onClose={() => busy === null && onClose()} />
+      <ModalBackdrop onClose={() => !isBusy && onClose()} />
     </dialog>
   );
 }

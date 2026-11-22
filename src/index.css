@@ -79,19 +79,10 @@
 }
 
 @layer base {
-  /* Bundled full Source Han Serif SC (OFL-1.1), lazy-loaded only when referenced. */
-  @font-face {
-    font-family: "BioCN Source Han Serif";
-    font-style: normal;
-    font-weight: 400;
-    font-display: swap;
-    src: url("/fonts/SourceHanSerifSC-Regular.woff2") format("woff2");
-  }
-
   /*
-   * Brand double-helix palette tokens mirroring the SVO colors below, adapting
-   * automatically in dark mode (both OS preference and explicit data-theme) so
-   * the helix stays crisp on dark frosted covers.
+   * Brand double-helix palette tokens mirroring the SVO colors in reader.css,
+   * adapting automatically in dark mode (both OS preference and explicit
+   * data-theme) so the helix stays crisp on dark frosted covers.
    */
   :root,
   :root[data-theme="light"] {
@@ -141,56 +132,6 @@
 }
 
 @layer components {
-  /*
-   * 主谓宾 colors. These come from BioCN (the web app) rather than daisyUI:
-   * the whole point is that the same book reads the same way here as there.
-   * Three hues far apart in lightness as well as hue, so they stay
-   * distinguishable in both themes and for deuteranopes.
-   *
-   * These six hex values are copied verbatim by the colored-EPUB stylesheet
-   * (src-tauri/src/export.rs `STYLESHEET`), which the backend test pins to a
-   * sample of them. Change the two files together or exports stop matching
-   * the app.
-   */
-  .svo-subject {
-    color: #c04e08;
-  }
-
-  .svo-predicate {
-    color: #137a5b;
-  }
-
-  .svo-object {
-    color: #635ba6;
-  }
-
-  /* A brighter set in dark mode, for contrast on a dark page. */
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .svo-subject {
-      color: #ea9558;
-    }
-
-    :root:not([data-theme="light"]) .svo-predicate {
-      color: #58c4a3;
-    }
-
-    :root:not([data-theme="light"]) .svo-object {
-      color: #aba0eb;
-    }
-  }
-
-  :root[data-theme="dark"] .svo-subject {
-    color: #ea9558;
-  }
-
-  :root[data-theme="dark"] .svo-predicate {
-    color: #58c4a3;
-  }
-
-  :root[data-theme="dark"] .svo-object {
-    color: #aba0eb;
-  }
-
   /*
    * Brand double-helix loading loop (same paths & 3D crossings as
    * design/logo/biocn-helix-launch.svg). Custom CSS is kept here because

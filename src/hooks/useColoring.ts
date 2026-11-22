@@ -29,7 +29,19 @@ export function useColoring() {
   const absorb = useCallback((progress: ColoringProgress | null) => {
     if (progress === null) return;
     if (!progress.finished) {
-      setJob(progress);
+      setJob((current) => {
+        // Ignore a slower snapshot whose progress lags behind an already-received event.
+        if (
+          current !== null &&
+          current.book === progress.book &&
+          current.total > 0 &&
+          progress.total === current.total &&
+          progress.done < current.done
+        ) {
+          return current;
+        }
+        return progress;
+      });
       return;
     }
     // The job is over either way; only a failure has something to say.
@@ -48,10 +60,14 @@ export function useColoring() {
         const off = await onColoringProgress((progress) => {
           if (!cancelled) absorb(progress);
         });
-        if (cancelled) off();
-        else unsubscribe = off;
+        if (cancelled) {
+          off();
+          return;
+        }
+        unsubscribe = off;
 
-        absorb(await coloringProgress());
+        const snapshot = await coloringProgress();
+        if (!cancelled) absorb(snapshot);
       } catch {
         // Progress is a nicety: a shelf that cannot subscribe still browses,
         // reads and removes books.

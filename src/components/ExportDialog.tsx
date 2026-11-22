@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
   exportBook,
@@ -20,6 +20,7 @@ interface Props {
 
 type Phase =
   | { kind: "choosing" }
+  | { kind: "picking" }
   | { kind: "working" }
   | { kind: "done"; report: ExportReport; path: string }
   | { kind: "failed"; problem: string };
@@ -34,14 +35,26 @@ type Phase =
  */
 export function ExportDialog({ id, title, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const mounted = useRef(true);
   const [stylesheet, setStylesheet] = useState<Stylesheet>("inline");
   const [phase, setPhase] = useState<Phase>({ kind: "choosing" });
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   // Mounted only while a book is being exported (BookTile renders it only for
   // that), so it opens once on mount and never toggles afterwards.
   useDialog(dialog, true);
 
+  const busy = phase.kind === "picking" || phase.kind === "working";
+
   const run = async () => {
+    if (busy) return;
+    setPhase({ kind: "picking" });
     let target: string | null;
     try {
       target = await save({
@@ -52,17 +65,23 @@ export function ExportDialog({ id, title, onClose }: Props) {
         filters: [epubFilter()],
       });
     } catch (error) {
+      if (!mounted.current) return;
       // The picker itself can fail (no document provider, a refused
       // permission). That is still a failure to explain, not a silent no-op.
       setPhase({ kind: "failed", problem: message(error) });
       return;
     }
+    if (!mounted.current) return;
     // Cancelling the save dialog is not a failure: nothing was attempted.
-    if (target === null) return;
+    if (target === null) {
+      setPhase({ kind: "choosing" });
+      return;
+    }
 
     setPhase({ kind: "working" });
     try {
       const report = await exportBook(id, target, stylesheet);
+      if (!mounted.current) return;
       setPhase({
         kind: "done",
         report,
@@ -71,13 +90,15 @@ export function ExportDialog({ id, title, onClose }: Props) {
         path: fileNameOf(target),
       });
     } catch (error) {
+      if (!mounted.current) return;
       setPhase({ kind: "failed", problem: message(error) });
     }
   };
 
   const close = () => {
-    // Closing mid-write would leave a truncated EPUB behind with no explanation.
-    if (phase.kind === "working") return;
+    // Closing while picking or mid-write would either orphan an OS picker or
+    // drop feedback for an in-flight export.
+    if (busy) return;
     onClose();
   };
 
@@ -88,7 +109,7 @@ export function ExportDialog({ id, title, onClose }: Props) {
       aria-labelledby={`export-title-${id}`}
       onClose={onClose}
       onCancel={(event) => {
-        if (phase.kind === "working") event.preventDefault();
+        if (busy) event.preventDefault();
         else onClose();
       }}
     >
@@ -113,7 +134,7 @@ export function ExportDialog({ id, title, onClose }: Props) {
                   className="radio radio-primary radio-sm"
                   value="inline"
                   checked={stylesheet === "inline"}
-                  disabled={phase.kind === "working"}
+                  disabled={busy}
                   onChange={() => setStylesheet("inline")}
                 />
                 <span className="flex flex-col">
@@ -130,7 +151,7 @@ export function ExportDialog({ id, title, onClose }: Props) {
                   className="radio radio-primary radio-sm"
                   value="external"
                   checked={stylesheet === "external"}
-                  disabled={phase.kind === "working"}
+                  disabled={busy}
                   onChange={() => setStylesheet("external")}
                 />
                 <span className="flex flex-col">
@@ -160,7 +181,7 @@ export function ExportDialog({ id, title, onClose }: Props) {
               <button
                 type="button"
                 className="btn btn-ghost"
-                disabled={phase.kind === "working"}
+                disabled={busy}
                 onClick={close}
               >
                 取消
@@ -168,13 +189,17 @@ export function ExportDialog({ id, title, onClose }: Props) {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={phase.kind === "working"}
+                disabled={busy}
                 onClick={() => void run()}
               >
-                {phase.kind === "working" ? (
+                {busy ? (
                   <span className="loading loading-spinner loading-sm" aria-hidden="true" />
                 ) : null}
-                {phase.kind === "working" ? "正在导出…" : "选择位置并导出"}
+                {phase.kind === "working"
+                  ? "正在导出…"
+                  : phase.kind === "picking"
+                    ? "正在选择位置…"
+                    : "选择位置并导出"}
               </button>
             </>
           )}

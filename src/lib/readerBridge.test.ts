@@ -1,6 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import bridgeSource from "../../src-tauri/src/protocol/bridge.js?raw";
+import { isFrameMessage } from "./readerBridge";
 import { DEFAULT_READER_PREFS } from "./readerPrefs";
+
+describe("isFrameMessage boundary validation", () => {
+  it("accepts valid messages and rejects malformed payloads or unsafe external schemes", () => {
+    expect(isFrameMessage({ source: "biocn-reader", type: "ready" })).toBe(true);
+    expect(
+      isFrameMessage({ source: "biocn-reader", type: "external", href: "https://example.com" }),
+    ).toBe(true);
+    expect(
+      isFrameMessage({ source: "biocn-reader", type: "external", href: "javascript:alert(1)" }),
+    ).toBe(false);
+    expect(
+      isFrameMessage({ source: "biocn-reader", type: "external", href: "file:///etc/passwd" }),
+    ).toBe(false);
+    expect(
+      isFrameMessage({ source: "biocn-reader", type: "progress", ratio: Number.NaN }),
+    ).toBe(false);
+    expect(isFrameMessage({ source: "biocn-reader", type: "turn", direction: "sideways" })).toBe(
+      false,
+    );
+  });
+});
 
 describe("reader iframe bridge.js", () => {
   let posted: unknown[];

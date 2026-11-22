@@ -68,22 +68,11 @@ export interface ChapterColorPatch {
   patches: RunPatch[];
 }
 
-/**
- * The `models-missing` prefix the analyzer uses when no weights are installed.
- */
-export const MODEL_MISSING = "models-missing";
-
 /** The message an IPC error carries: Tauri rejects with a string. */
 export function message(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
   return "出了点问题。";
-}
-
-/** A `book-missing` / `chapter-missing` / `models-missing` prefix, or `null`. */
-export function commandPrefix(error: unknown): string | null {
-  const match = /^([a-z-]+):/.exec(message(error));
-  return match ? match[1] : null;
 }
 
 export const bookOpen = (id: string) => invoke<BookView>("book_open", { id });

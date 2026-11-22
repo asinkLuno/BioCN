@@ -48,6 +48,13 @@ export const DEFAULT_SVO_OVERRIDES: SvoColors = {
   object: null,
 };
 
+/** Single source of truth for slider & normalization limits. */
+export const READER_PREFS_BOUNDS = {
+  fontSize: { min: 13, max: 28, step: 1 },
+  lineHeight: { min: 1.4, max: 2.4, step: 0.1 },
+  paragraphSpacing: { min: 0.4, max: 2.0, step: 0.1 },
+} as const;
+
 export const DEFAULT_READER_PREFS: ReaderPrefs = {
   viewMode: "scrolled",
   theme: "auto",
@@ -79,8 +86,7 @@ export function loadReaderPrefs(): ReaderPrefs {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_READER_PREFS;
-    const parsed = JSON.parse(raw) as Partial<ReaderPrefs>;
-    return normalizePrefs(parsed);
+    return normalizePrefs(JSON.parse(raw));
   } catch {
     return DEFAULT_READER_PREFS;
   }
@@ -94,7 +100,11 @@ export function saveReaderPrefs(prefs: ReaderPrefs): void {
   }
 }
 
-function normalizePrefs(input: Partial<ReaderPrefs>): ReaderPrefs {
+function normalizePrefs(raw: unknown): ReaderPrefs {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return DEFAULT_READER_PREFS;
+  }
+  const input = raw as Partial<ReaderPrefs>;
   const viewMode: ReaderViewMode =
     input.viewMode === "paginated" ? "paginated" : "scrolled";
   const theme: ReaderTheme =
@@ -117,7 +127,10 @@ function normalizePrefs(input: Partial<ReaderPrefs>): ReaderPrefs {
     typeof input.dimImagesInDark === "boolean"
       ? input.dimImagesInDark
       : DEFAULT_READER_PREFS.dimImagesInDark;
-  const rawColors = input.svoColors;
+  const rawColors =
+    typeof input.svoColors === "object" && input.svoColors !== null
+      ? input.svoColors
+      : undefined;
   const svoColors: SvoColors = {
     subject: normalizeHexColor(rawColors?.subject),
     predicate: normalizeHexColor(rawColors?.predicate),
@@ -127,15 +140,27 @@ function normalizePrefs(input: Partial<ReaderPrefs>): ReaderPrefs {
     input.columns === 1 || input.columns === 2 ? input.columns : "auto";
   const fontSize =
     typeof input.fontSize === "number" && Number.isFinite(input.fontSize)
-      ? Math.max(13, Math.min(28, Math.round(input.fontSize)))
+      ? Math.max(
+          READER_PREFS_BOUNDS.fontSize.min,
+          Math.min(READER_PREFS_BOUNDS.fontSize.max, Math.round(input.fontSize)),
+        )
       : DEFAULT_READER_PREFS.fontSize;
   const lineHeight =
     typeof input.lineHeight === "number" && Number.isFinite(input.lineHeight)
-      ? Math.max(1.4, Math.min(2.4, Math.round(input.lineHeight * 10) / 10))
+      ? Math.max(
+          READER_PREFS_BOUNDS.lineHeight.min,
+          Math.min(READER_PREFS_BOUNDS.lineHeight.max, Math.round(input.lineHeight * 10) / 10),
+        )
       : DEFAULT_READER_PREFS.lineHeight;
   const paragraphSpacing =
     typeof input.paragraphSpacing === "number" && Number.isFinite(input.paragraphSpacing)
-      ? Math.max(0.4, Math.min(2.0, Math.round(input.paragraphSpacing * 10) / 10))
+      ? Math.max(
+          READER_PREFS_BOUNDS.paragraphSpacing.min,
+          Math.min(
+            READER_PREFS_BOUNDS.paragraphSpacing.max,
+            Math.round(input.paragraphSpacing * 10) / 10,
+          ),
+        )
       : DEFAULT_READER_PREFS.paragraphSpacing;
   const coloringEnabled =
     typeof input.coloringEnabled === "boolean"

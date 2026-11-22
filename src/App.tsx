@@ -27,6 +27,16 @@ export default function App() {
   const isEmpty = !loading && books.length === 0 && pending === 0;
   const job = coloring.job;
 
+  // Render one shared `<ModelSheet>` across shelf ⇄ reader transitions so an
+  // in-flight model or app-update download is never unmounted by switching views.
+  const settingsSheet = (
+    <ModelSheet
+      open={modelsOpen}
+      onClose={() => setModelsOpen(false)}
+      onChange={() => setModelRevision((n) => n + 1)}
+    />
+  );
+
   // The reader owns the whole window while it is open: a shelf behind a book is
   // a distraction, and the reader's own back button returns here.
   if (reading !== null) {
@@ -39,11 +49,7 @@ export default function App() {
           modelsOpen={modelsOpen}
           modelRevision={modelRevision}
         />
-        <ModelSheet
-          open={modelsOpen}
-          onClose={() => setModelsOpen(false)}
-          onChange={() => setModelRevision((n) => n + 1)}
-        />
+        {settingsSheet}
       </>
     );
   }
@@ -67,7 +73,8 @@ export default function App() {
             className="btn btn-square btn-ghost btn-sm sm:btn-md"
             aria-label="设置"
             onClick={() => setModelsOpen(true)}
-          >            <svg
+          >
+            <svg
               aria-hidden="true"
               viewBox="0 0 20 20"
               className="size-5"
@@ -170,7 +177,7 @@ export default function App() {
         type="button"
         aria-label="添加书籍"
         onClick={addBooks}
-        className="btn btn-primary btn-circle fixed bottom-5 right-5 z-20 size-14 text-primary-content shadow-lg transition-transform hover:scale-105 active:scale-95 sm:bottom-8 sm:right-8"
+        className="btn btn-primary btn-circle fixed right-5 bottom-[calc(1.25rem+env(safe-area-inset-bottom))] z-20 size-14 text-primary-content shadow-lg transition-transform hover:scale-105 active:scale-95 sm:right-8 sm:bottom-[calc(2rem+env(safe-area-inset-bottom))]"
       >
         <svg
           aria-hidden="true"
@@ -185,10 +192,7 @@ export default function App() {
         </svg>
       </button>
 
-      <ModelSheet
-        open={modelsOpen}
-        onClose={() => setModelsOpen(false)}
-      />
+      {settingsSheet}
     </div>
   );
 }

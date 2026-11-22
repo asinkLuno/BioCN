@@ -90,24 +90,41 @@ export function useLibrary() {
     const missing = state.books.filter(
       (book) => book.hasCover && !requested.current.has(book.id),
     );
+    if (missing.length === 0) return;
+
     for (const book of missing) {
       requested.current.add(book.id);
-      libraryCover(book.id)
-        .then((cover) => {
-          // Nothing was stored, or the book left: forget the attempt so a book
-          // that comes back is fetched again instead of keeping a placeholder.
+    }
+    // Bound concurrent cover IPC fetches (max 4 in flight) and flush in small
+    // batches so opening a large shelf does not fire N concurrent IPC reads and
+    // N full-shelf re-renders at once.
+    const CONCURRENCY = 4;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < missing.length) {
+        const book = missing[cursor++];
+        if (!presentIds.current.has(book.id)) {
+          requested.current.delete(book.id);
+          continue;
+        }
+        try {
+          const cover = await libraryCover(book.id);
           if (!cover || !presentIds.current.has(book.id)) {
             requested.current.delete(book.id);
-            return;
+            continue;
           }
           setCovers((current) => ({
             ...current,
             [book.id]: `data:${cover.mime};base64,${cover.base64}`,
           }));
-        })
-        .catch(() => {
+        } catch {
           requested.current.delete(book.id);
-        });
+        }
+      }
+    };
+    const workers = Math.min(CONCURRENCY, missing.length);
+    for (let i = 0; i < workers; i++) {
+      void worker();
     }
   }, [state.books]);
 
@@ -139,8 +156,7 @@ export function useLibrary() {
     // Hidden right away so the tile responds to the tap. The flag also keeps a
     // queued import from flashing the tile back before the removal runs.
     hidden.current.add(id);
-    // The shelf as it was, so a failed removal can restore it verbatim.
-    const before = booksRef.current;
+    const removedBook = booksRef.current.find((book) => book.id === id) ?? null;
     setState((s) => ({ ...s, books: s.books.filter((book) => book.id !== id) }));
     await exclusive(async () => {
       try {
@@ -154,9 +170,17 @@ export function useLibrary() {
         if ("error" in result) {
           const reloaded = await libraryList().catch(() => null);
           setState((s) => ({ ...s, problem: message(result.error) }));
-          // The removal failed, so the book is still on disk: show it again even
-          // if the re-read failed too.
-          applySnapshot(reloaded ?? before);
+          // The removal failed, so the book is still on disk: show it again
+          // without wiping out any books imported while removal was queued.
+          if (reloaded !== null) {
+            applySnapshot(reloaded);
+          } else if (removedBook !== null) {
+            setState((s) =>
+              s.books.some((b) => b.id === removedBook.id)
+                ? s
+                : { ...s, books: [removedBook, ...s.books] },
+            );
+          }
           return;
         }
 
