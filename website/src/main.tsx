@@ -1,5 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import type { RefObject } from 'react';
+import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import ArrowDownToLine from 'lucide-react/icons/arrow-down-to-line';
 import Code2 from 'lucide-react/icons/code-2';
@@ -8,13 +7,6 @@ import Monitor from 'lucide-react/icons/monitor';
 import Smartphone from 'lucide-react/icons/smartphone';
 import Terminal from 'lucide-react/icons/terminal';
 import type { LucideIcon } from 'lucide-react';
-
-
-// HelixViewer 内含 three.js（~160KB gzip），拆成独立 chunk 首屏不阻塞解析：
-// 静态 import 会让 hero 上方整页等它下载完才可交互。
-const HelixViewer = lazy(() =>
-  import('./components/HelixViewer').then((m) => ({ default: m.HelixViewer })),
-);
 import './index.css';
 
 // 发布元数据由 CI 的 scripts/pages-release.mjs 从 GitHub Releases 生成并写进部署目录；
@@ -289,10 +281,90 @@ function App() {
           <div className="hero-content flex-col items-start gap-12 lg:flex-row lg:items-center lg:gap-16">
             <div className="hero-brand-lockup max-w-xl">
               <div className="hero-brand-mark" aria-hidden="true">
-                {/* 拆 chunk 的加载占位：透明方块，布局不跳（尺寸已由 hero-brand-mark 固定） */}
-                <Suspense fallback={<div style={{ width: 160, height: 160 }} />}>
-                  <HelixViewer size={160} speed={60} />
-                </Suspense>
+                {/* 品牌双螺旋内联 SVG 动画（与 design/logo/biocn-helix-launch.svg 同一标记与编排），
+                    通过中段 clipPath 与纵深渐变呈现「绿压橙 → 橙压绿 → 绿压橙」3D 穿插；
+                    零 three.js/WebGL 开销，首屏直接绘制并兼容 Safari/WebView。 */}
+                <svg viewBox="0 0 100 100" className="size-24 sm:size-40">
+                  <defs>
+                    <clipPath id="biocn-hero-over-mid">
+                      <rect x="34" y="37" width="32" height="20" />
+                    </clipPath>
+                    <linearGradient
+                      id="biocn-hero-grad-o"
+                      gradientUnits="userSpaceOnUse"
+                      x1="0"
+                      y1="89"
+                      x2="0"
+                      y2="11.5"
+                    >
+                      <stop offset="0%" stopColor="#d95f02" />
+                      <stop offset="13%" stopColor="#d95f02" />
+                      <stop offset="18%" stopColor="#b84e00" />
+                      <stop offset="23%" stopColor="#d95f02" />
+                      <stop offset="85%" stopColor="#d95f02" />
+                      <stop offset="90%" stopColor="#b84e00" />
+                      <stop offset="95%" stopColor="#d95f02" />
+                      <stop offset="100%" stopColor="#d95f02" />
+                    </linearGradient>
+                    <linearGradient
+                      id="biocn-hero-grad-g"
+                      gradientUnits="userSpaceOnUse"
+                      x1="0"
+                      y1="89"
+                      x2="0"
+                      y2="11.5"
+                    >
+                      <stop offset="0%" stopColor="#1b9e77" />
+                      <stop offset="49%" stopColor="#1b9e77" />
+                      <stop offset="54%" stopColor="#147e5e" />
+                      <stop offset="59%" stopColor="#1b9e77" />
+                      <stop offset="100%" stopColor="#1b9e77" />
+                    </linearGradient>
+                  </defs>
+                  <line
+                    className="biocn-helix-rung biocn-helix-rung-1"
+                    pathLength={100}
+                    x1="72"
+                    y1="87"
+                    x2="28"
+                    y2="87"
+                  />
+                  <line
+                    className="biocn-helix-rung biocn-helix-rung-2"
+                    pathLength={100}
+                    x1="28"
+                    y1="61"
+                    x2="72"
+                    y2="61"
+                  />
+                  <line
+                    className="biocn-helix-rung biocn-helix-rung-3"
+                    pathLength={100}
+                    x1="72"
+                    y1="33"
+                    x2="28"
+                    y2="33"
+                  />
+                  <path
+                    className="biocn-helix-strand biocn-helix-strand-o"
+                    stroke="url(#biocn-hero-grad-o)"
+                    pathLength={100}
+                    d="M 73 89 C 73 78.4 27 71.6 27 61 C 27 50.4 73 43.6 73 33 C 73 24.7 45 18.8 32.7 11.5"
+                  />
+                  <path
+                    className="biocn-helix-strand biocn-helix-strand-g"
+                    stroke="url(#biocn-hero-grad-g)"
+                    pathLength={100}
+                    d="M 27 89 C 27 78.4 73 71.6 73 61 C 73 50.4 27 43.6 27 33 C 27 24.7 55 18.8 67.3 11.5"
+                  />
+                  <path
+                    className="biocn-helix-strand biocn-helix-strand-o"
+                    stroke="url(#biocn-hero-grad-o)"
+                    clipPath="url(#biocn-hero-over-mid)"
+                    pathLength={100}
+                    d="M 73 89 C 73 78.4 27 71.6 27 61 C 27 50.4 73 43.6 73 33 C 73 24.7 45 18.8 32.7 11.5"
+                  />
+                </svg>
               </div>
               <div className="space-y-7">
                 <h1

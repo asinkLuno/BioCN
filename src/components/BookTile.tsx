@@ -1,13 +1,7 @@
-import { lazy, memo, Suspense, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import type { Book } from "../lib/library";
 import { bookHasColoring, bookHasActiveColoring, type ColoringProgress } from "../lib/reading";
 import { ExportDialog } from "./ExportDialog";
-
-// HelixViewer 内含 three.js（~136KB gzip）：染色动画是低频场景，拆成独立
-// chunk，书架首屏不为它买单（与 website/src/main.tsx 对同一组件的做法一致）。
-const HelixViewer = lazy(() =>
-  import("./HelixViewer").then((m) => ({ default: m.HelixViewer })),
-);
 import { useDialog, ModalBackdrop } from "./dialog";
 
 interface Props {
@@ -43,6 +37,7 @@ export const BookTile = memo(function BookTile({
   // A running job holds this book: opening, exporting, clearing or removing it
   // would race the analysis, so they are all refused while `progress` is set.
   const coloring = progress !== null;
+  const helixUid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const [coverBroken, setCoverBroken] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   /** Whether this book has coloring to clear, asked each time the menu opens. */
@@ -172,43 +167,126 @@ export const BookTile = memo(function BookTile({
           </button>
 
           {progress !== null && (
-            // The job's only trace, on its own tile: just the progress, in the
-            // strip the menu button and the disabled cover sit on. It is
-            // `role="status"`, not an alert — background work must not
-            // interrupt a screen reader — and it renders nothing once the job
-            // is over: done and cancelled are not news.
+            // Full-cover overlay for the running whole-book coloring job: the
+            // frosted veil + centered brand helix covers the entire cover while
+            // staying `pointer-events-none` so clicking the cover still opens
+            // the book and the top-right menu stays reachable above it.
             <div
               role="status"
               aria-label="着色进度"
-              className="absolute inset-x-0 bottom-0 flex items-center gap-2 bg-base-100/85 px-2.5 py-1.5 backdrop-blur-sm"
+              className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between bg-base-100/75 p-3 backdrop-blur-sm"
             >
-              {/* 品牌双螺旋转起来，作为染色的加载动画。它只是装饰：读屏
-                  用户要的信息由进度条与百分比承担，所以整体 aria-hidden。
-                  占位 span 钉住 32px，chunk 加载前后条高不跳。
-                  speed 与网站首页一致（60 ≈ 4 秒一圈）。 */}
-              <span aria-hidden="true" className="flex-none size-8">
-                <Suspense fallback={null}>
-                  <HelixViewer size={32} speed={60} />
-                </Suspense>
-              </span>
-              <progress
-                className="progress progress-primary h-1.5 w-full flex-1"
-                // `max` is the book's sentence count; a bar with no total is
-                // either an empty book or a job that has not parsed one yet,
-                // and 0 would be an invalid range.
-                value={progress.done}
-                max={Math.max(progress.total, 1)}
-              />
-              <span className="text-xs font-medium tabular-nums">
-                {progress.total > 0
-                  ? Math.min(100, Math.round((progress.done / progress.total) * 100))
-                  : 0}
-                %
-              </span>
+              {/* 居中放大展示品牌双螺旋内联 SVG 动画（与 design/logo/biocn-helix-launch.svg 同一标记），
+                  通过中段 clipPath 与纵深渐变呈现「绿压橙 → 橙压绿 → 绿压橙」3D 穿插；
+                  进度信息由底部的进度条与百分比承担。 */}
+              <div className="flex flex-1 items-center justify-center pt-4">
+                <svg
+                  aria-hidden="true"
+                  data-helix-loader=""
+                  viewBox="0 0 100 100"
+                  className="aspect-square w-3/5 max-w-32"
+                >
+                  <defs>
+                    <clipPath id={`biocn-${helixUid}-over-mid`}>
+                      <rect x="34" y="37" width="32" height="20" />
+                    </clipPath>
+                    <linearGradient
+                      id={`biocn-${helixUid}-grad-o`}
+                      gradientUnits="userSpaceOnUse"
+                      x1="0"
+                      y1="89"
+                      x2="0"
+                      y2="11.5"
+                    >
+                      <stop offset="0%" stopColor="#d95f02" />
+                      <stop offset="13%" stopColor="#d95f02" />
+                      <stop offset="18%" stopColor="#b84e00" />
+                      <stop offset="23%" stopColor="#d95f02" />
+                      <stop offset="85%" stopColor="#d95f02" />
+                      <stop offset="90%" stopColor="#b84e00" />
+                      <stop offset="95%" stopColor="#d95f02" />
+                      <stop offset="100%" stopColor="#d95f02" />
+                    </linearGradient>
+                    <linearGradient
+                      id={`biocn-${helixUid}-grad-g`}
+                      gradientUnits="userSpaceOnUse"
+                      x1="0"
+                      y1="89"
+                      x2="0"
+                      y2="11.5"
+                    >
+                      <stop offset="0%" stopColor="#1b9e77" />
+                      <stop offset="49%" stopColor="#1b9e77" />
+                      <stop offset="54%" stopColor="#147e5e" />
+                      <stop offset="59%" stopColor="#1b9e77" />
+                      <stop offset="100%" stopColor="#1b9e77" />
+                    </linearGradient>
+                  </defs>
+                  <line
+                    className="biocn-helix-rung biocn-helix-rung-1"
+                    pathLength={100}
+                    x1="72"
+                    y1="87"
+                    x2="28"
+                    y2="87"
+                  />
+                  <line
+                    className="biocn-helix-rung biocn-helix-rung-2"
+                    pathLength={100}
+                    x1="28"
+                    y1="61"
+                    x2="72"
+                    y2="61"
+                  />
+                  <line
+                    className="biocn-helix-rung biocn-helix-rung-3"
+                    pathLength={100}
+                    x1="72"
+                    y1="33"
+                    x2="28"
+                    y2="33"
+                  />
+                  <path
+                    className="biocn-helix-strand biocn-helix-strand-o"
+                    stroke={`url(#biocn-${helixUid}-grad-o)`}
+                    pathLength={100}
+                    d="M 73 89 C 73 78.4 27 71.6 27 61 C 27 50.4 73 43.6 73 33 C 73 24.7 45 18.8 32.7 11.5"
+                  />
+                  <path
+                    className="biocn-helix-strand biocn-helix-strand-g"
+                    stroke={`url(#biocn-${helixUid}-grad-g)`}
+                    pathLength={100}
+                    d="M 27 89 C 27 78.4 73 71.6 73 61 C 73 50.4 27 43.6 27 33 C 27 24.7 55 18.8 67.3 11.5"
+                  />
+                  <path
+                    className="biocn-helix-strand biocn-helix-strand-o"
+                    stroke={`url(#biocn-${helixUid}-grad-o)`}
+                    clipPath={`url(#biocn-${helixUid}-over-mid)`}
+                    pathLength={100}
+                    d="M 73 89 C 73 78.4 27 71.6 27 61 C 27 50.4 73 43.6 73 33 C 73 24.7 45 18.8 32.7 11.5"
+                  />
+                </svg>
+              </div>
+              <div className="flex w-full items-center gap-2">
+                {progress.total > 0 ? (
+                  <progress
+                    className="progress progress-primary h-2 min-w-0 flex-1"
+                    value={progress.done}
+                    max={progress.total}
+                  />
+                ) : (
+                  <progress className="progress progress-primary h-2 min-w-0 flex-1" />
+                )}
+                <span className="shrink-0 text-xs font-medium tabular-nums">
+                  {progress.total > 0
+                    ? `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%`
+                    : "准备中…"}
+                </span>
+              </div>
             </div>
           )}
 
-          <div ref={menuRoot} className="dropdown dropdown-end absolute top-2 right-2">
+          <div ref={menuRoot} className="dropdown dropdown-end absolute top-2 right-2 z-20">
             <button
               ref={trigger}
               type="button"

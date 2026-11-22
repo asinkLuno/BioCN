@@ -139,8 +139,10 @@ describe("library", () => {
     await user.click(within(tile).getByRole("menuitem", { name: "着色全书" }));
 
     expect(colorizeMock).toHaveBeenCalledWith("dune");
-    // Starting is fire-and-forget: the job reports itself, and the shelf cannot
-    // know a job exists until it says so.
+    // The strip appears immediately with the inline brand helix SVG animation
+    // while Rust parses the EPUB and counts uncolored sentences.
+    expect(jobStrip(tile)).toHaveTextContent("准备中…");
+    expect(jobStrip(tile).querySelector("svg[data-helix-loader]")).not.toBeNull();
     await waitFor(() => expect(subscribeMock).toHaveBeenCalled());
     act(() =>
       push({
@@ -155,17 +157,9 @@ describe("library", () => {
       }),
     );
     // The job's only trace is the strip on its own tile, never in the header.
-    await waitFor(() => expect(jobStrip(tile)).toBeInTheDocument());
+    await waitFor(() => expect(jobStrip(tile)).toHaveTextContent("25%"));
     expect(within(header()).queryByRole("status", { name: "着色进度" })).not.toBeInTheDocument();
-    expect(jobStrip(tile)).toHaveTextContent("25%");
-    // The strip's loader animation is the brand helix. jsdom has no WebGL, so
-    // HelixViewer shows its static fallback image; this is the same spot a real
-    // WebView renders as the rotating three.js helix, so seeing it proves the
-    // helix loader is mounted on the job's strip. It is lazy-loaded, so wait
-    // for the chunk.
-    await waitFor(() =>
-      expect(jobStrip(tile).querySelector('img[src$="helix-launch.svg"]')).not.toBeNull(),
-    );
+    expect(jobStrip(tile).querySelector("svg[data-helix-loader]")).not.toBeNull();
     // Whole-book coloring yields cooperatively to the active reader (P0 > P2),
     // so the book stays openable even while coloring runs in the background.
     expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeEnabled();

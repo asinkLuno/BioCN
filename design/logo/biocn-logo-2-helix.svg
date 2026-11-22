@@ -1,16 +1,39 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <!-- BioCN「语法双螺旋」：Bio 的双螺旋。绿链（谓语）与橙链（主语）相互缠绕，
-       紫色横档（宾语）在每一层把两者连成梯，三种颜色即主谓宾三色。
-       链条占满画布，顶端自然张开收尾（无箭头）。 -->
+  <!-- BioCN「语法双螺旋」：Bio 的双螺旋。绿链（谓语）与橙链（主语）以等距正弦曲线缠绕，
+       三个交点自下而上依次为「绿压橙 → 橙压绿 → 绿压橙」，紫色横档（宾语）在每一层把两者连成梯。
+       链条舒展居中，顶端自然张开收尾（无箭头）。 -->
+  <defs>
+    <clipPath id="biocn-over-mid">
+      <rect x="34" y="37" width="32" height="20"/>
+    </clipPath>
+    <linearGradient id="biocn-grad-o" gradientUnits="userSpaceOnUse" x1="0" y1="89" x2="0" y2="11.5">
+      <stop offset="0%" stop-color="#d95f02"/>
+      <stop offset="13%" stop-color="#d95f02"/>
+      <stop offset="18%" stop-color="#b84e00"/>
+      <stop offset="23%" stop-color="#d95f02"/>
+      <stop offset="85%" stop-color="#d95f02"/>
+      <stop offset="90%" stop-color="#b84e00"/>
+      <stop offset="95%" stop-color="#d95f02"/>
+      <stop offset="100%" stop-color="#d95f02"/>
+    </linearGradient>
+    <linearGradient id="biocn-grad-g" gradientUnits="userSpaceOnUse" x1="0" y1="89" x2="0" y2="11.5">
+      <stop offset="0%" stop-color="#1b9e77"/>
+      <stop offset="49%" stop-color="#1b9e77"/>
+      <stop offset="54%" stop-color="#147e5e"/>
+      <stop offset="59%" stop-color="#1b9e77"/>
+      <stop offset="100%" stop-color="#1b9e77"/>
+    </linearGradient>
+  </defs>
   <!-- 横档（底层，两端藏进链身） -->
-  <g stroke="#7570b3" stroke-width="4" stroke-linecap="round">
-    <line x1="31" y1="88" x2="69" y2="88"/>
-    <line x1="31" y1="58" x2="69" y2="58"/>
-    <line x1="31" y1="28" x2="69" y2="28"/>
+  <g stroke="#7570b3" stroke-width="3.6" stroke-linecap="round">
+    <line x1="72" y1="87" x2="28" y2="87"/>
+    <line x1="28" y1="61" x2="72" y2="61"/>
+    <line x1="72" y1="33" x2="28" y2="33"/>
   </g>
-  <!-- 双链 -->
-  <g fill="none" stroke-width="6" stroke-linecap="round">
-    <path d="M 70 92 C 70 78 30 72 30 58 C 30 44 70 40 70 28 C 70 16 54 12 34 7" stroke="#d95f02"/>
-    <path d="M 30 92 C 30 78 70 72 70 58 C 70 44 30 40 30 28 C 30 16 46 12 66 7" stroke="#1b9e77"/>
+  <!-- 双链：绿压橙 → 橙压绿 → 绿压橙 -->
+  <g fill="none" stroke-width="5.6" stroke-linecap="round">
+    <path d="M 73 89 C 73 78.4 27 71.6 27 61 C 27 50.4 73 43.6 73 33 C 73 24.7 45 18.8 32.7 11.5" stroke="url(#biocn-grad-o)"/>
+    <path d="M 27 89 C 27 78.4 73 71.6 73 61 C 73 50.4 27 43.6 27 33 C 27 24.7 55 18.8 67.3 11.5" stroke="url(#biocn-grad-g)"/>
+    <path d="M 73 89 C 73 78.4 27 71.6 27 61 C 27 50.4 73 43.6 73 33 C 73 24.7 45 18.8 32.7 11.5" stroke="url(#biocn-grad-o)" clip-path="url(#biocn-over-mid)"/>
   </g>
 </svg>

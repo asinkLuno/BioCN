@@ -67,9 +67,25 @@ export function useColoring() {
   const start = useCallback(
     async (id: string) => {
       setProblem(null);
+      // Show the progress strip immediately while Rust parses the EPUB and
+      // counts uncolored sentences; the real event (or fallback read below)
+      // replaces this placeholder.
+      setJob((current) =>
+        current ?? {
+          book: id,
+          done: 0,
+          total: 0,
+          chapters: 0,
+          chaptersTotal: 0,
+          finished: false,
+          cancelled: false,
+          error: null,
+        },
+      );
       try {
         await colorizeBook(id);
       } catch (error) {
+        setJob((current) => (current?.book === id && current.total === 0 ? null : current));
         setProblem(`着色全书没能开始：${message(error)}`);
         return;
       }
