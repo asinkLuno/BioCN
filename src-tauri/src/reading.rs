@@ -188,6 +188,37 @@ impl ReadingState {
         *self.active.lock().unwrap_or_else(|p| p.into_inner()) = Some(opened.clone());
         Ok(opened)
     }
+
+    /// Returns the spine chapter indices for `id`, reusing the already-open
+    /// `ActiveBook` or `full_book` cache if present, otherwise reading only the
+    /// OPF spine without replacing `active` or unzipping chapter XHTML.
+    pub fn spine_indices_sync<R: Runtime>(&self, app: &AppHandle<R>, id: &str) -> Result<Vec<usize>> {
+        if let Some(book) = self
+            .active
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .filter(|book| book.id == id)
+            .cloned()
+        {
+            return Ok(book.index.spine.iter().map(|s| s.index).collect());
+        }
+        if let Some(chapters) = self
+            .full_book
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .filter(|(cached_id, _)| cached_id == id)
+            .map(|(_, chs)| chs.clone())
+        {
+            return Ok(chapters.iter().map(|c| c.index).collect());
+        }
+        let library = app.state::<Library>();
+        let path = library
+            .book_file(id)
+            .ok_or_else(|| format!("book-missing: 书库里没有这本书（{id}）"))?;
+        crate::reader::spine_indices(&path).map_err(|e| e.to_string())
+    }
 }
 
 /// One spine entry for navigation and progress display.

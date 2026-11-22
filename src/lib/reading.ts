@@ -146,10 +146,22 @@ export const cancelColorizeBook = () => invoke<void>("colorize_book_cancel");
 
 export const clearBookCache = (id: string) => invoke<void>("clear_book_cache", { id });
 
-export const bookHasColoring = (id: string) => invoke<boolean>("book_has_coloring", { id });
+/**
+ * Coloring cache snapshot for one book relative to the active model weights.
+ */
+export interface BookColoringStatus {
+  /** Whether an analysis model is currently installed and ready. */
+  hasModel: boolean;
+  /** Whether any chapter markers exist under *any* weights (clearable cache). */
+  hasAnyCache: boolean;
+  /** Spine chapters marked colored under the active model weights. */
+  activeColored: number;
+  /** Total spine chapters in this book (matches whole-book coloring). */
+  totalChapters: number;
+}
 
-export const bookHasActiveColoring = (id: string) =>
-  invoke<boolean>("book_has_active_coloring", { id });
+export const bookColoringStatus = (id: string) =>
+  invoke<BookColoringStatus>("book_coloring_status", { id });
 
 export async function onColoringProgress(
   handler: (progress: ColoringProgress) => void,

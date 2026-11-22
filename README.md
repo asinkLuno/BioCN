@@ -1,120 +1,30 @@
 # BioCN
 
-Desktop reader for EPUB books with 主谓宾 (subject–predicate–object) coloring.
-A port of [asinkLuno/BioCN](https://github.com/asinkLuno/BioCN) to Tauri 2 +
-React 19, running the same analysis fully offline.
+**专为中文设计的仿生阅读器——自动给每句话的「主、谓、宾」染上颜色。**
 
-## What it does
+英文仿生阅读靠加粗每个单词的开头，帮 ADHD 和容易分心的读者抓住阅读节奏；但中文没有词的边界，直接照搬行不通。**BioCN** 换了个思路：用传统自然语言处理方法，基于 **HanLP** 进行二次开发，通过句法分析把每句话的主语、谓语、宾语标上不同颜色——眼睛循着颜色走，再长的句子也能一眼抓住主线。
 
-- **Library.** EPUB files are copied into the app, covers extracted, shelf shown
-  as a grid. Nothing is read from the original location afterwards.
-- **Reader.** One chapter at a time, with a table of contents and arrow-key
-  paging. Text is rendered from the EPUB's own block elements, so paragraphs
-  break where the book breaks them.
-- **Coloring.** Each sentence is split, tokenized, part-of-speech tagged and
-  dependency-parsed by three small ONNX models; subjects, predicates and objects
-  get distinct colors. Same colors as the web version.
-- **Coloring a whole book.** A book's menu can color every chapter that has none
-  yet. It runs in the background — other books stay readable, a progress bar
-  sits in the header, and the bar's cancel keeps whatever was already colored.
-  Results are stored in SQLite (`analysis.db`), keyed by a fingerprint of the
-  installed weights, so a second read is a query rather than a model run.
-- **Export.** A book's menu writes a colored copy as a new EPUB: the analyzed
-  words are wrapped in `<span class="svo …">`, everything else — layout,
-  images, fonts, the original stylesheet — is carried through. The colors'
-  CSS goes either into each chapter (`<style>`, one self-contained file) or
-  into a single `biocn.css` the chapters link to. Chapters with no analysis yet
-  are copied plain, and the dialog says how many.
-- **Offline.** The models are downloaded once (67 MB or 78 MB) from ModelScope
-  and verified against published sha256 digests. After that the app never
-  touches the network.
 
-## Layout
 
-```
-src/                    React frontend (daisyUI components only, per AGENTS.md)
-  components/           Reader, ModelSheet, BookTile, ColoringBar, ExportDialog
-  hooks/                useLibrary, useColoring
-  lib/                  typed invoke wrappers, theme, picker
-src-tauri/src/
-  library/              EPUB import, index, covers, per-book files
-  reader/               EPUB -> chapters -> paragraphs (quick-xml)
-  text/                 sentence splitting: corrected rules + byte-exact upstream port
-  analysis/             tokenizer / POS / dependency ONNX pipeline, EISner decoding
-  cache.rs              SQLite analyses: sentences + colored-chapter markers
-  analyzer.rs           主谓宾 analyzer: session lifecycle, whole-book coloring
-  export.rs             colored EPUB out: span splicing + inline/external CSS
-  reading.rs            book_open / book_chapter commands
-  models.rs             ModelScope download, resume, sha256 verify, install
-  settings.rs           settings.json (atomic writes)
-tools/                  Python: export/quantize/convert/publish the models
-```
+## 核心功能
 
-## Development
+* **本地书架管理**：导入 EPUB 电子书后自动提取封面并生成网格书架。书籍文件会复制到应用目录中独立保存，不再依赖原始文件路径。
+* **清爽的阅读体验**：支持目录跳转与键盘方向键翻页。完整还原 EPUB 原本的段落结构，排版干净克制。
+* **主谓宾句法染色**：基于 HanLP 句法分析模型进行二次开发，在本地拆解句子结构，为每句话的**主语、谓语、宾语**标上不同颜色，视觉配色与网页版保持一致。
+* **全书后台批量染色**：支持一键为整本书的未读章节提前染色。任务在后台静默运行，完全不耽误你阅读其他书籍；顶部有实时进度条，随时可取消（已完成的进度会自动保留）。分析结果缓存在本地数据库中，二次打开秒开，无需重复计算。
+* **导出染色后的 EPUB**：可将处理好的书籍重新导出为标准的 EPUB 文件，完整保留原书的排版、图片、字体和样式表（支持将配色样式内嵌进每一章，或打包为独立的 `biocn.css`）。尚未染色的章节会原样保留，并在导出时提示具体章数。
+* **纯本地离线运行**：首次打开时从魔搭（ModelScope）下载一次模型权重（约 67 MB 或 78 MB）并自动校验完整性，之后**永远不会连接网络**，阅读隐私完全留在本地。
 
-```sh
-yarn install
-yarn tauri dev          # desktop
-yarn dev                # frontend only, in a browser (no Rust side)
 
-yarn test               # vitest
-cargo test --lib        # in src-tauri/
-yarn build              # tsc + vite
-```
 
-Analysis needs weights. A debug build reads them from `tools/models/<variant>/`
-when present (see `tools/README.md`), otherwise download them once from
-Settings → Models. `src-tauri/examples/` holds three diagnostic harnesses:
+## 致谢
 
-```sh
-cargo run --release --example bookdump -- <book.epub>   # paragraph extraction
-cargo run --release --example colordump -- <book.epub> <chapter> <paragraphs>
-cargo run --release --example svodemo -- <in.txt>                       # plain text -> SVO spans
-```
+* 本项目的核心中文分词、词性标注与依存句法分析能力均**基于 [HanLP](https://github.com/hankcs/HanLP) 进行二次开发**（导出并量化为本地 ONNX 模型运行）。衷心感谢原作者 [@hankcs](https://github.com/hankcs) 及 HanLP 社区在中文自然语言处理领域的长期开源贡献，让轻量、高精度的离线中文句法分析成为可能。
 
-## Landing page
 
-`website/` is a standalone React 19 + daisyUI 5 project (same Tailwind 4
-setup as the app) deployed to
-[asinkluno.github.io/BioCN](https://asinkluno.github.io/BioCN/) as part of
-the release workflow, after a Release is published. It only combines daisyUI
-components — the same rule as the app. The page downloads `latest.json` /
-`releases.json` at runtime; those are generated by `scripts/pages-release.mjs`
-from the GitHub Releases API (one entry per release, every installer
-classified by extension into Android/Windows/macOS/Linux, SHA-256 taken from
-the asset digest with the `checksums-*.sha256` manifests as fallback) and are
-not hand-edited.
+## 开源协议
 
-```sh
-yarn --cwd website install
-yarn --cwd website dev      # http://127.0.0.1:5173, without release metadata
-yarn --cwd website build    # outputs website/dist (base: './')
-GH_TOKEN=... node scripts/pages-release.mjs   # writes website/dist/latest.json
-```
+BioCN 基于 [GPL-3.0-or-later](https://www.google.com/search?q=LICENSE) 协议开源。
 
-Deployment runs in CI (`pages` + `deploy` jobs in release.yml); rerunning the
-workflow also regenerates the metadata, so a failed Pages step is fixed by
-rerunning, not by pushing to a branch.
-
-## Notes on the sentence splitter
-
-The web version calls `hanlp.utils.rules.split_sentence`, a 12-line regex that
-splits after `。！？` but not when the next character is `”’`, and splits `？！`
-down the middle. `src-tauri/src/text/upstream.rs` is a byte-exact port of it,
-kept for the "match the web version exactly" setting.
-
-The default (`text/corrected.rs`) is a single-pass state machine over the same
-rules with two fixes: `」』》〉】〕` count as closing quotes, and a run of terminal
-punctuation ends a sentence once. Against the upstream splitter as ground truth
-on eight real books (35,181 paragraphs), it agrees on 86–93% of boundaries;
-most of the disagreement is where upstream breaks inside a quoted clause.
-
-## License
-
-BioCN is licensed under [GPL-3.0-or-later](LICENSE).
-
-- The analysis models are derived from HanLP, which is Apache-2.0; see
-  `tools/LICENSE`.
-- The web demo's serif font is a subset of Source Han Serif SC (思源宋体),
-  licensed under the SIL Open Font License 1.1
-  (`website/public/fonts/OFL-1.1.txt`).
+* 底层句法分析模型衍生自 [HanLP](https://github.com/hankcs/HanLP)（采用 Apache-2.0 协议，详见 `tools/LICENSE`）。
+* 网页演示中使用的衬线字体为思源宋体（Source Han Serif SC）子集，遵循 SIL Open Font License 1.1 协议（详见 `website/public/fonts/OFL-1.1.txt`）。

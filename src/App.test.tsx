@@ -29,8 +29,7 @@ vi.mock("./lib/reading", async (importOriginal) => ({
   coloringProgress: vi.fn(),
   cancelColorizeBook: vi.fn(),
   clearBookCache: vi.fn(),
-  bookHasColoring: vi.fn(),
-  bookHasActiveColoring: vi.fn(),
+  bookColoringStatus: vi.fn(),
   onColoringProgress: vi.fn(),
 }));
 
@@ -50,9 +49,22 @@ const colorizeMock = vi.mocked(reading.colorizeBook);
 const progressMock = vi.mocked(reading.coloringProgress);
 const cancelMock = vi.mocked(reading.cancelColorizeBook);
 const clearCacheMock = vi.mocked(reading.clearBookCache);
-const hasColoringMock = vi.mocked(reading.bookHasColoring);
-const hasActiveColoringMock = vi.mocked(reading.bookHasActiveColoring);
+const coloringStatusMock = vi.mocked(reading.bookColoringStatus);
 const subscribeMock = vi.mocked(reading.onColoringProgress);
+
+const STATUS_NONE: reading.BookColoringStatus = {
+  hasModel: true,
+  hasAnyCache: false,
+  activeColored: 0,
+  totalChapters: 4,
+};
+
+const STATUS_FULL: reading.BookColoringStatus = {
+  hasModel: true,
+  hasAnyCache: true,
+  activeColored: 4,
+  totalChapters: 4,
+};
 
 /** The handler `useColoring` subscribed with, so a test can emit progress. */
 let push: (progress: reading.ColoringProgress) => void = () => {};
@@ -99,8 +111,7 @@ describe("library", () => {
     colorizeMock.mockResolvedValue(undefined);
     cancelMock.mockResolvedValue(undefined);
     progressMock.mockResolvedValue(null);
-    hasColoringMock.mockResolvedValue(false);
-    hasActiveColoringMock.mockResolvedValue(false);
+    coloringStatusMock.mockResolvedValue(STATUS_NONE);
     subscribeMock.mockImplementation(async (handler) => {
       push = handler;
       return () => {};
@@ -339,9 +350,9 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
-    hasActiveColoringMock.mockResolvedValue(true);
+    coloringStatusMock.mockResolvedValue(STATUS_FULL);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    // The item greys until the menu's coloring check answers true.
+    // The item greys until the menu's coloring check answers FULL.
     const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
     await waitFor(() => expect(exportItem).toBeEnabled());
     await user.click(exportItem);
@@ -372,9 +383,9 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
-    hasActiveColoringMock.mockResolvedValue(true);
+    coloringStatusMock.mockResolvedValue(STATUS_FULL);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    // The item greys until the menu's coloring check answers true.
+    // The item greys until the menu's coloring check answers FULL.
     const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
     await waitFor(() => expect(exportItem).toBeEnabled());
     await user.click(exportItem);
@@ -393,9 +404,9 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
-    hasActiveColoringMock.mockResolvedValue(true);
+    coloringStatusMock.mockResolvedValue(STATUS_FULL);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    // The item greys until the menu's coloring check answers true.
+    // The item greys until the menu's coloring check answers FULL.
     const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
     await waitFor(() => expect(exportItem).toBeEnabled());
     await user.click(exportItem);
@@ -417,9 +428,9 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
-    hasActiveColoringMock.mockResolvedValue(true);
+    coloringStatusMock.mockResolvedValue(STATUS_FULL);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    // The item greys until the menu's coloring check answers true.
+    // The item greys until the menu's coloring check answers FULL.
     const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
     await waitFor(() => expect(exportItem).toBeEnabled());
     await user.click(exportItem);
@@ -440,9 +451,9 @@ describe("library", () => {
     await screen.findByText("1 本书");
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
-    hasActiveColoringMock.mockResolvedValue(true);
+    coloringStatusMock.mockResolvedValue(STATUS_FULL);
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
-    // The item greys until the menu's coloring check answers true.
+    // The item greys until the menu's coloring check answers FULL.
     const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
     await waitFor(() => expect(exportItem).toBeEnabled());
     await user.click(exportItem);
@@ -458,9 +469,9 @@ describe("library", () => {
   it("will not export the book it is coloring", async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dune]);
-    // The book has coloring: the grey must come from the running job, not
+    // The book has full coloring: the grey must come from the running job, not
     // from an empty cache.
-    hasActiveColoringMock.mockResolvedValue(true);
+    coloringStatusMock.mockResolvedValue(STATUS_FULL);
     progressMock.mockResolvedValue({
       book: "dune",
       done: 50,
@@ -562,10 +573,140 @@ describe("library", () => {
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
     // The answer, not the pending state, is what must grey the item: wait for
     // the check to have run before asserting.
-    await waitFor(() => expect(hasActiveColoringMock).toHaveBeenCalledWith("dune"));
+    await waitFor(() => expect(coloringStatusMock).toHaveBeenCalledWith("dune"));
     const item = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
     expect(item).toBeDisabled();
     expect(item).toHaveAttribute("title", "还没有着色，先着色全书再导出");
+  });
+
+  it("greys out 导出着色后的图书 when the book is only partially colored", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    coloringStatusMock.mockResolvedValue({
+      hasModel: true,
+      hasAnyCache: true,
+      activeColored: 2,
+      totalChapters: 4,
+    });
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await waitFor(() => expect(coloringStatusMock).toHaveBeenCalledWith("dune"));
+
+    expect(within(tile).getByText("已着色 2/4 章")).toBeInTheDocument();
+    expect(within(tile).getByRole("menuitem", { name: "着色全书" })).toBeEnabled();
+    const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
+    expect(exportItem).toBeDisabled();
+    expect(exportItem).toHaveAttribute("title", "已着色 2/4 章，完成着色全书后才能导出");
+    expect(within(tile).getByRole("menuitem", { name: "清除着色缓存" })).toBeEnabled();
+  });
+
+  it("greys out 着色全书 and enables 导出着色后的图书 once the book is fully colored", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    coloringStatusMock.mockResolvedValue(STATUS_FULL);
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await waitFor(() => expect(coloringStatusMock).toHaveBeenCalledWith("dune"));
+
+    expect(within(tile).getByText("全书已着色（4 章）")).toBeInTheDocument();
+    const colorizeItem = within(tile).getByRole("menuitem", { name: "着色全书" });
+    expect(colorizeItem).toBeDisabled();
+    expect(colorizeItem).toHaveAttribute("title", "全书已着色");
+    expect(within(tile).getByRole("menuitem", { name: "导出着色后的图书" })).toBeEnabled();
+    expect(within(tile).getByRole("menuitem", { name: "清除着色缓存" })).toBeEnabled();
+  });
+
+  it("greys out 着色全书 and 导出着色后的图书 when no model is installed", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    coloringStatusMock.mockResolvedValue({
+      hasModel: false,
+      hasAnyCache: false,
+      activeColored: 0,
+      totalChapters: 4,
+    });
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await waitFor(() => expect(coloringStatusMock).toHaveBeenCalledWith("dune"));
+
+    expect(within(tile).getByText("请先在设置中下载模型")).toBeInTheDocument();
+    const colorizeItem = within(tile).getByRole("menuitem", { name: "着色全书" });
+    expect(colorizeItem).toBeDisabled();
+    expect(colorizeItem).toHaveAttribute("title", "请先在设置中下载模型");
+    const exportItem = within(tile).getByRole("menuitem", { name: "导出着色后的图书" });
+    expect(exportItem).toBeDisabled();
+    expect(exportItem).toHaveAttribute("title", "请先在设置中下载模型");
+    expect(within(tile).getByRole("menuitem", { name: "清除着色缓存" })).toBeDisabled();
+    expect(within(tile).getByRole("menuitem", { name: "从书架移除" })).toBeEnabled();
+  });
+
+  it("keeps 清除着色缓存 enabled without a model when stale cache exists", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    coloringStatusMock.mockResolvedValue({
+      hasModel: false,
+      hasAnyCache: true,
+      activeColored: 0,
+      totalChapters: 4,
+    });
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await waitFor(() => expect(coloringStatusMock).toHaveBeenCalledWith("dune"));
+
+    expect(within(tile).getByRole("menuitem", { name: "着色全书" })).toBeDisabled();
+    expect(within(tile).getByRole("menuitem", { name: "导出着色后的图书" })).toBeDisabled();
+    expect(within(tile).getByRole("menuitem", { name: "清除着色缓存" })).toBeEnabled();
+  });
+
+  it("handles stale cache after switching model variant", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    coloringStatusMock.mockResolvedValue({
+      hasModel: true,
+      hasAnyCache: true,
+      activeColored: 0,
+      totalChapters: 4,
+    });
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await waitFor(() => expect(coloringStatusMock).toHaveBeenCalledWith("dune"));
+
+    expect(within(tile).getByText("当前模型尚未着色")).toBeInTheDocument();
+    expect(within(tile).getByRole("menuitem", { name: "着色全书" })).toBeEnabled();
+    expect(within(tile).getByRole("menuitem", { name: "导出着色后的图书" })).toBeDisabled();
+    expect(within(tile).getByRole("menuitem", { name: "清除着色缓存" })).toBeEnabled();
+  });
+
+  it("does not falsely enable export when status lookup fails", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    coloringStatusMock.mockRejectedValue("book-missing");
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
+    await waitFor(() => expect(coloringStatusMock).toHaveBeenCalledWith("dune"));
+
+    expect(within(tile).getByRole("menuitem", { name: "着色全书" })).toBeDisabled();
+    expect(within(tile).getByRole("menuitem", { name: "导出着色后的图书" })).toBeDisabled();
+    expect(within(tile).getByRole("menuitem", { name: "清除着色缓存" })).toBeDisabled();
+    expect(within(tile).getByRole("menuitem", { name: "从书架移除" })).toBeEnabled();
   });
 
   it("greys out 清除着色缓存 while the book has no coloring", async () => {
@@ -578,7 +719,7 @@ describe("library", () => {
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));
     // The answer, not the pending state, is what must grey the item: wait for
     // the check to have run before asserting.
-    await waitFor(() => expect(hasColoringMock).toHaveBeenCalledWith("dune"));
+    await waitFor(() => expect(coloringStatusMock).toHaveBeenCalledWith("dune"));
     const item = within(tile).getByRole("menuitem", { name: "清除着色缓存" });
     expect(item).toBeDisabled();
     expect(item).toHaveAttribute("title", "还没有着色缓存");
@@ -588,7 +729,7 @@ describe("library", () => {
   it("clears a book's coloring cache after asking", async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([dune, emma]);
-    hasColoringMock.mockResolvedValue(true);
+    coloringStatusMock.mockResolvedValue(STATUS_FULL);
     render(<App />);
     expect(await screen.findByText("2 本书")).toBeInTheDocument();
 

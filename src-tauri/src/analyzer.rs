@@ -1443,27 +1443,70 @@ pub async fn clear_book_cache<R: Runtime>(app: AppHandle<R>, id: String) -> Resu
         .map_err(err)?
 }
 
-/// Whether `id` has coloring to clear: any chapter marker, under any weights —
-/// the same scope [`clear_book_cache`] works on.
-///
-/// The book menu greys 清除着色缓存 off when there is nothing to clear, and
-/// answering that must not parse the whole book: the markers settle it with
-/// one lookup, taken at menu-open so it is current when the item is clicked.
-#[tauri::command]
-pub async fn book_has_coloring<R: Runtime>(app: AppHandle<R>, id: String) -> Result<bool> {
-    app.state::<AnalysisCache>().has_coloring(&id)
+/// Snapshot of a book's coloring cache relative to the active model weights,
+/// queried when the book's context menu opens so every action's enabled state
+/// and tooltip reflect reality without parsing the whole EPUB.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookColoringStatus {
+    /// Whether an analysis model is currently installed and ready.
+    pub has_model: bool,
+    /// Whether the book has any chapter markers under *any* weights — the scope
+    /// [`clear_book_cache`] deletes.
+    pub has_any_cache: bool,
+    /// Spine chapters of this book marked colored under the active weights
+    /// (`0` when `has_model` is false).
+    pub active_colored: usize,
+    /// Total spine chapters in this book (matches [`colorize_book`]).
+    pub total_chapters: usize,
 }
 
-/// Whether `id` has coloring under the *active* weights — the only slice
-/// [`crate::export::export_book`] reads.
-///
-/// The book menu greys 导出着色后的图书 off without it: exporting a book with
-/// no coloring under these weights would write the plain book back out, and a
-/// variant left behind does not color anything the reader sees.
+fn compute_book_coloring_status(
+    cache: &AnalysisCache,
+    book_id: &str,
+    spine_indices: &[usize],
+    active_weights: Option<&str>,
+) -> Result<BookColoringStatus> {
+    let has_any_cache = cache.has_coloring(book_id)?;
+    let (has_model, active_colored) = match active_weights {
+        Some(weights) => {
+            let colored = cache.colored_chapters(weights, book_id)?;
+            let count = spine_indices
+                .iter()
+                .filter(|idx| colored.contains(idx))
+                .count();
+            (true, count)
+        }
+        None => (false, 0),
+    };
+    Ok(BookColoringStatus {
+        has_model,
+        has_any_cache,
+        active_colored,
+        total_chapters: spine_indices.len(),
+    })
+}
+
+/// Reports a book's coloring coverage under the active model weights, plus
+/// whether any cache exists at all (under any weights) and whether a model is
+/// installed. Never fails merely because no model is installed — returns
+/// `has_model: false` so the menu can grey out actions with a clear hint.
 #[tauri::command]
-pub async fn book_has_active_coloring<R: Runtime>(app: AppHandle<R>, id: String) -> Result<bool> {
-    let weights = crate::cache::weights(&app)?;
-    app.state::<AnalysisCache>().has_coloring_under(&weights, &id)
+pub async fn book_coloring_status<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+) -> Result<BookColoringStatus> {
+    let weights = crate::cache::weights(&app).ok();
+    let app_for_blocking = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let spine_indices = app_for_blocking
+            .state::<crate::reading::ReadingState>()
+            .spine_indices_sync(&app_for_blocking, &id)?;
+        let cache = app_for_blocking.state::<AnalysisCache>();
+        compute_book_coloring_status(&cache, &id, &spine_indices, weights.as_deref())
+    })
+    .await
+    .map_err(err)?
 }
 
 /// A job that lost the race is the UI's second guess, not something the user
@@ -1704,5 +1747,91 @@ mod tests {
         // started, which is what makes coloring two books in a row possible.
         state.begin("emma", 4, 1).expect("the slot is free again");
         assert!(state.coloring("emma"));
+    }
+
+    #[test]
+    fn book_coloring_status_distinguishes_none_stale_partial_full_and_missing_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = AnalysisCache::open(dir.path()).unwrap();
+        let spine = [0, 1, 2, 3];
+
+        // No model, no cache.
+        assert_eq!(
+            compute_book_coloring_status(&cache, "dune", &spine, None).unwrap(),
+            BookColoringStatus {
+                has_model: false,
+                has_any_cache: false,
+                active_colored: 0,
+                total_chapters: 4,
+            }
+        );
+
+        // Model present, no cache (NONE).
+        assert_eq!(
+            compute_book_coloring_status(&cache, "dune", &spine, Some("w1")).unwrap(),
+            BookColoringStatus {
+                has_model: true,
+                has_any_cache: false,
+                active_colored: 0,
+                total_chapters: 4,
+            }
+        );
+
+        // Partial under w1 (2 of 4 chapters).
+        cache.mark_chapter("w1", "dune", 0).unwrap();
+        cache.mark_chapter("w1", "dune", 2).unwrap();
+        assert_eq!(
+            compute_book_coloring_status(&cache, "dune", &spine, Some("w1")).unwrap(),
+            BookColoringStatus {
+                has_model: true,
+                has_any_cache: true,
+                active_colored: 2,
+                total_chapters: 4,
+            }
+        );
+
+        // Switched to w2 (STALE_ONLY): old cache exists, active coverage is 0.
+        assert_eq!(
+            compute_book_coloring_status(&cache, "dune", &spine, Some("w2")).unwrap(),
+            BookColoringStatus {
+                has_model: true,
+                has_any_cache: true,
+                active_colored: 0,
+                total_chapters: 4,
+            }
+        );
+
+        // Model deleted after coloring: has_model is false, has_any_cache stays true.
+        assert_eq!(
+            compute_book_coloring_status(&cache, "dune", &spine, None).unwrap(),
+            BookColoringStatus {
+                has_model: false,
+                has_any_cache: true,
+                active_colored: 0,
+                total_chapters: 4,
+            }
+        );
+
+        // Out-of-spine marker does not inflate active_colored past total_chapters.
+        cache.mark_chapter("w1", "dune", 99).unwrap();
+        assert_eq!(
+            compute_book_coloring_status(&cache, "dune", &spine, Some("w1"))
+                .unwrap()
+                .active_colored,
+            2
+        );
+
+        // Complete all 4 spine chapters under w1 (FULL).
+        cache.mark_chapter("w1", "dune", 1).unwrap();
+        cache.mark_chapter("w1", "dune", 3).unwrap();
+        assert_eq!(
+            compute_book_coloring_status(&cache, "dune", &spine, Some("w1")).unwrap(),
+            BookColoringStatus {
+                has_model: true,
+                has_any_cache: true,
+                active_colored: 4,
+                total_chapters: 4,
+            }
+        );
     }
 }

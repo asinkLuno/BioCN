@@ -45,9 +45,22 @@ export function bookResourceUrl(
     params.push(`theme=${initialPrefs.theme}`);
     params.push(`mode=${initialPrefs.viewMode}`);
     params.push(`biocn=${initialPrefs.coloringEnabled ? "on" : "off"}`);
-    params.push(`palette=${initialPrefs.coloringPalette}`);
+    params.push(`font=${initialPrefs.fontFamily}`);
+    params.push(`margin=${initialPrefs.pageMargin}`);
+    params.push(`align=${initialPrefs.textAlign}`);
+    params.push(`dim=${initialPrefs.dimImagesInDark ? "on" : "off"}`);
+    if (initialPrefs.svoColors.subject) {
+      params.push(`cs=${initialPrefs.svoColors.subject.slice(1)}`);
+    }
+    if (initialPrefs.svoColors.predicate) {
+      params.push(`cp=${initialPrefs.svoColors.predicate.slice(1)}`);
+    }
+    if (initialPrefs.svoColors.object) {
+      params.push(`co=${initialPrefs.svoColors.object.slice(1)}`);
+    }
     params.push(`fs=${initialPrefs.fontSize}`);
     params.push(`lh=${initialPrefs.lineHeight.toFixed(1)}`);
+    params.push(`ps=${initialPrefs.paragraphSpacing.toFixed(1)}`);
   }
   return params.length > 0 ? `${base}?${params.join("&")}` : base;
 }

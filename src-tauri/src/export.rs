@@ -59,14 +59,14 @@ pub struct ExportReport {
 /// available. Changing one without the other is a mismatch, not a build error,
 /// which is why this note exists.
 pub const STYLESHEET: &str = "\
-.svo-subject { color: #d95f02; }
-.svo-predicate { color: #1b9e77; }
-.svo-object { color: #7570b3; }
+.svo-subject { color: #c04e08; }
+.svo-predicate { color: #137a5b; }
+.svo-object { color: #635ba6; }
 
 @media (prefers-color-scheme: dark) {
-  .svo-subject { color: #f28e4b; }
-  .svo-predicate { color: #4ec6a3; }
-  .svo-object { color: #a99cf0; }
+  .svo-subject { color: #ea9558; }
+  .svo-predicate { color: #58c4a3; }
+  .svo-object { color: #aba0eb; }
 }
 ";
 
@@ -1032,7 +1032,7 @@ mod tests {
     fn an_inline_export_embeds_the_styles_in_each_chapter() {
         let html = "<html><head><title>一章</title></head><body><p>字。</p></body></html>";
         let out = style(html, "/OEBPS/text", Stylesheet::Inline, "/OEBPS/biocn.css");
-        assert!(out.contains(".svo-subject { color: #d95f02; }"), "{out}");
+        assert!(out.contains(".svo-subject { color: #c04e08; }"), "{out}");
         assert!(!out.contains("<link"), "{out}");
     }
 

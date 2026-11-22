@@ -1,20 +1,14 @@
-//! BioCN sentence analysis: preprocessing -> ONNX session calls -> decoding
-//! -> BioCN 主谓宾 segments. The three model calls live on the `Sessions`
-//! side (engine.rs); if a test ever needs to replay recorded tensors instead
-//! of running ONNX, re-introduce a runner trait there — no mock exists yet,
-//! so the indirection was removed as dead weight.
+//! BioCN sentence analysis stages: preprocessing -> ONNX session calls ->
+//! decoding -> BioCN 主谓宾 segments.
 //!
-//! One sentence walks three graphs in order — TOK, POS, DEP — and each walk
-//! exists exactly once, as [`tok_stage`], [`pos_stage`] and [`dep_stage`]:
-//! [`analyze_all`] streams sentences through them on one dedicated thread per
-//! graph. There is no serial driver left — the pipeline is the only mode.
+//! One sentence walks three graphs in order — TOK, POS, DEP — implemented once
+//! as [`tok_stage`], [`pos_stage`] and [`dep_stage`] and driven by the
+//! persistent three-stage priority scheduler in [`crate::analysis::scheduler`].
 //!
 //! Hard limit from `tools/README.md`: a single call may carry at most 510
 //! subwords for TOK and 510 words for POS/DEP (the exported graphs have no
 //! sliding-window branch — longer inputs index out of bounds). Inputs are
 //! chunked below those limits.
-
-use std::sync::mpsc;
 
 use crate::analysis::decode::{Word, decode_dep, decode_pos, decode_words};
 use crate::analysis::engine::Sessions;
@@ -40,10 +34,6 @@ pub type PosBundle = (Vec<u16>, Vec<String>, Vec<String>, Vec<DepPack>);
 /// `Ok(None)` marks "analyzed, nothing to paint", `Err` fails that one
 /// sentence alone.
 pub type SentenceAnswer = std::result::Result<Option<Vec<Segment>>, String>;
-
-/// `(index, answer)` pairs a stage reports for the sentences it finished,
-/// FIFO over its slice of the input.
-type StageDone = Vec<(usize, SentenceAnswer)>;
 
 /// Stage one: the TOK graph. Tokenizes `sentence`, runs every subword chunk
 /// through the graph, decodes the words. `None` means there is nothing to
@@ -151,114 +141,4 @@ pub fn dep_stage(
 
     let roles = char_roles(&text, &tokens, &deps, &pos);
     Ok(to_segments(&text, &roles))
-}
-
-
-/// Every sentence of `sentences` through the three graphs, answers back in
-/// input order.
-///
-/// The three graphs sit on three dedicated threads with bounded queues
-/// between them: each stage owns its session outright, so no session mutex
-/// is ever contended. Measured on desktop (9700X, int8): the graphs take
-/// 31%/31%/37% of a serial sentence and the pure-Rust glue under 1%, so the
-/// pipeline's throughput is capped by the DEP stage and lands right under
-/// that cap — ~390 sentences/s versus ~140 serial, at a lower thread count
-/// than worker parallelism would need for the same rate.
-///
-/// A stage failure is that sentence's failure alone: it comes back as `Err`
-/// and the stream moves on. `Ok(None)` marks a sentence with nothing to
-/// color. Queue depth is small on purpose — it bounds the memory a slow
-/// downstream stage can build up, and measured latency, not throughput, is
-/// what a deeper queue would buy.
-pub fn analyze_all<'s>(
-    res: &BioCNResources,
-    sessions: &Sessions,
-    sentences: &[&'s str],
-) -> Vec<(&'s str, SentenceAnswer)> {
-    if sentences.is_empty() {
-        return Vec::new();
-    }
-
-    // Each stage owns one answer vec and writes only sentences it finished —
-    // a sentence's answer comes from exactly one stage, whichever stops
-    // carrying it. Scoped threads borrow all three; the caller is a blocking
-    // thread that has nothing else to do until the join anyway.
-    let mut tok_done: StageDone = Vec::new();
-    let mut pos_done: StageDone = Vec::new();
-    let mut dep_done: StageDone = Vec::new();
-
-    std::thread::scope(|scope| {
-        let res = &res;
-        let sessions = &sessions;
-        let tok_done = &mut tok_done;
-        let pos_done = &mut pos_done;
-        let dep_done = &mut dep_done;
-        let (tok_tx, tok_rx) = mpsc::sync_channel::<(usize, Vec<u16>, Vec<Word>)>(4);
-        let (dep_tx, dep_rx) =
-            mpsc::sync_channel::<(usize, Vec<u16>, Vec<String>, Vec<String>, Vec<(PackedWords, usize)>)>(4);
-
-        // Stage one: sentence -> words. Empty sentences never leave it.
-        scope.spawn(move || {
-            for (index, sentence) in sentences.iter().enumerate() {
-                match tok_stage(res, sessions, sentence) {
-                    Ok(Some((text, words))) => {
-                        if tok_tx.send((index, text, words)).is_err() {
-                            return;
-                        }
-                    }
-                    Ok(None) => tok_done.push((index, Ok(None))),
-                    Err(error) => tok_done.push((index, Err(error.to_string()))),
-                }
-            }
-        });
-
-        // Stage two: words -> POS tags + packed DEP tensors.
-        scope.spawn(move || {
-            for (index, text, words) in tok_rx.iter() {
-                match pos_stage(res, sessions, text, words) {
-                    Ok((text, tokens, pos, packs)) => {
-                        if dep_tx.send((index, text, tokens, pos, packs)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(error) => pos_done.push((index, Err(error.to_string()))),
-                }
-            }
-        });
-
-        // Stage three: DEP scores -> eisner -> 主谓宾 segments.
-        scope.spawn(move || {
-            for (index, text, tokens, pos, packs) in dep_rx.iter() {
-                let answer =
-                    dep_stage(res, sessions, text, tokens, pos, packs).map_err(|e| e.to_string());
-                dep_done.push((index, answer.map(Some)));
-            }
-        });
-    });
-
-    // Each stage's vec is FIFO over its own slice of the sentences, so all
-    // three are ascending by index and every sentence lands in exactly one
-    // slot; a gap would mean a stage dropped a sentence, which no path above
-    // does.
-    let mut finished: Vec<Option<SentenceAnswer>> =
-        (0..sentences.len()).map(|_| None).collect();
-    for (index, answer) in tok_done {
-        finished[index] = Some(answer);
-    }
-    for (index, answer) in pos_done {
-        finished[index] = Some(answer);
-    }
-    for (index, answer) in dep_done {
-        finished[index] = Some(answer);
-    }
-    finished
-        .into_iter()
-        .enumerate()
-        .map(|(index, slot)| {
-            let answer = slot.unwrap_or_else(|| {
-                panic!("analyze_all: sentence {index} never reached a final stage")
-            });
-            (sentences[index], answer)
-        })
-        .collect()
 }

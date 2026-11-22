@@ -6,8 +6,8 @@ export function BrandMark({ className = '' }: { className?: string }) {
       className={`select-none inline-flex items-baseline font-bold leading-none tracking-tight ${className}`}
       aria-label="BioCN"
     >
-      <span className="text-[#1b9e77]">Bio</span>
-      <span className="text-[#d95f02]">CN</span>
+      <span className="svo-predicate">Bio</span>
+      <span className="svo-subject">CN</span>
     </span>
   );
 }

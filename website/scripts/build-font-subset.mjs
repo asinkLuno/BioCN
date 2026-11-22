@@ -55,7 +55,7 @@ if (!fs.existsSync(FONT_SRC)) {
 
 subsetFont(fs.readFileSync(FONT_SRC), chars, { targetFormat: 'woff2' }).then((buf) => {
   fs.mkdirSync(path.dirname(OUT_WOFF2), { recursive: true });
-  fs.mkdirSync(path.dirname(OUT_CSS), true);
+  fs.mkdirSync(path.dirname(OUT_CSS), { recursive: true });
   fs.writeFileSync(OUT_WOFF2, buf);
   fs.writeFileSync(
     OUT_CSS,

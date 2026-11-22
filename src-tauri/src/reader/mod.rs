@@ -478,6 +478,19 @@ pub fn guess_mime(path: &str) -> &'static str {
     }
 }
 
+/// Every spine chapter's order index, read from the OPF alone without
+/// unzipping or parsing any chapter XHTML. Matches the exact index set that
+/// [`chapters`] and [`BookHandle::open`] yield.
+pub fn spine_indices(path: &Path) -> Result<Vec<usize>, Error> {
+    let epub = rbook::Epub::open(path).map_err(|error| Error::Invalid(error.to_string()))?;
+    Ok(epub
+        .spine()
+        .iter()
+        .filter(|entry| entry.manifest_entry().is_some())
+        .map(|entry| entry.order())
+        .collect())
+}
+
 /// Every chapter of the book, in spine order.
 ///
 /// `reader` is consumed because [`rbook::Epub`] borrows it for the lifetime of

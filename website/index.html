@@ -7,7 +7,22 @@
       name="description"
       content="BioCN 是为 ADHD 与容易分心的读者做的中文仿生阅读 EPUB 阅读器：中文没有单词的边界，改用句法分析把主谓宾染上颜色，长句里也抓得住主线。完全离线运行，支持 Windows、macOS、Linux 和 Android。"
     />
-    <meta name="theme-color" content="#f8fafc" />
+    <meta name="theme-color" content="#fcfbf8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#171614" media="(prefers-color-scheme: dark)" />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('biocn-theme');
+          var theme =
+            saved === 'light' || saved === 'dark'
+              ? saved
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {}
+      })();
+    </script>
     <title>BioCN — 中文仿生阅读 EPUB 阅读器</title>
     <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%brand/favicon-32.png" />
     <!-- 字体在 CSS 解析前就开始下载，免掉 CSS → woff2 的二次发现；font 必须带 CORS 预载。 -->

@@ -4,11 +4,45 @@ import ArrowDownToLine from 'lucide-react/icons/arrow-down-to-line';
 import Code2 from 'lucide-react/icons/code-2';
 import Laptop from 'lucide-react/icons/laptop';
 import Monitor from 'lucide-react/icons/monitor';
+import Moon from 'lucide-react/icons/moon';
 import Smartphone from 'lucide-react/icons/smartphone';
+import Sun from 'lucide-react/icons/sun';
 import Terminal from 'lucide-react/icons/terminal';
 import type { LucideIcon } from 'lucide-react';
 import { HeroBrandLockup } from './components/HeroTitle';
 import './index.css';
+
+type Theme = 'light' | 'dark';
+const THEME_STORAGE_KEY = 'biocn-theme';
+
+function readInitialTheme(): Theme {
+  if (typeof document !== 'undefined') {
+    const attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'light' || attr === 'dark') return attr;
+  }
+  try {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch {
+    // Storage unavailable
+  }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(theme: Theme, persist: boolean) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const metaColor = theme === 'dark' ? '#171614' : '#fcfbf8';
+  document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+    meta.setAttribute('content', metaColor);
+  });
+  if (persist) {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Storage unavailable
+    }
+  }
+}
 
 // 发布元数据由 CI 的 scripts/pages-release.mjs 从 GitHub Releases 生成并写进部署目录；
 // 这里运行时读取并校验，不通过校验的数据一律退回到兜底视图。
@@ -82,6 +116,22 @@ const DEMO_PARAGRAPHS: { text: string; colored: boolean }[] = [
     colored: true,
     text: '<span class="svo-subject font-medium">地上</span>都<span class="svo-predicate font-medium">嫩绿</span>了，便是不很换叶的<span class="svo-subject font-medium">松柏</span>也显得格外的<span class="svo-predicate font-medium">娇嫩</span>。',
   },
+  {
+    colored: false,
+    text: '桃红和青白色的斗大的杂花，在眼前还分明，到远处可就成为斑斓的烟霭了。',
+  },
+  {
+    colored: true,
+    text: '桃红和青白色的斗大的<span class="svo-subject font-medium">杂花</span>，在眼前还<span class="svo-predicate font-medium">分明</span>，到远处可就<span class="svo-predicate font-medium">成为</span>斑斓的<span class="svo-object font-medium">烟霭</span>了。',
+  },
+  {
+    colored: false,
+    text: '“唉唉，我从来没有这样的无聊过！”伊想着，猛然间站立起来了，擎上那非常圆满而精力洋溢的臂膊，向天打一个欠伸，天空便突然失了色，化为神异的肉红，暂时再也辨不出伊所在的处所。',
+  },
+  {
+    colored: true,
+    text: '“唉唉，<span class="svo-subject font-medium">我</span>从来没有这样的<span class="svo-predicate font-medium">无聊</span>过！”<span class="svo-subject font-medium">伊</span><span class="svo-predicate font-medium">想</span>着，猛然间<span class="svo-predicate font-medium">站立起来</span>了，擎上那非常圆满而精力洋溢的臂膊，向天<span class="svo-predicate font-medium">打</span>一个<span class="svo-object font-medium">欠</span><span class="svo-predicate font-medium">伸</span>，<span class="svo-subject font-medium">天空</span>便突然<span class="svo-predicate font-medium">失</span>了<span class="svo-object font-medium">色</span>，<span class="svo-predicate font-medium">化为</span>神异的<span class="svo-object font-medium">肉红</span>，暂时再也<span class="svo-predicate font-medium">辨</span>不<span class="svo-predicate font-medium">出</span>伊所在的<span class="svo-object font-medium">处所</span>。',
+  },
 ];
 function validDownload(value: unknown): value is Download {
   if (!value || typeof value !== 'object') return false;
@@ -134,29 +184,46 @@ function formatLabel(name: string): string {
 }
 function Paragraph({ html, colored }: { html: string; colored: boolean }) {
   if (!colored) {
-    return <p className="font-serif text-lg leading-loose text-base-content/80">{html}</p>;
+    return (
+      <p className="font-serif text-[0.95rem] leading-[1.85] text-base-content/75 sm:text-base">
+        {html}
+      </p>
+    );
   }
-  return <p className="font-serif text-lg leading-loose" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <p
+      className="font-serif text-[0.95rem] leading-[1.85] text-base-content/90 sm:text-base"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }
 
 function DemoPanels() {
   const [colored, setColored] = useState(true);
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="label cursor-pointer gap-2">
-          <span className="font-medium">仿生阅读</span>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-[0.95rem] font-semibold tracking-tight">仿生阅读是什么样？</h2>
+        <label className="label cursor-pointer gap-2 p-0">
+          <span className="text-xs font-medium text-base-content/75">仿生阅读</span>
           <input
             type="checkbox"
-            className="toggle toggle-primary"
+            className="toggle toggle-primary toggle-sm"
             checked={colored}
             aria-label="仿生阅读开关"
             onChange={(event) => setColored(event.target.checked)}
           />
         </label>
-        {colored ? <SvoLegend /> : null}
       </div>
-      <div className="space-y-1.5 rounded-lg bg-base-100 px-4 py-3 ring-1 ring-base-300">
+      <div
+        aria-hidden={!colored}
+        className={`flex flex-wrap items-center gap-1.5 transition-opacity duration-200 ${
+          colored ? 'opacity-100' : 'opacity-35'
+        }`}
+      >
+        <SvoLegend />
+      </div>
+      <div className="space-y-2.5 rounded-box border border-base-content/8 bg-base-100 px-4 py-3.5 sm:px-5 sm:py-4">
         {DEMO_PARAGRAPHS.filter((paragraph) => paragraph.colored === colored).map(
           (paragraph, index) => (
             <Paragraph key={index} html={paragraph.text} colored={paragraph.colored} />
@@ -169,15 +236,15 @@ function DemoPanels() {
 
 function SvoLegend() {
   return (
-    <div className="flex flex-wrap gap-2">
-      <span className="badge badge-outline gap-1.5">
-        <span className="svo-subject">主语</span>
+    <div className="flex flex-wrap gap-1.5">
+      <span className="badge badge-outline badge-sm border-base-content/15 bg-base-100/70">
+        <span className="svo-subject font-medium">主语</span>
       </span>
-      <span className="badge badge-outline gap-1.5">
-        <span className="svo-predicate">谓语</span>
+      <span className="badge badge-outline badge-sm border-base-content/15 bg-base-100/70">
+        <span className="svo-predicate font-medium">谓语</span>
       </span>
-      <span className="badge badge-outline gap-1.5">
-        <span className="svo-object">宾语</span>
+      <span className="badge badge-outline badge-sm border-base-content/15 bg-base-100/70">
+        <span className="svo-object font-medium">宾语</span>
       </span>
     </div>
   );
@@ -204,22 +271,26 @@ const MODEL_BENCHMARKS = [
 
 function BenchmarkSection() {
   return (
-    <section id="benchmark" aria-labelledby="benchmark-title" className="scroll-mt-8 space-y-6">
-      <div className="space-y-2">
-        <h2 id="benchmark-title" className="text-3xl font-semibold tracking-tight">
+    <section
+      id="benchmark"
+      aria-labelledby="benchmark-title"
+      className="scroll-mt-20 space-y-6 border-t border-base-content/8 pt-12 sm:pt-16"
+    >
+      <div className="space-y-2.5">
+        <h2 id="benchmark-title" className="text-2xl font-semibold tracking-tight sm:text-[1.65rem]">
           性能参考
         </h2>
-        <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
+        <p className="max-w-2xl text-[0.95rem] leading-relaxed text-base-content/70 sm:text-base">
           全流程本地 CPU 运行，不依赖显卡或云端接口。安装后可在应用设置中按需选择「省流」或「高精度」模型；以下为整本 107 万字《红楼梦》（137 章、42,961 唯一句）的实测数据，实际耗时视设备 CPU 性能而定。
         </p>
       </div>
 
-      <div className="card bg-base-100 shadow-sm ring-1 ring-base-200">
-        <div className="card-body gap-4 p-5 sm:p-6">
+      <div className="card border border-base-content/8 bg-base-200/50">
+        <div className="card-body p-3 sm:p-5">
           <div className="overflow-x-auto">
-            <table className="table">
+            <table className="table table-sm sm:table-md">
               <thead>
-                <tr>
+                <tr className="border-base-content/10 text-xs font-medium text-base-content/60">
                   <th>模型版本</th>
                   <th className="text-right">下载体积</th>
                   <th className="text-right">分析吞吐</th>
@@ -229,12 +300,12 @@ function BenchmarkSection() {
               </thead>
               <tbody>
                 {MODEL_BENCHMARKS.map((row) => (
-                  <tr key={row.name}>
+                  <tr key={row.name} className="border-base-content/8">
                     <td className="font-medium whitespace-nowrap">
                       <span className="inline-flex items-center gap-2">
                         {row.name}
                         {row.recommended ? (
-                          <span className="badge badge-primary badge-sm">推荐</span>
+                          <span className="badge badge-primary badge-soft badge-sm">推荐</span>
                         ) : null}
                       </span>
                     </td>
@@ -255,31 +326,35 @@ function BenchmarkSection() {
 
 function PlatformDownloads({ downloads }: { downloads: Download[] }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <div className="grid gap-3.5 sm:grid-cols-2 sm:gap-4">
       {platformOrder.map((platform) => {
         const files = downloads.filter((download) => download.platform === platform);
         const meta = platformMeta[platform];
         const Icon = meta.icon;
         return (
-          <div key={platform} className="card bg-base-200 shadow-sm">
-            <div className="card-body gap-3 p-5">
-              <div className="flex items-center gap-2">
-                <Icon aria-hidden="true" className="size-5" />
-                <h3 className="font-medium">{meta.label}</h3>
+          <div key={platform} className="card border border-base-content/8 bg-base-100">
+            <div className="card-body gap-3 p-4 sm:p-5">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Icon aria-hidden="true" className="size-4 text-primary" />
+                  <h3 className="text-sm font-semibold sm:text-base">{meta.label}</h3>
+                </div>
+                <p className="text-xs text-base-content/60 sm:text-sm">{meta.hint}</p>
               </div>
-              <p className="text-sm text-base-content/70">{meta.hint}</p>
               <div className="flex flex-col gap-2">
                 {files.map((file, index) => (
                   <a
                     key={file.download_url}
-                    className={`btn btn-block ${index === 0 ? 'btn-primary' : 'btn-outline'}`}
+                    className={`btn btn-block btn-sm sm:btn-md ${index === 0 ? 'btn-primary' : 'btn-outline'}`}
                     href={file.download_url}
                     download={file.name}
                     title={file.name}
                   >
-                    <ArrowDownToLine aria-hidden="true" />
+                    <ArrowDownToLine aria-hidden="true" className="size-4" />
                     下载 {formatLabel(file.name)}
-                    <span className="ml-auto text-xs opacity-70">{formatSize(file.size)}</span>
+                    <span className="ml-auto text-xs opacity-70 tabular-nums">
+                      {formatSize(file.size)}
+                    </span>
                   </a>
                 ))}
               </div>
@@ -291,10 +366,76 @@ function PlatformDownloads({ downloads }: { downloads: Download[] }) {
   );
 }
 
+function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (next: Theme) => void }) {
+  return (
+    <div
+      role="group"
+      aria-label="外观模式"
+      className="join rounded-field border border-base-content/10 bg-base-200/80 p-0.5"
+    >
+      <button
+        type="button"
+        className={`btn join-item btn-xs h-7 min-h-7 gap-1 border-0 px-2 ${
+          theme === 'light'
+            ? 'bg-primary/15 font-medium text-primary'
+            : 'btn-ghost text-base-content/60 hover:text-base-content'
+        }`}
+        aria-label="白天模式"
+        aria-pressed={theme === 'light'}
+        title="白天模式"
+        onClick={() => onChange('light')}
+      >
+        <Sun aria-hidden="true" className="size-3.5" />
+        <span className="hidden md:inline">白天</span>
+      </button>
+      <button
+        type="button"
+        className={`btn join-item btn-xs h-7 min-h-7 gap-1 border-0 px-2 ${
+          theme === 'dark'
+            ? 'bg-primary/15 font-medium text-primary'
+            : 'btn-ghost text-base-content/60 hover:text-base-content'
+        }`}
+        aria-label="夜晚模式"
+        aria-pressed={theme === 'dark'}
+        title="夜晚模式"
+        onClick={() => onChange('dark')}
+      >
+        <Moon aria-hidden="true" className="size-3.5" />
+        <span className="hidden md:inline">夜晚</span>
+      </button>
+    </div>
+  );
+}
+
 function App() {
   const [release, setRelease] = useState<Release | null>(null);
   const [history, setHistory] = useState<Release[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [theme, setTheme] = useState<Theme>(readInitialTheme);
+
+  useEffect(() => {
+    applyTheme(theme, false);
+  }, [theme]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!media) return;
+    const onSystemChange = (event: MediaQueryListEvent) => {
+      try {
+        if (window.localStorage.getItem(THEME_STORAGE_KEY)) return;
+      } catch {
+        // Storage unavailable
+      }
+      setTheme(event.matches ? 'dark' : 'light');
+    };
+    media.addEventListener('change', onSystemChange);
+    return () => media.removeEventListener('change', onSystemChange);
+  }, []);
+
+  const selectTheme = (next: Theme) => {
+    setTheme(next);
+    applyTheme(next, true);
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -329,93 +470,112 @@ function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-base-100 text-base-content">
-      <header className="navbar mx-auto max-w-7xl px-4 sm:px-6 2xl:max-w-[96rem]">
-        <div className="navbar-start">
-          <a className="btn btn-ghost px-2 text-lg font-semibold" href={base} aria-label="BioCN 首页">
-            <img src={`${base}brand/icon-128.png`} alt="" width={28} height={28} className="size-7" />
-            BioCN
-          </a>
+    <div className="flex min-h-screen flex-col bg-base-100 text-base-content transition-colors duration-200">
+      <header className="sticky top-0 z-30 border-b border-base-content/8 bg-base-100/90 backdrop-blur-md">
+        <div className="navbar mx-auto min-h-14 max-w-5xl px-4 sm:px-6">
+          <div className="navbar-start">
+            <a className="btn btn-ghost btn-sm gap-2 px-2 text-base font-semibold tracking-tight" href={base} aria-label="BioCN 首页">
+              <img src={`${base}brand/icon-128.png`} alt="" width={24} height={24} className="size-6" />
+              BioCN
+            </a>
+          </div>
+          <nav aria-label="主导航" className="navbar-end flex items-center gap-1 sm:gap-2">
+            <a className="btn btn-ghost btn-sm font-normal" href="#benchmark">
+              性能
+            </a>
+            <a className="btn btn-ghost btn-sm font-normal" href="#download">
+              下载
+            </a>
+            <ThemeToggle theme={theme} onChange={selectTheme} />
+            <a className="btn btn-outline btn-sm hidden gap-1.5 sm:inline-flex" href={repository}>
+              <Code2 aria-hidden="true" className="size-4" /> GitHub
+            </a>
+          </nav>
         </div>
-        <nav aria-label="主导航" className="navbar-end flex items-center gap-2">
-          <a className="btn btn-ghost" href="#benchmark">
-            性能
-          </a>
-          <a className="btn btn-ghost" href="#download">
-            下载
-          </a>
-          <a className="btn btn-outline btn-sm hidden sm:flex" href={repository}>
-            <Code2 aria-hidden="true" /> GitHub
-          </a>
-        </nav>
       </header>
 
-      <main className="mx-auto max-w-7xl space-y-20 px-4 pb-12 sm:px-6 sm:pb-20 2xl:max-w-[96rem]">
-        <section aria-labelledby="intro-title" className="hero overflow-x-clip py-10 md:py-16">
-          <div className="hero-content flex-col items-start gap-12 lg:flex-row lg:items-center lg:gap-16">
+      <main className="mx-auto w-full max-w-5xl flex-1 space-y-14 px-4 pb-16 sm:space-y-16 sm:px-6 sm:pb-24">
+        <section
+          aria-labelledby="intro-title"
+          className="grid items-center gap-8 overflow-x-clip pt-8 sm:pt-12 lg:grid-cols-12 lg:gap-10 lg:pt-14"
+        >
+          <div className="lg:col-span-5">
             <HeroBrandLockup>
-              <div className="flex flex-wrap gap-3">
-                <a className="btn btn-primary btn-lg" href="#download">
-                  <ArrowDownToLine aria-hidden="true" /> 下载 BioCN
+              <div className="flex flex-wrap items-center gap-3">
+                <a className="btn btn-primary gap-2 px-5 whitespace-nowrap" href="#download">
+                  <ArrowDownToLine aria-hidden="true" className="size-4" /> 下载 BioCN
                 </a>
-                <a className="btn btn-outline btn-lg" href={repository}>
-                  <Code2 aria-hidden="true" /> GitHub
+                <a className="btn btn-outline gap-2 px-5 whitespace-nowrap" href={repository}>
+                  <Code2 aria-hidden="true" className="size-4" /> GitHub
                 </a>
               </div>
             </HeroBrandLockup>
-            <div className="flex w-full max-w-md flex-col items-center gap-6">
-              <div className="card w-full bg-base-200 shadow-xl">
-                <div className="card-body gap-4">
-                  <h2 className="card-title text-base">仿生阅读是什么样？</h2>
-                  <DemoPanels />
-                </div>
+          </div>
+          <div className="w-full lg:col-span-7">
+            <div className="card border border-base-content/8 bg-base-200/75">
+              <div className="card-body p-4 sm:p-5">
+                <DemoPanels />
               </div>
             </div>
           </div>
         </section>
 
-        <section aria-labelledby="why-title" className="space-y-4">
-          <h2 id="why-title" className="text-3xl font-semibold tracking-tight">
+        <section
+          aria-labelledby="why-title"
+          className="grid gap-4 border-t border-base-content/8 pt-12 sm:pt-16 lg:grid-cols-12 lg:gap-10"
+        >
+          <h2
+            id="why-title"
+            className="text-2xl font-semibold tracking-tight sm:text-[1.65rem] lg:col-span-4"
+          >
             为什么做这个应用？
           </h2>
-          <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
-            英文世界里有一种“仿生阅读”，通过加粗每个单词的开头来帮眼睛锚定重心，对 ADHD 和容易分心的读者特别友好。
-          </p>
-          <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
-            我们也想把这种体验带给中文读者，但一上手就遇到了麻烦：中文没有单词的边界，直接加粗字首根本行不通。于是我们换了个思路——用传统的自然语言处理方法，借助 HanLP 做句法分析，把每句话的主谓宾染上颜色。
-          </p>
+          <div className="max-w-2xl space-y-3.5 text-[0.95rem] leading-[1.8] text-base-content/75 sm:text-base lg:col-span-8">
+            <p>
+              英文世界里有一种“仿生阅读”，通过加粗每个单词的开头来帮眼睛锚定重心，对 ADHD 和容易分心的读者特别友好。
+            </p>
+            <p>
+              我们也想把这种体验带给中文读者，但一上手就遇到了麻烦：中文没有单词的边界，直接加粗字首根本行不通。于是我们换了个思路——用传统的自然语言处理方法，借助 HanLP 做句法分析，把每句话的主谓宾染上颜色。
+            </p>
+          </div>
         </section>
 
         <BenchmarkSection />
 
-        <section id="download" aria-labelledby="download-title" className="scroll-mt-8">
-          <div className="card bg-base-100 shadow-sm ring-1 ring-base-200">
-            <div className="card-body gap-6">
-              <div className="space-y-2">
-                <h2 id="download-title" className="card-title text-3xl">
+        <section
+          id="download"
+          aria-labelledby="download-title"
+          className="scroll-mt-20 border-t border-base-content/8 pt-12 sm:pt-16"
+        >
+          <div className="card border border-base-content/8 bg-base-200/50">
+            <div className="card-body gap-5 p-5 sm:gap-6 sm:p-7">
+              <div className="space-y-1.5">
+                <h2 id="download-title" className="text-2xl font-semibold tracking-tight sm:text-[1.65rem]">
                   下载 BioCN
                 </h2>
-                <p className="leading-relaxed text-base-content/70">
+                <p className="text-sm leading-relaxed text-base-content/70 sm:text-base">
                   所有安装包发布在 GitHub Releases。
                 </p>
               </div>
 
               {status === 'loading' ? (
                 <div className="space-y-4" aria-label="正在读取最新版本">
-                  <div className="skeleton h-8 w-40" />
+                  <div className="skeleton h-7 w-36" />
                   <div className="grid gap-4 sm:grid-cols-2">
                     {platformOrder.map((platform) => (
-                      <div key={platform} className="skeleton h-44 w-full" />
+                      <div key={platform} className="skeleton h-40 w-full" />
                     ))}
                   </div>
                 </div>
               ) : null}
 
               {release ? (
-                <div className="space-y-6">
+                <div className="space-y-5">
                   <div className="flex flex-wrap items-center gap-3">
-                    <span className="badge badge-primary badge-lg">v{release.version}</span>
-                    <p className="text-sm text-base-content/70">
+                    <span className="badge badge-primary badge-soft badge-md font-medium">
+                      v{release.version}
+                    </span>
+                    <p className="text-sm text-base-content/65">
                       发布于 {formatDate(release.published_at)}
                     </p>
                   </div>
@@ -424,7 +584,7 @@ function App() {
               ) : null}
 
               {status === 'error' ? (
-                <div role="alert" className="alert alert-error">
+                <div role="alert" className="alert alert-error alert-soft">
                   <span>暂时无法读取 GitHub 发布信息。</span>
                   <a className="btn btn-outline btn-sm" href={`${repository}/releases/latest`}>
                     前往 GitHub Releases
@@ -432,10 +592,9 @@ function App() {
                 </div>
               ) : null}
 
-
               {history.length > 1 ? (
-                <details className="collapse collapse-arrow bg-base-200">
-                  <summary className="collapse-title">历史版本</summary>
+                <details className="collapse collapse-arrow border border-base-content/8 bg-base-100">
+                  <summary className="collapse-title text-sm font-medium">历史版本</summary>
                   <div className="collapse-content">
                     <table className="table table-sm">
                       <thead>
@@ -448,8 +607,8 @@ function App() {
                       <tbody>
                         {history.map((item) => (
                           <tr key={item.version}>
-                            <td>v{item.version}</td>
-                            <td>{formatDate(item.published_at)}</td>
+                            <td className="tabular-nums">v{item.version}</td>
+                            <td className="tabular-nums">{formatDate(item.published_at)}</td>
                             <td>
                               <a
                                 className="link link-hover text-primary"
@@ -467,8 +626,8 @@ function App() {
               ) : null}
 
               {release?.notes ? (
-                <div className="space-y-2">
-                  <p className="font-medium">v{release.version} 更新内容</p>
+                <div className="space-y-2 border-t border-base-content/8 pt-4">
+                  <p className="text-sm font-medium">v{release.version} 更新内容</p>
                   {/* notes 来自 Release 说明，可能带长链接；anywhere 保证 token 内也能断行，不撑破移动端。 */}
                   <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-base-content/70">
                     {release.notes.replace(/^#{1,6} /gm, '')}
@@ -480,8 +639,8 @@ function App() {
         </section>
       </main>
 
-      <footer className="footer footer-center bg-base-200 text-base-content/70 sm:p-10">
-        <aside>
+      <footer className="border-t border-base-content/8 bg-base-200/40">
+        <div className="mx-auto flex max-w-5xl items-center justify-center px-4 py-6 text-center text-sm text-base-content/60 sm:px-6">
           <p>
             © 2026 BioCN contributors · GPL-3.0-or-later
             {' · '}
@@ -489,7 +648,7 @@ function App() {
               GPL-3.0
             </a>
           </p>
-        </aside>
+        </div>
       </footer>
     </div>
   );

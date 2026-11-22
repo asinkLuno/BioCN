@@ -11,8 +11,20 @@ import {
   type VariantId,
 } from "../lib/models";
 import { message } from "../lib/reading";
+import {
+  applyAppTheme,
+  loadAppTheme,
+  saveAppTheme,
+  type AppTheme,
+} from "../lib/appTheme";
 import { useDialog, ModalBackdrop } from "./dialog";
 import { UpdateSection } from "./UpdateSection";
+
+const THEME_OPTIONS: readonly [AppTheme, string][] = [
+  ["auto", "跟随系统"],
+  ["light", "浅色"],
+  ["dark", "深色"],
+];
 
 /** A hoisted no-op: literal props in callers would be a fresh function every render. */
 const noop = () => {};
@@ -39,7 +51,14 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
   const [busy, setBusy] = useState<"install" | "activate" | "remove" | null>(null);
   const [working, setWorking] = useState<VariantId>("int8");
   const [progress, setProgress] = useState<ModelProgress | null>(null);
+  const [theme, setTheme] = useState<AppTheme>(() => loadAppTheme());
   const dialog = useRef<HTMLDialogElement>(null);
+
+  const selectTheme = (next: AppTheme) => {
+    setTheme(next);
+    saveAppTheme(next);
+    applyAppTheme(next);
+  };
 
   // Toggled open and closed by `open`: the shelf keeps the sheet mounted.
   useDialog(dialog, open);
@@ -140,9 +159,47 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
             设置
           </h3>
 
-        {/* 分析模型是设置的第一节；版本与更新（UpdateSection）跟在后面。 */}
-        <section aria-labelledby="models-title">
-          <h4 id="models-title" className="mt-2 text-sm font-semibold">
+        <section
+          aria-labelledby="appearance-title"
+          className="mt-4 flex flex-wrap items-center justify-between gap-3"
+        >
+          <div className="min-w-0">
+            <h4 id="appearance-title" className="text-sm font-semibold">
+              外观
+            </h4>
+            <p className="mt-0.5 text-xs text-base-content/60">
+              应用界面主题（阅读器纸色可在阅读页单独调整）
+            </p>
+          </div>
+          <div
+            role="group"
+            aria-label="外观模式"
+            className="join rounded-field border border-base-content/10 bg-base-200/70 p-0.5"
+          >
+            {THEME_OPTIONS.map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={theme === value}
+                className={`btn btn-xs join-item border-0 ${
+                  theme === value
+                    ? "btn-primary"
+                    : "btn-ghost text-base-content/70 hover:text-base-content"
+                }`}
+                onClick={() => selectTheme(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* 分析模型紧随外观之后；版本与更新（UpdateSection）跟在最后。 */}
+        <section
+          aria-labelledby="models-title"
+          className="mt-5 border-t border-base-content/10 pt-4"
+        >
+          <h4 id="models-title" className="text-sm font-semibold">
             分析模型
           </h4>
           <p className="mt-1 text-sm leading-relaxed text-base-content/65">

@@ -31,6 +31,8 @@ use crate::reading::ReadingState;
 
 const READER_CSS: &str = include_str!("reader.css");
 const BRIDGE_JS: &str = include_str!("bridge.js");
+const EMBEDDED_SERIF_ROUTE: &str = "/__biocn__/fonts/SourceHanSerifSC-Regular.woff2";
+const EMBEDDED_SERIF_ASSET: &str = "fonts/SourceHanSerifSC-Regular.woff2";
 
 /// Entry point registered with `tauri::Builder::register_asynchronous_uri_scheme_protocol("book", ...)`.
 pub fn handle<R: Runtime>(
@@ -52,6 +54,10 @@ fn serve<R: Runtime>(
     uri_path: &str,
     query: Option<&str>,
 ) -> Response<Vec<u8>> {
+    if uri_path == EMBEDDED_SERIF_ROUTE {
+        return serve_embedded_font(app);
+    }
+
     let Some((book_id, resource_path)) = parse_book_uri_path(uri_path) else {
         return text_response(StatusCode::BAD_REQUEST, "invalid book resource path");
     };
@@ -103,6 +109,37 @@ fn serve<R: Runtime>(
             Err(msg) => text_response(StatusCode::INTERNAL_SERVER_ERROR, &msg),
         },
         Err(msg) => text_response(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
+fn serve_embedded_font<R: Runtime>(app: &AppHandle<R>) -> Response<Vec<u8>> {
+    let bytes = app
+        .asset_resolver()
+        .get(EMBEDDED_SERIF_ASSET.to_owned())
+        .map(|asset| asset.bytes)
+        .or_else(|| {
+            #[cfg(debug_assertions)]
+            {
+                let dev_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../public")
+                    .join(EMBEDDED_SERIF_ASSET);
+                std::fs::read(dev_path).ok()
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                None
+            }
+        });
+
+    match bytes {
+        Some(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "font/woff2")
+            .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(bytes)
+            .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "response build error")),
+        None => text_response(StatusCode::NOT_FOUND, "embedded font not found"),
     }
 }
 
@@ -179,9 +216,16 @@ pub struct InitialStyle {
     pub theme: &'static str,
     pub mode: &'static str,
     pub biocn: &'static str,
-    pub palette: &'static str,
+    pub font: &'static str,
+    pub margin: &'static str,
+    pub align: &'static str,
+    pub dim_images: &'static str,
+    pub svo_subject: Option<String>,
+    pub svo_predicate: Option<String>,
+    pub svo_object: Option<String>,
     pub font_size: u8,
     pub line_height: f32,
+    pub para_spacing: f32,
 }
 
 impl Default for InitialStyle {
@@ -190,10 +234,25 @@ impl Default for InitialStyle {
             theme: "auto",
             mode: "scrolled",
             biocn: "on",
-            palette: "default",
+            font: "default",
+            margin: "normal",
+            align: "default",
+            dim_images: "on",
+            svo_subject: None,
+            svo_predicate: None,
+            svo_object: None,
             font_size: 17,
             line_height: 1.9,
+            para_spacing: 0.8,
         }
+    }
+}
+
+fn parse_hex6(value: &str) -> Option<String> {
+    if value.len() == 6 && value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(format!("#{}", value.to_ascii_lowercase()))
+    } else {
+        None
     }
 }
 
@@ -225,12 +284,39 @@ impl InitialStyle {
                         _ => "on",
                     };
                 }
-                "palette" => {
-                    style.palette = match v {
-                        "soft" => "soft",
-                        "vivid" => "vivid",
+                "font" => {
+                    style.font = match v {
+                        "serif" => "serif",
                         _ => "default",
                     };
+                }
+                "margin" => {
+                    style.margin = match v {
+                        "compact" => "compact",
+                        "wide" => "wide",
+                        _ => "normal",
+                    };
+                }
+                "align" => {
+                    style.align = match v {
+                        "justify" => "justify",
+                        _ => "default",
+                    };
+                }
+                "dim" => {
+                    style.dim_images = match v {
+                        "off" => "off",
+                        _ => "on",
+                    };
+                }
+                "cs" => {
+                    style.svo_subject = parse_hex6(v);
+                }
+                "cp" => {
+                    style.svo_predicate = parse_hex6(v);
+                }
+                "co" => {
+                    style.svo_object = parse_hex6(v);
                 }
                 "fs" => {
                     if let Ok(n) = v.parse::<u8>() {
@@ -242,6 +328,13 @@ impl InitialStyle {
                         && n.is_finite()
                     {
                         style.line_height = n.clamp(1.4, 2.4);
+                    }
+                }
+                "ps" => {
+                    if let Ok(n) = v.parse::<f32>()
+                        && n.is_finite()
+                    {
+                        style.para_spacing = n.clamp(0.4, 2.0);
                     }
                 }
                 _ => {}
@@ -269,9 +362,24 @@ pub fn prepare_chapter_document_with_style(
     let without_xml = strip_xml_declaration(html);
     let sanitized = strip_scripts(without_xml);
     let stamped = stamp_html_attributes(&sanitized, initial);
+    let mut custom_svo = String::new();
+    if let Some(hex) = &initial.svo_subject {
+        custom_svo.push_str(&format!(" --svo-subject: {hex};"));
+    }
+    if let Some(hex) = &initial.svo_predicate {
+        custom_svo.push_str(&format!(" --svo-predicate: {hex};"));
+    }
+    if let Some(hex) = &initial.svo_object {
+        custom_svo.push_str(&format!(" --svo-object: {hex};"));
+    }
+    let svo_override = if custom_svo.is_empty() {
+        String::new()
+    } else {
+        format!("\nhtml[data-theme] {{{custom_svo} }}")
+    };
     let style_tag = format!(
-        "<style id=\"biocn-style\">\n{READER_CSS}\n:root {{ --reader-font-size: {}px; --reader-line-height: {:.1}; }}\n</style>",
-        initial.font_size, initial.line_height
+        "<style id=\"biocn-style\">\n{READER_CSS}\n:root {{ --reader-font-size: {}px; --reader-line-height: {:.1}; --reader-para-spacing: {:.1}em; }}{svo_override}\n</style>",
+        initial.font_size, initial.line_height, initial.para_spacing
     );
     let styled = inject_stylesheet(&stamped, &style_tag);
     let script_tag = format!("<script nonce=\"{nonce}\">\n{BRIDGE_JS}</script>");
@@ -281,8 +389,14 @@ pub fn prepare_chapter_document_with_style(
 
 fn stamp_html_attributes(html: &str, initial: &InitialStyle) -> String {
     let attrs = format!(
-        " data-theme=\"{}\" data-mode=\"{}\" data-biocn=\"{}\" data-palette=\"{}\"",
-        initial.theme, initial.mode, initial.biocn, initial.palette
+        " data-theme=\"{}\" data-mode=\"{}\" data-biocn=\"{}\" data-font=\"{}\" data-margin=\"{}\" data-align=\"{}\" data-dim-images=\"{}\"",
+        initial.theme,
+        initial.mode,
+        initial.biocn,
+        initial.font,
+        initial.margin,
+        initial.align,
+        initial.dim_images
     );
     if let Some(start) = find_html_open(html) {
         let after = start + "<html".len();
@@ -441,19 +555,41 @@ mod tests {
 
     #[test]
     fn stamps_initial_theme_and_mode_from_query_before_first_paint() {
-        let initial = InitialStyle::from_query("v=2&theme=dark&mode=paginated&biocn=off&palette=soft&fs=20&lh=2.1");
+        let initial = InitialStyle::from_query(
+            "v=2&theme=dark&mode=paginated&biocn=off&font=serif&margin=wide&align=justify&dim=off&cs=B03A2E&co=invalid&fs=20&lh=2.1&ps=1.4",
+        );
         assert_eq!(initial.theme, "dark");
         assert_eq!(initial.mode, "paginated");
         assert_eq!(initial.biocn, "off");
-        assert_eq!(initial.palette, "soft");
+        assert_eq!(initial.font, "serif");
+        assert_eq!(initial.margin, "wide");
+        assert_eq!(initial.align, "justify");
+        assert_eq!(initial.dim_images, "off");
+        assert_eq!(initial.svo_subject.as_deref(), Some("#b03a2e"));
+        assert_eq!(initial.svo_object, None);
         assert_eq!(initial.font_size, 20);
         assert!((initial.line_height - 2.1).abs() < 0.01);
+        assert!((initial.para_spacing - 1.4).abs() < 0.01);
 
         let out = prepare_chapter_document_with_style("<html><head></head><body><p>字</p></body></html>", "n1", &initial);
         assert!(
-            out.contains(r#"<html data-theme="dark" data-mode="paginated" data-biocn="off" data-palette="soft">"#),
+            out.contains(r#"<html data-theme="dark" data-mode="paginated" data-biocn="off" data-font="serif" data-margin="wide" data-align="justify" data-dim-images="off">"#),
             "{out}"
         );
-        assert!(out.contains("--reader-font-size: 20px; --reader-line-height: 2.1;"), "{out}");
+        assert!(
+            out.contains("--reader-font-size: 20px; --reader-line-height: 2.1; --reader-para-spacing: 1.4em;"),
+            "{out}"
+        );
+        assert!(out.contains("html[data-theme] { --svo-subject: #b03a2e; }"), "{out}");
+    }
+
+    #[test]
+    fn embedded_source_han_serif_font_is_valid_woff2_and_wired_in_reader_css() {
+        assert!(READER_CSS.contains(EMBEDDED_SERIF_ROUTE));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../public")
+            .join(EMBEDDED_SERIF_ASSET);
+        let bytes = std::fs::read(&path).expect("embedded SourceHanSerifSC-Regular.woff2 present");
+        assert!(bytes.starts_with(b"wOF2"), "expected WOFF2 header");
     }
 }

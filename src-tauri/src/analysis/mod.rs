@@ -12,7 +12,6 @@
 //! resources   vocab / normalize / label tables, tensor packing
 //! utf16       offsets are UTF-16 code units, like the DOM ranges they become
 //! pipeline    one sentence: TOK -> POS -> DEP -> roles, with chunking
-//!             (stages + streamed `analyze_all` for benches/examples)
 //! scheduler   persistent 3-stage priority pipeline (P0..P3 + idle unload)
 //! decode      logits -> words / tags / dependency heads
 //! eisner      HanLP's Eisner decoder for the DEP head scores
@@ -33,7 +32,7 @@ pub mod scheduler;
 pub mod tokenizer;
 pub mod utf16;
 
-pub use pipeline::{MAX_SUBS, MAX_WORDS, SentenceAnswer, analyze_all};
+pub use pipeline::{MAX_SUBS, MAX_WORDS, SentenceAnswer};
 pub use resources::BioCNResources;
 pub use roles::{Dep, Role, Segment};
 pub use scheduler::{PipelineScheduler, Priority};

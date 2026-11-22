@@ -1,29 +1,123 @@
 @import "tailwindcss";
 @plugin "daisyui" {
-  themes: light --default, dark --prefersdark;
+  themes: false;
+}
+
+/*
+ * BioCN custom daisyUI themes (light & dark), synced with website/src/index.css
+ * and src-tauri/src/protocol/reader.css:
+ * - Warm rice-paper (#fcfbf8) / charcoal-inkstone (#171614) surfaces
+ * - Botanical Jade primary derived from SVO Predicate (#137a5b / #58c4a3)
+ * - Terracotta secondary & Wisteria accent derived from Subject / Object
+ */
+@plugin "daisyui/theme" {
+  name: "light";
+  default: true;
+  color-scheme: light;
+  --color-base-100: oklch(98.8% 0.004 85);
+  --color-base-200: oklch(95.6% 0.007 82);
+  --color-base-300: oklch(90.5% 0.011 80);
+  --color-base-content: oklch(22.5% 0.014 65);
+  --color-primary: oklch(52.5% 0.115 166);
+  --color-primary-content: oklch(98.8% 0.005 166);
+  --color-secondary: oklch(54% 0.155 44);
+  --color-secondary-content: oklch(98.8% 0.006 55);
+  --color-accent: oklch(51% 0.105 282);
+  --color-accent-content: oklch(98.5% 0.006 282);
+  --color-neutral: oklch(26% 0.014 68);
+  --color-neutral-content: oklch(96% 0.006 85);
+  --color-info: oklch(58% 0.115 242);
+  --color-info-content: oklch(98% 0.006 242);
+  --color-success: oklch(54% 0.118 164);
+  --color-success-content: oklch(98% 0.006 164);
+  --color-warning: oklch(75% 0.145 76);
+  --color-warning-content: oklch(25% 0.055 60);
+  --color-error: oklch(55% 0.165 24);
+  --color-error-content: oklch(98% 0.008 24);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin "daisyui/theme" {
+  name: "dark";
+  prefersdark: true;
+  color-scheme: dark;
+  --color-base-100: oklch(19.5% 0.01 75);
+  --color-base-200: oklch(23.5% 0.011 75);
+  --color-base-300: oklch(28.5% 0.012 75);
+  --color-base-content: oklch(91.5% 0.01 82);
+  --color-primary: oklch(74% 0.112 167);
+  --color-primary-content: oklch(16% 0.03 166);
+  --color-secondary: oklch(74% 0.125 52);
+  --color-secondary-content: oklch(18% 0.035 45);
+  --color-accent: oklch(73.5% 0.105 288);
+  --color-accent-content: oklch(18% 0.035 288);
+  --color-neutral: oklch(30% 0.012 75);
+  --color-neutral-content: oklch(91.5% 0.01 82);
+  --color-info: oklch(72% 0.11 238);
+  --color-info-content: oklch(18% 0.03 238);
+  --color-success: oklch(74% 0.112 167);
+  --color-success-content: oklch(16% 0.03 165);
+  --color-warning: oklch(78% 0.135 78);
+  --color-warning-content: oklch(20% 0.04 70);
+  --color-error: oklch(68% 0.15 24);
+  --color-error-content: oklch(18% 0.035 24);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
 }
 
 @layer base {
+  /* Bundled full Source Han Serif SC (OFL-1.1), lazy-loaded only when referenced. */
+  @font-face {
+    font-family: "BioCN Source Han Serif";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("/fonts/SourceHanSerifSC-Regular.woff2") format("woff2");
+  }
+
   /*
    * Brand double-helix palette tokens mirroring the SVO colors below, adapting
-   * automatically in dark mode so the helix stays crisp on dark frosted covers.
+   * automatically in dark mode (both OS preference and explicit data-theme) so
+   * the helix stays crisp on dark frosted covers.
    */
-  :root {
-    --biocn-helix-o: #d95f02;
-    --biocn-helix-o-shade: #b84e00;
-    --biocn-helix-g: #1b9e77;
-    --biocn-helix-g-shade: #147e5e;
-    --biocn-helix-p: #7570b3;
+  :root,
+  :root[data-theme="light"] {
+    --biocn-helix-o: #c04e08;
+    --biocn-helix-o-shade: #9d3d04;
+    --biocn-helix-g: #137a5b;
+    --biocn-helix-g-shade: #0d5e45;
+    --biocn-helix-p: #635ba6;
   }
 
   @media (prefers-color-scheme: dark) {
-    :root {
-      --biocn-helix-o: #f28e4b;
-      --biocn-helix-o-shade: #cc6d2e;
-      --biocn-helix-g: #4ec6a3;
-      --biocn-helix-g-shade: #349f80;
-      --biocn-helix-p: #a99cf0;
+    :root:not([data-theme="light"]) {
+      --biocn-helix-o: #ea9558;
+      --biocn-helix-o-shade: #c8743a;
+      --biocn-helix-g: #58c4a3;
+      --biocn-helix-g-shade: #3ca082;
+      --biocn-helix-p: #aba0eb;
     }
+  }
+
+  :root[data-theme="dark"] {
+    --biocn-helix-o: #ea9558;
+    --biocn-helix-o-shade: #c8743a;
+    --biocn-helix-g: #58c4a3;
+    --biocn-helix-g-shade: #3ca082;
+    --biocn-helix-p: #aba0eb;
   }
 
   html {
@@ -38,6 +132,11 @@
     padding: env(safe-area-inset-top) env(safe-area-inset-right)
       env(safe-area-inset-bottom) env(safe-area-inset-left);
     overscroll-behavior-y: none;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklch, var(--color-primary) 22%, transparent);
+    color: var(--color-base-content);
   }
 }
 
@@ -54,30 +153,42 @@
    * the app.
    */
   .svo-subject {
-    color: #d95f02;
+    color: #c04e08;
   }
 
   .svo-predicate {
-    color: #1b9e77;
+    color: #137a5b;
   }
 
   .svo-object {
-    color: #7570b3;
+    color: #635ba6;
   }
 
-  /* A slightly deeper set in dark mode, for contrast on a dark page. */
+  /* A brighter set in dark mode, for contrast on a dark page. */
   @media (prefers-color-scheme: dark) {
-    .svo-subject {
-      color: #f28e4b;
+    :root:not([data-theme="light"]) .svo-subject {
+      color: #ea9558;
     }
 
-    .svo-predicate {
-      color: #4ec6a3;
+    :root:not([data-theme="light"]) .svo-predicate {
+      color: #58c4a3;
     }
 
-    .svo-object {
-      color: #a99cf0;
+    :root:not([data-theme="light"]) .svo-object {
+      color: #aba0eb;
     }
+  }
+
+  :root[data-theme="dark"] .svo-subject {
+    color: #ea9558;
+  }
+
+  :root[data-theme="dark"] .svo-predicate {
+    color: #58c4a3;
+  }
+
+  :root[data-theme="dark"] .svo-object {
+    color: #aba0eb;
   }
 
   /*

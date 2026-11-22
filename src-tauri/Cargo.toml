@@ -14,14 +14,6 @@ edition = "2024"
 name = "biocn_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# Whole-book coloring speed on real EPUBs: parses, splits and analyzes each
-# book through the app's own pipeline, per weight variant, and prints wall
-# times. Not part of `cargo build`/`cargo test`; run it explicitly:
-#   cargo bench -p biocn --bench books -- <models-root> <book.epub>...
-[[bench]]
-name = "books"
-harness = false
-
 [dev-dependencies]
 tempfile = "3"
 serde_json = "1"

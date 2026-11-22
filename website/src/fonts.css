@@ -1,5 +1,5 @@
 /* 思源宋体（Noto Serif SC = Source Han Serif SC）Regular，单文件子集：
-   只含主页 demo 段落实际用到的 147 字 + 常用标点（61KB，一次请求）。
+   只含主页 demo 段落实际用到的 210 字 + 常用标点（91KB，一次请求）。
    由 scripts/build-font-subset.mjs 生成；文案改动后重跑 `yarn build:font`
    再重新构建。字体文件在 public/fonts/shs-demo.woff2。 */
 @import './fonts/shs-demo.css';

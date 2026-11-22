@@ -7,6 +7,8 @@
   var state = {
     mode: "scrolled",
     columns: "auto",
+    margin: "normal",
+    pageAnimation: true,
     page: 0,
     totalPages: 1,
     spreadWidth: window.innerWidth || 800,
@@ -65,11 +67,39 @@
     root.setAttribute("data-theme", prefs.theme || "auto");
     root.setAttribute("data-mode", prefs.viewMode || "scrolled");
     root.setAttribute("data-biocn", prefs.coloringEnabled === false ? "off" : "on");
-    root.setAttribute("data-palette", prefs.coloringPalette || "default");
+    root.setAttribute("data-font", prefs.fontFamily === "serif" ? "serif" : "default");
+    root.setAttribute(
+      "data-margin",
+      prefs.pageMargin === "compact" || prefs.pageMargin === "wide" ? prefs.pageMargin : "normal",
+    );
+    root.setAttribute("data-align", prefs.textAlign === "justify" ? "justify" : "default");
+    root.setAttribute("data-dim-images", prefs.dimImagesInDark === false ? "off" : "on");
+    var colors = prefs.svoColors || {};
+    var hexRe = /^#[0-9a-fA-F]{6}$/;
+    var roleVars = [
+      ["subject", "--svo-subject"],
+      ["predicate", "--svo-predicate"],
+      ["object", "--svo-object"],
+    ];
+    for (var i = 0; i < roleVars.length; i++) {
+      var val = colors[roleVars[i][0]];
+      if (typeof val === "string" && hexRe.test(val)) {
+        root.style.setProperty(roleVars[i][1], val);
+      } else {
+        root.style.removeProperty(roleVars[i][1]);
+      }
+    }
     root.style.setProperty("--reader-font-size", (prefs.fontSize || 17) + "px");
     root.style.setProperty("--reader-line-height", String(prefs.lineHeight || 1.9));
+    root.style.setProperty(
+      "--reader-para-spacing",
+      String(typeof prefs.paragraphSpacing === "number" ? prefs.paragraphSpacing : 0.8) + "em",
+    );
     state.mode = prefs.viewMode === "paginated" ? "paginated" : "scrolled";
     state.columns = prefs.columns || "auto";
+    state.margin =
+      prefs.pageMargin === "compact" || prefs.pageMargin === "wide" ? prefs.pageMargin : "normal";
+    state.pageAnimation = prefs.pageAnimation !== false;
 
     if (state.mode === "paginated") {
       layoutPaginated();
@@ -90,10 +120,21 @@
   function layoutPaginated() {
     var vw = window.innerWidth || 800;
     var cols = state.columns === 1 || state.columns === 2 ? state.columns : vw >= 920 ? 2 : 1;
-    var gap = vw < 540 ? 36 : 56;
+    var gap, padY, maxSpread;
+    if (state.margin === "compact") {
+      gap = vw < 540 ? 24 : 36;
+      padY = vw < 540 ? 14 : 20;
+      maxSpread = cols === 2 ? 1280 : 880;
+    } else if (state.margin === "wide") {
+      gap = vw < 540 ? 48 : 80;
+      padY = vw < 540 ? 28 : 40;
+      maxSpread = cols === 2 ? 1020 : 660;
+    } else {
+      gap = vw < 540 ? 36 : 56;
+      padY = vw < 540 ? 20 : 28;
+      maxSpread = cols === 2 ? 1160 : 760;
+    }
     var padX = Math.floor(gap / 2);
-    var padY = vw < 540 ? 20 : 28;
-    var maxSpread = cols === 2 ? 1160 : 760;
     var spread = Math.min(vw, maxSpread);
     var colWidth = Math.max(180, Math.floor((spread - cols * gap) / cols));
     // Recompute exact spread so `cols * colWidth + cols * gap === spread` (exact integer stride).
@@ -131,13 +172,20 @@
     }
   }
 
+  function prefersReducedMotion() {
+    return (
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
   function goToPage(page, animate) {
     if (state.mode !== "paginated" || !document.body) return;
     recountPages();
     var clamped = Math.max(0, Math.min(state.totalPages - 1, page));
     state.page = clamped;
     var targetLeft = clamped * state.spreadWidth;
-    if (animate) {
+    if (animate && state.pageAnimation && !prefersReducedMotion()) {
       animateScrollLeft(targetLeft, 220);
     } else {
       cancelSlide();
@@ -168,17 +216,24 @@
     var vh = window.innerHeight || 600;
     var maxScroll = Math.max(0, root.scrollHeight - vh);
     var cur = window.scrollY || root.scrollTop || 0;
+    var scrollBehavior = state.pageAnimation && !prefersReducedMotion() ? "smooth" : "auto";
     if (direction === "next") {
       if (cur >= maxScroll - 4) {
         post({ type: "turn", direction: "next" });
       } else {
-        window.scrollTo({ top: Math.min(maxScroll, cur + Math.floor(vh * 0.85)), behavior: "smooth" });
+        window.scrollTo({
+          top: Math.min(maxScroll, cur + Math.floor(vh * 0.85)),
+          behavior: scrollBehavior,
+        });
       }
     } else {
       if (cur <= 4) {
         post({ type: "turn", direction: "prev" });
       } else {
-        window.scrollTo({ top: Math.max(0, cur - Math.floor(vh * 0.85)), behavior: "smooth" });
+        window.scrollTo({
+          top: Math.max(0, cur - Math.floor(vh * 0.85)),
+          behavior: scrollBehavior,
+        });
       }
     }
   }

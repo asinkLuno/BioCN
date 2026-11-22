@@ -5,9 +5,11 @@
 //! cargo run --release --example svodemo -- <in.txt>
 //! ```
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use biocn_lib::analysis::engine::Sessions;
-use biocn_lib::analysis::{BioCNResources, analyze_all};
+use biocn_lib::analysis::{BioCNResources, PipelineScheduler, Priority};
 use biocn_lib::text::sentences;
 
 fn models_dir() -> PathBuf {
@@ -28,6 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let dir = models_dir();
     let resources = BioCNResources::load_dir(&dir)?;
     let sessions = Sessions::load(&dir)?;
+    let scheduler = PipelineScheduler::new(resources, sessions, None, None);
 
     for paragraph in text.lines() {
         let paragraph = paragraph.trim();
@@ -35,8 +38,18 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!();
             continue;
         }
-        let batch = sentences(paragraph);
-        for (_sentence, answer) in analyze_all(&resources, &sessions, &batch) {
+        let batch: Vec<String> = sentences(paragraph).into_iter().map(str::to_owned).collect();
+        let mut results = tauri::async_runtime::block_on(async {
+            let mut rx =
+                scheduler.submit(Priority::Reader, Arc::new(AtomicBool::new(false)), batch);
+            let mut out = Vec::new();
+            while let Some(item) = rx.recv().await {
+                out.push(item);
+            }
+            out
+        });
+        results.sort_by_key(|(index, _, _)| *index);
+        for (_index, _sentence, answer) in results {
             let segments = match answer {
                 Ok(Some(segments)) => segments,
                 // One odd sentence prints plain, like the reader renders it.

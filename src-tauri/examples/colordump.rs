@@ -10,9 +10,11 @@
 //! `~/.cache/ink.syncmoon.biocn-reader/biocn-models`.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use biocn_lib::analysis::engine::Sessions;
-use biocn_lib::analysis::{BioCNResources, analyze_all};
+use biocn_lib::analysis::{BioCNResources, PipelineScheduler, Priority};
 
 fn models_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("BIOCN_MODELS") {
@@ -52,6 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let dir = models_dir();
     let resources = BioCNResources::load_dir(&dir)?;
     let sessions = Sessions::load(&dir)?;
+    let scheduler = PipelineScheduler::new(resources, sessions, None, None);
     println!("sessions loaded in {:?}", started.elapsed());
 
     let mut analyzed = 0usize;
@@ -72,14 +75,22 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         analyzed += 1;
         println!("\n--- {}", paragraph.text);
-        let batch: Vec<&str> = ranges
+        let batch: Vec<String> = ranges
             .iter()
-            .map(|range| &paragraph.text[range.clone()])
+            .map(|range| paragraph.text[range.clone()].to_owned())
             .collect();
         sentences += batch.len();
-        for (index, (sentence, answer)) in
-            analyze_all(&resources, &sessions, &batch).into_iter().enumerate()
-        {
+        let mut results = tauri::async_runtime::block_on(async {
+            let mut rx =
+                scheduler.submit(Priority::Reader, Arc::new(AtomicBool::new(false)), batch);
+            let mut out = Vec::new();
+            while let Some(item) = rx.recv().await {
+                out.push(item);
+            }
+            out
+        });
+        results.sort_by_key(|(index, _, _)| *index);
+        for (index, sentence, answer) in results {
             let start = biocn_lib::analysis::utf16::utf16_len(&paragraph.text[..ranges[index].start]);
             let Ok(segments) = answer else {
                 missing += 1;

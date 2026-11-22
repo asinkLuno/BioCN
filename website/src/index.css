@@ -1,68 +1,160 @@
 @import "tailwindcss";
 @import './fonts.css';
 @plugin "daisyui" {
-  themes: light --default, dark --prefersdark;
+  themes: false;
+}
+
+/*
+ * BioCN custom daisyUI themes (light & dark), anchored to the SVO reading palette:
+ * - Warm rice-paper (#fcfbf8) / charcoal-inkstone (#171614) surfaces
+ * - Botanical Jade primary derived from SVO Predicate (#137a5b / #58c4a3)
+ * - Terracotta secondary & Wisteria accent derived from Subject / Object
+ * Kept in sync with src/index.css and src-tauri/src/protocol/reader.css.
+ */
+@plugin "daisyui/theme" {
+  name: "light";
+  default: true;
+  color-scheme: light;
+  --color-base-100: oklch(98.8% 0.004 85);
+  --color-base-200: oklch(95.6% 0.007 82);
+  --color-base-300: oklch(90.5% 0.011 80);
+  --color-base-content: oklch(22.5% 0.014 65);
+  --color-primary: oklch(52.5% 0.115 166);
+  --color-primary-content: oklch(98.8% 0.005 166);
+  --color-secondary: oklch(54% 0.155 44);
+  --color-secondary-content: oklch(98.8% 0.006 55);
+  --color-accent: oklch(51% 0.105 282);
+  --color-accent-content: oklch(98.5% 0.006 282);
+  --color-neutral: oklch(26% 0.014 68);
+  --color-neutral-content: oklch(96% 0.006 85);
+  --color-info: oklch(58% 0.115 242);
+  --color-info-content: oklch(98% 0.006 242);
+  --color-success: oklch(54% 0.118 164);
+  --color-success-content: oklch(98% 0.006 164);
+  --color-warning: oklch(75% 0.145 76);
+  --color-warning-content: oklch(25% 0.055 60);
+  --color-error: oklch(55% 0.165 24);
+  --color-error-content: oklch(98% 0.008 24);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin "daisyui/theme" {
+  name: "dark";
+  prefersdark: true;
+  color-scheme: dark;
+  --color-base-100: oklch(19.5% 0.01 75);
+  --color-base-200: oklch(23.5% 0.011 75);
+  --color-base-300: oklch(28.5% 0.012 75);
+  --color-base-content: oklch(91.5% 0.01 82);
+  --color-primary: oklch(74% 0.112 167);
+  --color-primary-content: oklch(16% 0.03 166);
+  --color-secondary: oklch(74% 0.125 52);
+  --color-secondary-content: oklch(18% 0.035 45);
+  --color-accent: oklch(73.5% 0.105 288);
+  --color-accent-content: oklch(18% 0.035 288);
+  --color-neutral: oklch(30% 0.012 75);
+  --color-neutral-content: oklch(91.5% 0.01 82);
+  --color-info: oklch(72% 0.11 238);
+  --color-info-content: oklch(18% 0.03 238);
+  --color-success: oklch(74% 0.112 167);
+  --color-success-content: oklch(16% 0.03 165);
+  --color-warning: oklch(78% 0.135 78);
+  --color-warning-content: oklch(20% 0.04 70);
+  --color-error: oklch(68% 0.15 24);
+  --color-error-content: oklch(18% 0.035 24);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.875rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
 }
 
 @layer base {
-  /* Hero double-helix SVO palette tokens (light & dark). */
-  :root {
-    --biocn-hero-o: #d95f02;
-    --biocn-hero-o-shade: #b84e00;
-    --biocn-hero-g: #1b9e77;
-    --biocn-hero-g-shade: #147e5e;
-    --biocn-hero-p: #7570b3;
+  /* Hero double-helix SVO palette tokens (light & dark, synced with data-theme). */
+  :root,
+  :root[data-theme='light'] {
+    --biocn-hero-o: #c04e08;
+    --biocn-hero-o-shade: #9d3d04;
+    --biocn-hero-g: #137a5b;
+    --biocn-hero-g-shade: #0d5e45;
+    --biocn-hero-p: #635ba6;
   }
 
   @media (prefers-color-scheme: dark) {
-    :root {
-      --biocn-hero-o: #f28e4b;
-      --biocn-hero-o-shade: #cc6d2e;
-      --biocn-hero-g: #4ec6a3;
-      --biocn-hero-g-shade: #349f80;
-      --biocn-hero-p: #a99cf0;
+    :root:not([data-theme='light']) {
+      --biocn-hero-o: #ea9558;
+      --biocn-hero-o-shade: #c8743a;
+      --biocn-hero-g: #58c4a3;
+      --biocn-hero-g-shade: #3ca082;
+      --biocn-hero-p: #aba0eb;
     }
   }
 
-  .hero-brand-lockup {
+  :root[data-theme='dark'] {
+    --biocn-hero-o: #ea9558;
+    --biocn-hero-o-shade: #c8743a;
+    --biocn-hero-g: #58c4a3;
+    --biocn-hero-g-shade: #3ca082;
+    --biocn-hero-p: #aba0eb;
+  }
+
+  /* Custom CSS for the optical helix + animated wordmark lockup proportion. */
+  .hero-brand-head {
     display: grid;
-    grid-template-columns: 10rem minmax(0, 1fr);
-    align-items: start;
-    column-gap: 1.5rem;
+    grid-template-columns: 5.5rem minmax(0, 1fr);
+    align-items: center;
+    column-gap: 1.25rem;
     width: 100%;
   }
 
   .hero-brand-mark {
     display: grid;
-    width: 10rem;
-    height: 10rem;
-    place-items: start center;
+    width: 5.5rem;
+    height: 5.5rem;
+    place-items: center;
   }
 
   @media (max-width: 639px) {
-    .hero-brand-lockup {
-      grid-template-columns: 6rem minmax(0, 1fr);
-      column-gap: 0.75rem;
+    .hero-brand-head {
+      grid-template-columns: 4.5rem minmax(0, 1fr);
+      column-gap: 1rem;
     }
 
     .hero-brand-mark {
-      width: 6rem;
-      height: 6rem;
+      width: 4.5rem;
+      height: 4.5rem;
     }
   }
-  /* 全局字号（demo 卡里的正文是“仿生阅读”的主角，优先保证可读）。
-     思源宋体（Noto Serif SC）字号天然偏大，root 回落到 1rem/1.0625rem。 */
+
+  /* 全局基准保持标准 1rem（16px），避免桌面端整体膨胀破坏组件比例。 */
   html {
     font-size: 1rem;
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
     --font-serif: 'Noto Serif SC', 'Source Han Serif SC', ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    scroll-behavior: smooth;
     -webkit-font-smoothing: antialiased;
     -webkit-text-size-adjust: 100%;
   }
-  @media (min-width: 1024px) {
+
+  @media (prefers-reduced-motion: reduce) {
     html {
-      font-size: 1.0625rem;
+      scroll-behavior: auto;
     }
+  }
+
+  ::selection {
+    background-color: color-mix(in oklch, var(--color-primary) 22%, transparent);
+    color: var(--color-base-content);
   }
 }
 
@@ -88,38 +180,15 @@
   }
   /*
    * HeroTitle: brand-origin typography animation
-   * 中文仿生阅读 -> Chinese Bionic Reading -> Cn Bio -> CNBio -> BioCN
+   * Chinese Bionic Reading -> Cn Bio -> CNBio -> BioCN
    * Custom CSS is minimal and scoped to glyph collapse, case morph, and the
    * FLIP-measured counter-arc swap, which daisyUI has no equivalent for.
    */
-  .hero-zh-layer {
-    position: absolute;
-    left: 0;
-    transition:
-      opacity 300ms ease,
-      transform 360ms cubic-bezier(0.32, 0.72, 0, 1),
-      filter 300ms ease;
-  }
-
-  .hero-zh-layer[data-state='in'] {
-    opacity: 1;
-    transform: translateY(0);
-    filter: blur(0);
-    animation: hero-zh-enter 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  }
-
-  .hero-zh-layer[data-state='out'] {
-    opacity: 0;
-    transform: translateY(-0.34em);
-    filter: blur(3px);
-    pointer-events: none;
-  }
-
   .hero-en-stage {
     position: absolute;
     left: 0;
     width: max-content;
-    --hero-phrase-scale: 0.45;
+    --hero-phrase-scale: 0.42;
     transform-origin: left center;
     transform: scale(var(--hero-phrase-scale));
     opacity: 0;
@@ -130,7 +199,7 @@
 
   @media (max-width: 639px) {
     .hero-en-stage {
-      --hero-phrase-scale: 0.36;
+      --hero-phrase-scale: 0.38;
     }
   }
 
@@ -294,7 +363,7 @@
 
   .hero-helix-guide {
     opacity: 0.11;
-    animation: hero-helix-guide-fade 640ms ease 1.85s forwards;
+    animation: hero-helix-guide-fade 560ms ease 1.35s forwards;
   }
 
   .hero-helix-guide-return {
@@ -322,7 +391,7 @@
     stroke-dashoffset: 105;
     opacity: 0;
     animation:
-      hero-helix-draw 2.45s cubic-bezier(0.36, 0.04, 0.22, 1) forwards,
+      hero-helix-draw 1.85s cubic-bezier(0.36, 0.04, 0.22, 1) forwards,
       hero-helix-show 60ms linear forwards;
   }
 
@@ -331,7 +400,7 @@
   }
 
   .hero-helix-strand-g {
-    animation-delay: 170ms, 170ms;
+    animation-delay: 150ms, 150ms;
   }
 
   .hero-helix-rung {
@@ -343,21 +412,21 @@
     opacity: 0;
   }
 
-  /* Draw as strands pass each belly -> soft accent on n->N (2.25s) -> calm breath (3.45s+). */
+  /* Draw as strands pass each belly -> soft accent on n->N (1.54s) -> calm breath (2.85s+). */
   .hero-helix-rung-1 {
     animation:
-      hero-helix-draw 420ms cubic-bezier(0.22, 0.72, 0.25, 1) 880ms forwards,
-      hero-helix-show 50ms linear 880ms forwards,
-      hero-helix-rung-accent 460ms cubic-bezier(0.42, 0, 0.2, 1) 2260ms,
-      biocn-helix-breathe 3.4s ease-in-out 3.55s infinite;
+      hero-helix-draw 380ms cubic-bezier(0.22, 0.72, 0.25, 1) 620ms forwards,
+      hero-helix-show 50ms linear 620ms forwards,
+      hero-helix-rung-accent 460ms cubic-bezier(0.42, 0, 0.2, 1) 1580ms,
+      biocn-helix-breathe 3.4s ease-in-out 2.85s infinite;
   }
 
   .hero-helix-rung-2 {
     animation:
-      hero-helix-draw 420ms cubic-bezier(0.22, 0.72, 0.25, 1) 1680ms forwards,
-      hero-helix-show 50ms linear 1680ms forwards,
-      hero-helix-rung-accent 460ms cubic-bezier(0.42, 0, 0.2, 1) 2320ms,
-      biocn-helix-breathe 3.4s ease-in-out 3.85s infinite;
+      hero-helix-draw 380ms cubic-bezier(0.22, 0.72, 0.25, 1) 1240ms forwards,
+      hero-helix-show 50ms linear 1240ms forwards,
+      hero-helix-rung-accent 460ms cubic-bezier(0.42, 0, 0.2, 1) 1640ms,
+      biocn-helix-breathe 3.4s ease-in-out 3.15s infinite;
   }
 
   .hero-helix-static .hero-helix-strand,
@@ -391,19 +460,6 @@
     }
     to {
       opacity: 0.11;
-    }
-  }
-
-  @keyframes hero-zh-enter {
-    from {
-      opacity: 0;
-      transform: translateY(0.2em);
-      filter: blur(2px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-      filter: blur(0);
     }
   }
 

@@ -11,7 +11,14 @@ describe("reader iframe bridge.js", () => {
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-mode");
     document.documentElement.removeAttribute("data-biocn");
-    document.documentElement.removeAttribute("data-palette");
+    document.documentElement.removeAttribute("data-font");
+    document.documentElement.removeAttribute("data-margin");
+    document.documentElement.removeAttribute("data-align");
+    document.documentElement.removeAttribute("data-dim-images");
+    document.documentElement.style.removeProperty("--svo-subject");
+    document.documentElement.style.removeProperty("--svo-predicate");
+    document.documentElement.style.removeProperty("--svo-object");
+    document.documentElement.style.removeProperty("--reader-para-spacing");
     document.body.innerHTML = `
       <p><span data-bp="0"></span><span data-br="0-0">他</span><em><span data-br="0-1">走</span></em><span data-br="0-2">了。</span></p>
       <p><a id="rel" href="../Text/ch2.xhtml#fn1">注释</a> <a id="ext" href="https://example.com">外链</a></p>
@@ -34,8 +41,13 @@ describe("reader iframe bridge.js", () => {
           prefs: {
             ...DEFAULT_READER_PREFS,
             theme: "sepia",
+            fontFamily: "serif",
             fontSize: 20,
-            coloringPalette: "vivid",
+            paragraphSpacing: 1.2,
+            pageMargin: "wide",
+            textAlign: "justify",
+            dimImagesInDark: false,
+            svoColors: { subject: "#b03a2e", predicate: null, object: "#4a4e91" },
           },
           target: {},
         },
@@ -44,8 +56,15 @@ describe("reader iframe bridge.js", () => {
 
     expect(document.documentElement.getAttribute("data-theme")).toBe("sepia");
     expect(document.documentElement.getAttribute("data-biocn")).toBe("on");
-    expect(document.documentElement.getAttribute("data-palette")).toBe("vivid");
+    expect(document.documentElement.getAttribute("data-font")).toBe("serif");
+    expect(document.documentElement.getAttribute("data-margin")).toBe("wide");
+    expect(document.documentElement.getAttribute("data-align")).toBe("justify");
+    expect(document.documentElement.getAttribute("data-dim-images")).toBe("off");
+    expect(document.documentElement.style.getPropertyValue("--svo-subject")).toBe("#b03a2e");
+    expect(document.documentElement.style.getPropertyValue("--svo-predicate")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--svo-object")).toBe("#4a4e91");
     expect(document.documentElement.style.getPropertyValue("--reader-font-size")).toBe("20px");
+    expect(document.documentElement.style.getPropertyValue("--reader-para-spacing")).toBe("1.2em");
 
     // Progressive coloring patch swaps data-br runs cleanly in place.
     window.dispatchEvent(

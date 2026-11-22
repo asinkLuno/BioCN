@@ -9,27 +9,26 @@ import {
 } from 'react';
 
 /**
- * Unified Hero Brand Choreography — continuous looping sequence (~7.7s cycle):
+ * Unified Hero Brand Choreography — continuous looping sequence (~7.0s cycle):
  *
- *   Helix (left): draws in ONE unbroken fluid stroke (0.04s -> 2.62s) with both
+ *   Helix (left): draws in ONE unbroken fluid stroke (0.04s -> 2.00s) with both
  *   purple rungs bridging naturally as the strands sweep past each loop belly,
  *   pulses subtly on `n -> N`, counter-twists on `CN <-> Bio`, breathes during
  *   the settled hold, then dissolves softly before the next cycle begins.
  *
  *   Wordmark (right):
- *     0 (0.00s): 中文仿生阅读
- *     1 (0.68s): Chinese Bionic Reading
- *     2 (1.52s): Extra letters vanish & collapse -> Cn Bio (smoothly zooms to full size)
- *     3 (2.22s): n -> N + word gap closes right off the zoom's momentum -> CNBio
- *     4 (2.72s): CN <-> Bio counter-arc weave (FLIP-measured) -> BioCN
- *     5 (3.44s): Settled BioCN + 中文仿生阅读 glides in below (holds ~3.8s)
- *     6 (7.25s): Soft fade-out before looping seamlessly back to Stage 0 (7.70s)
+ *     1 (0.00s): Chinese Bionic Reading
+ *     2 (0.84s): Extra letters vanish & collapse -> Cn Bio (smoothly zooms to full size)
+ *     3 (1.54s): n -> N + word gap closes right off the zoom's momentum -> CNBio
+ *     4 (2.04s): CN <-> Bio counter-arc weave (FLIP-measured) -> BioCN
+ *     5 (2.76s): Settled BioCN + 中文仿生阅读 glides in below (holds ~3.8s)
+ *     6 (6.57s): Soft fade-out before looping seamlessly back to Stage 1 (7.04s)
  *
  * Respects `prefers-reduced-motion: reduce` (renders static Stage 5 without looping)
  * and pauses the loop when the browser tab is hidden.
  */
 
-type Stage = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+type Stage = 1 | 2 | 3 | 4 | 5 | 6;
 
 const STRAND_O =
   'M 68.2 89.9 C 56.4 81.6 27 74.9 27 65.5 C 27 53.7 73 46.3 73 34.5 C 73 25.1 43.6 18.4 31.8 10.1';
@@ -37,15 +36,14 @@ const STRAND_G =
   'M 31.8 89.9 C 43.6 81.6 73 74.9 73 65.5 C 73 53.7 27 46.3 27 34.5 C 27 25.1 56.4 18.4 68.2 10.1';
 
 const STAGE_SCHEDULE: readonly { stage: Stage; atMs: number }[] = [
-  { stage: 1, atMs: 680 },
-  { stage: 2, atMs: 1520 },
-  { stage: 3, atMs: 2220 },
-  { stage: 4, atMs: 2720 },
-  { stage: 5, atMs: 3440 },
-  { stage: 6, atMs: 7250 },
+  { stage: 2, atMs: 840 },
+  { stage: 3, atMs: 1540 },
+  { stage: 4, atMs: 2040 },
+  { stage: 5, atMs: 2760 },
+  { stage: 6, atMs: 6570 },
 ];
 
-const LOOP_RESET_MS = 7720;
+const LOOP_RESET_MS = 7040;
 
 function Vanish({
   text,
@@ -90,7 +88,7 @@ function HeroHelix({
     >
       <svg
         viewBox="0 0 100 100"
-        className={`hero-helix-svg size-24 text-base-content sm:size-40 ${
+        className={`hero-helix-svg size-[4.5rem] text-base-content sm:size-[5.5rem] ${
           reducedMotion ? 'hero-helix-static' : ''
         } ${stage === 4 ? 'hero-helix-twist' : ''} ${fading ? 'hero-helix-fadeout' : ''}`}
         data-stage={stage}
@@ -190,7 +188,7 @@ function HeroHelix({
 
 export function HeroBrandLockup({ children }: { children: ReactNode }) {
   const [reducedMotion, setReducedMotion] = useState(false);
-  const [stage, setStage] = useState<Stage>(0);
+  const [stage, setStage] = useState<Stage>(1);
   const [runId, setRunId] = useState(0);
   const [swapOffsets, setSwapOffsets] = useState<{ cn: number; bio: number } | null>(null);
 
@@ -207,7 +205,7 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
     }
 
     setReducedMotion(false);
-    setStage(0);
+    setStage(1);
     setSwapOffsets(null);
 
     // 滚出视野就不再排下一轮定时器：hero 每轮都会整块重排，看不见时纯烧电。
@@ -280,18 +278,18 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
   const swapping = stage === 4 && swapOffsets !== null;
 
   return (
-    <div ref={rootRef} className="hero-brand-lockup max-w-xl">
-      <HeroHelix
-        key={`helix-${runId}`}
-        stage={stage}
-        reducedMotion={reducedMotion}
-        onReplay={replay}
-      />
+    <div ref={rootRef} className="flex w-full flex-col gap-6 sm:gap-7">
+      <div className="hero-brand-head">
+        <HeroHelix
+          key={`helix-${runId}`}
+          stage={stage}
+          reducedMotion={reducedMotion}
+          onReplay={replay}
+        />
 
-      <div className="space-y-7">
         <h1
           id="intro-title"
-          className={`space-y-2 font-semibold ${stage === 5 && !reducedMotion ? 'cursor-pointer' : ''}`}
+          className={`space-y-1 font-semibold ${stage === 5 && !reducedMotion ? 'cursor-pointer' : ''}`}
           onClick={replay}
           title={stage === 5 && !reducedMotion ? '点击立即重播' : undefined}
         >
@@ -301,7 +299,7 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
           {/* Primary stage: reserves the exact final headline height to guarantee zero CLS. */}
           <span
             aria-hidden="true"
-            className="relative flex min-h-[1.22em] items-center text-[2.75rem] leading-tight tracking-tight select-none sm:text-6xl"
+            className="relative flex min-h-[1.16em] items-center text-[2.375rem] leading-[1.12] tracking-[-0.025em] select-none sm:text-[3.125rem]"
           >
             {settled ? (
               <span className={`hero-settled inline-flex items-baseline ${fading ? 'hero-settled-out' : ''}`}>
@@ -309,87 +307,75 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
                 <span className="svo-object">CN</span>
               </span>
             ) : (
-              <>
-                {/* Stage 0: 中文仿生阅读 */}
+              /* Stages 1–4: Chinese Bionic Reading -> Cn Bio -> CNBio -> BioCN */
+              <span
+                key={`en-${runId}`}
+                className="hero-en-stage inline-flex items-baseline whitespace-nowrap"
+                data-visible="true"
+                data-full-scale={condensed ? 'true' : 'false'}
+                data-swapping={swapping ? 'true' : 'false'}
+              >
                 <span
-                  key={`zh-${runId}`}
-                  className="hero-zh-layer inline-flex items-baseline whitespace-nowrap text-[1.75rem] leading-tight tracking-tight text-base-content sm:text-[2.35rem]"
-                  data-state={stage === 0 ? 'in' : 'out'}
+                  ref={cnRef}
+                  className={`hero-en-group hero-en-group-cn svo-object inline-flex items-baseline ${
+                    swapping ? 'hero-swap-cn' : ''
+                  }`}
+                  style={
+                    swapping
+                      ? ({ '--swap-x': `${swapOffsets.cn}px` } as CSSProperties)
+                      : undefined
+                  }
                 >
-                  <span>中文</span>
-                  <span>仿生阅读</span>
-                </span>
-
-                {/* Stages 1–4: Chinese Bionic Reading -> Cn Bio -> CNBio -> BioCN */}
-                <span
-                  key={`en-${runId}`}
-                  className="hero-en-stage inline-flex items-baseline whitespace-nowrap"
-                  data-visible={stage >= 1 ? 'true' : 'false'}
-                  data-full-scale={condensed ? 'true' : 'false'}
-                  data-swapping={swapping ? 'true' : 'false'}
-                >
-                  <span
-                    ref={cnRef}
-                    className={`hero-en-group hero-en-group-cn svo-object inline-flex items-baseline ${
-                      swapping ? 'hero-swap-cn' : ''
-                    }`}
-                    style={
-                      swapping
-                        ? ({ '--swap-x': `${swapOffsets.cn}px` } as CSSProperties)
-                        : undefined
-                    }
-                  >
-                    <span>C</span>
-                    <Vanish text="hi" gone={condensed} delayMs={0} />
-                    <span className="hero-case-slot" data-upper={uppercased ? 'true' : 'false'}>
-                      <span className="hero-case-lower">
-                        <span className="hero-case-inner">n</span>
-                      </span>
-                      <span className="hero-case-upper">
-                        <span className="hero-case-inner">N</span>
-                      </span>
+                  <span>C</span>
+                  <Vanish text="hi" gone={condensed} delayMs={0} />
+                  <span className="hero-case-slot" data-upper={uppercased ? 'true' : 'false'}>
+                    <span className="hero-case-lower">
+                      <span className="hero-case-inner">n</span>
                     </span>
-                    <Vanish text="ese" gone={condensed} delayMs={40} />
+                    <span className="hero-case-upper">
+                      <span className="hero-case-inner">N</span>
+                    </span>
                   </span>
-
-                  {/* Word gap stays open for `Cn Bio` in Stage 2, then closes smoothly into `CNBio` in Stage 3. */}
-                  <span className="hero-gap" data-closed={uppercased ? 'true' : 'false'}>
-                    <span className="hero-vanish-inner"> </span>
-                  </span>
-
-                  <span
-                    ref={bioRef}
-                    className={`hero-en-group hero-en-group-bio svo-predicate inline-flex items-baseline ${
-                      swapping ? 'hero-swap-bio' : ''
-                    }`}
-                    style={
-                      swapping
-                        ? ({ '--swap-x': `${swapOffsets.bio}px` } as CSSProperties)
-                        : undefined
-                    }
-                  >
-                    <span>Bio</span>
-                    <Vanish text="nic" gone={condensed} delayMs={70} />
-                    <Vanish text=" Reading" gone={condensed} delayMs={100} />
-                  </span>
+                  <Vanish text="ese" gone={condensed} delayMs={40} />
                 </span>
-              </>
+
+                {/* Word gap stays open for `Cn Bio` in Stage 2, then closes smoothly into `CNBio` in Stage 3. */}
+                <span className="hero-gap" data-closed={uppercased ? 'true' : 'false'}>
+                  <span className="hero-vanish-inner"> </span>
+                </span>
+
+                <span
+                  ref={bioRef}
+                  className={`hero-en-group hero-en-group-bio svo-predicate inline-flex items-baseline ${
+                    swapping ? 'hero-swap-bio' : ''
+                  }`}
+                  style={
+                    swapping
+                      ? ({ '--swap-x': `${swapOffsets.bio}px` } as CSSProperties)
+                      : undefined
+                  }
+                >
+                  <span>Bio</span>
+                  <Vanish text="nic" gone={condensed} delayMs={70} />
+                  <Vanish text=" Reading" gone={condensed} delayMs={100} />
+                </span>
+              </span>
             )}
           </span>
 
           {/* Subtitle slot: always occupies its final height; glides in once BioCN settles. */}
           <span
             aria-hidden="true"
-            className={`hero-subtitle block text-xl leading-snug tracking-tight text-base-content/70 sm:text-2xl ${
+            className={`hero-subtitle block text-base leading-snug font-normal tracking-tight text-base-content/65 sm:text-lg ${
               stage === 5 ? 'hero-subtitle-visible' : ''
             }`}
           >
             中文仿生阅读
           </span>
         </h1>
-
-        {children}
       </div>
+
+      {children}
     </div>
   );
 }

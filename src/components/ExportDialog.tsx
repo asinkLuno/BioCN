@@ -102,7 +102,7 @@ export function ExportDialog({ id, title, onClose }: Props) {
         ) : (
           <>
             <p className="mt-2 text-sm text-base-content/70">
-              已着色的章节会带上颜色，其余章节按原样保留。原书不会被改动。
+              全书着色结果会写入新的 EPUB 副本，原书不会被改动。
             </p>
             <fieldset className="fieldset mt-4">
               <legend className="fieldset-legend">CSS 样式</legend>

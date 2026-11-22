@@ -34,14 +34,21 @@ import {
   type ChapterTarget,
 } from "../lib/readerBridge";
 import {
+  DEFAULT_SVO_COLORS,
+  DEFAULT_SVO_OVERRIDES,
+  hasCustomSvoColors,
   loadReaderPrefs,
   saveReaderPrefs,
-  type ColoringPalette,
   type ReaderColumns,
+  type ReaderFontFamily,
+  type ReaderPageMargin,
   type ReaderPrefs,
+  type ReaderTextAlign,
   type ReaderTheme,
   type ReaderViewMode,
+  type SvoRole,
 } from "../lib/readerPrefs";
+import { loadAppTheme, onAppThemeChange, type AppTheme } from "../lib/appTheme";
 
 interface Props {
   id: string;
@@ -82,11 +89,11 @@ type SlotIndex = 0 | 1;
 function readerBgClass(theme: ReaderTheme): string {
   switch (theme) {
     case "light":
-      return "bg-white";
+      return "bg-[#fcfbf8]";
     case "sepia":
-      return "bg-[#f6f0e2]";
+      return "bg-[#f4ede0]";
     case "dark":
-      return "bg-[#181a1f]";
+      return "bg-[#171614]";
     default:
       return "bg-base-100";
   }
@@ -158,6 +165,18 @@ export function Reader({
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [chromeVisible, setChromeVisible] = useState(true);
   const [prefs, setPrefs] = useState<ReaderPrefs>(() => loadReaderPrefs());
+  const [appTheme, setAppTheme] = useState<AppTheme>(() => loadAppTheme());
+  useEffect(() => onAppThemeChange(setAppTheme), []);
+
+  // When paper color is set to "auto", follow the explicit app theme (if any)
+  // before falling back to OS prefers-color-scheme, so Settings → 外观 keeps
+  // the reader chrome and chapter paper seamlessly aligned.
+  const effectiveTheme: ReaderTheme =
+    prefs.theme === "auto" && appTheme !== "auto" ? appTheme : prefs.theme;
+  const effectivePrefs = useMemo<ReaderPrefs>(
+    () => (effectiveTheme === prefs.theme ? prefs : { ...prefs, theme: effectiveTheme }),
+    [prefs, effectiveTheme],
+  );
   const [reloadNonce, setReloadNonce] = useState(0);
   const [colorState, setColorState] = useState<ChapterProgressState>({
     done: 0,
@@ -187,7 +206,7 @@ export function Reader({
   const swapFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPatchesRef = useRef<RunPatch[]>([]);
   const pendingTargetRef = useRef<ChapterTarget>({});
-  const prefsRef = useRef(prefs);
+  const prefsRef = useRef(effectivePrefs);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<{
     bookId: string;
@@ -208,14 +227,21 @@ export function Reader({
   }, []);
 
   useEffect(() => {
-    prefsRef.current = prefs;
     saveReaderPrefs(prefs);
+  }, [prefs]);
+
+  useEffect(() => {
+    prefsRef.current = effectivePrefs;
     for (const slot of [0, 1] as const) {
       if (slotReadyRef.current[slot]) {
-        postToFrame(slotRefs.current[slot], { source: "biocn-host", type: "prefs", prefs });
+        postToFrame(slotRefs.current[slot], {
+          source: "biocn-host",
+          type: "prefs",
+          prefs: effectivePrefs,
+        });
       }
     }
-  }, [prefs]);
+  }, [effectivePrefs]);
 
   const updatePrefs = useCallback((patch: Partial<ReaderPrefs>) => {
     setPrefs((prev) => ({ ...prev, ...patch }));
@@ -821,7 +847,7 @@ export function Reader({
                 Aa
               </button>
               {prefsOpen && (
-                <div className="dropdown-content card z-30 mt-2 w-72 bg-base-100 shadow-xl ring-1 ring-base-content/10">
+                <div className="dropdown-content card z-30 mt-2 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto bg-base-100 shadow-xl ring-1 ring-base-content/10">
                   <div className="card-body gap-3 p-4 text-sm">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-medium text-base-content/70">翻页方式</span>
@@ -891,6 +917,27 @@ export function Reader({
                       </div>
                     </div>
 
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-base-content/70">字体</span>
+                      <div className="join">
+                        {(
+                          [
+                            ["default", "默认"],
+                            ["serif", "思源宋体"],
+                          ] as [ReaderFontFamily, string][]
+                        ).map(([fontFamily, label]) => (
+                          <button
+                            key={fontFamily}
+                            type="button"
+                            className={`btn btn-xs join-item ${prefs.fontFamily === fontFamily ? "btn-primary" : "btn-ghost"}`}
+                            onClick={() => updatePrefs({ fontFamily })}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium text-base-content/70">字号</span>
@@ -933,6 +980,96 @@ export function Reader({
                       />
                     </div>
 
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-base-content/70">段间距</span>
+                        <span className="text-xs tabular-nums text-base-content/60">
+                          {prefs.paragraphSpacing.toFixed(1)}em
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        aria-label="段间距"
+                        min={0.4}
+                        max={2.0}
+                        step={0.2}
+                        value={prefs.paragraphSpacing}
+                        onChange={(event) =>
+                          updatePrefs({ paragraphSpacing: Number(event.target.value) })
+                        }
+                        className="range range-xs range-primary"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-base-content/70">页边距</span>
+                      <div className="join">
+                        {(
+                          [
+                            ["compact", "窄"],
+                            ["normal", "适中"],
+                            ["wide", "宽"],
+                          ] as [ReaderPageMargin, string][]
+                        ).map(([pageMargin, label]) => (
+                          <button
+                            key={pageMargin}
+                            type="button"
+                            className={`btn btn-xs join-item ${prefs.pageMargin === pageMargin ? "btn-primary" : "btn-ghost"}`}
+                            onClick={() => updatePrefs({ pageMargin })}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-base-content/70">对齐</span>
+                      <div className="join">
+                        {(
+                          [
+                            ["default", "默认"],
+                            ["justify", "两端对齐"],
+                          ] as [ReaderTextAlign, string][]
+                        ).map(([textAlign, label]) => (
+                          <button
+                            key={textAlign}
+                            type="button"
+                            className={`btn btn-xs join-item ${prefs.textAlign === textAlign ? "btn-primary" : "btn-ghost"}`}
+                            onClick={() => updatePrefs({ textAlign })}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-base-content/70">翻页动画</span>
+                      <input
+                        type="checkbox"
+                        aria-label="翻页动画开关"
+                        className="toggle toggle-primary toggle-sm"
+                        checked={prefs.pageAnimation}
+                        onChange={(event) =>
+                          updatePrefs({ pageAnimation: event.target.checked })
+                        }
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-base-content/70">深色插图护眼</span>
+                      <input
+                        type="checkbox"
+                        aria-label="深色插图护眼开关"
+                        className="toggle toggle-primary toggle-sm"
+                        checked={prefs.dimImagesInDark}
+                        onChange={(event) =>
+                          updatePrefs({ dimImagesInDark: event.target.checked })
+                        }
+                      />
+                    </div>
+
                     <div className="divider my-0" />
 
                     <div className="flex items-center justify-between gap-2">
@@ -949,25 +1086,66 @@ export function Reader({
                     </div>
 
                     {prefs.coloringEnabled && (
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-base-content/70">配色</span>
-                        <div className="join">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-base-content/70">颜色</span>
+                          {hasCustomSvoColors(prefs.svoColors) && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs h-6 min-h-6 px-1.5 text-base-content/60"
+                              onClick={() => updatePrefs({ svoColors: DEFAULT_SVO_OVERRIDES })}
+                            >
+                              恢复默认
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
                           {(
                             [
-                              ["default", "标准"],
-                              ["soft", "柔和"],
-                              ["vivid", "鲜明"],
-                            ] as [ColoringPalette, string][]
-                          ).map(([palette, label]) => (
-                            <button
-                              key={palette}
-                              type="button"
-                              className={`btn btn-xs join-item ${prefs.coloringPalette === palette ? "btn-primary" : "btn-ghost"}`}
-                              onClick={() => updatePrefs({ coloringPalette: palette })}
-                            >
-                              {label}
-                            </button>
-                          ))}
+                              ["subject", "主语"],
+                              ["predicate", "谓语"],
+                              ["object", "宾语"],
+                            ] as [SvoRole, string][]
+                          ).map(([role, label]) => {
+                            const resolvedPaper: "light" | "sepia" | "dark" =
+                              effectiveTheme === "sepia"
+                                ? "sepia"
+                                : effectiveTheme === "dark" ||
+                                    (effectiveTheme === "auto" &&
+                                      typeof window !== "undefined" &&
+                                      window.matchMedia?.("(prefers-color-scheme: dark)").matches)
+                                  ? "dark"
+                                  : "light";
+                            const color =
+                              prefs.svoColors[role] ?? DEFAULT_SVO_COLORS[resolvedPaper][role];
+                            return (
+                              <label
+                                key={role}
+                                className="btn btn-xs btn-ghost relative h-7 min-h-7 justify-center gap-1.5 border border-base-content/15 font-normal"
+                              >
+                                <span
+                                  aria-hidden="true"
+                                  className="size-2.5 shrink-0 rounded-full"
+                                  style={{ backgroundColor: color }}
+                                />
+                                <span>{label}</span>
+                                <input
+                                  type="color"
+                                  aria-label={`${label}颜色`}
+                                  value={color}
+                                  onChange={(event) =>
+                                    updatePrefs({
+                                      svoColors: {
+                                        ...prefs.svoColors,
+                                        [role]: event.target.value,
+                                      },
+                                    })
+                                  }
+                                  className="sr-only"
+                                />
+                              </label>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -1012,7 +1190,7 @@ export function Reader({
         )}
 
         <main
-          className={`relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden transition-colors duration-200 ${readerBgClass(prefs.theme)}`}
+          className={`relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden transition-colors duration-200 ${readerBgClass(effectiveTheme)}`}
           aria-busy={loading}
         >
           {error !== null ? (

@@ -1,6 +1,10 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
-import { bookHasColoring, bookHasActiveColoring, type ColoringProgress } from "../lib/reading";
+import {
+  bookColoringStatus,
+  type BookColoringStatus,
+  type ColoringProgress,
+} from "../lib/reading";
 import { ColoringOverlay } from "./ColoringOverlay";
 import { ExportDialog } from "./ExportDialog";
 import { useDialog, ModalBackdrop } from "./dialog";
@@ -22,6 +26,11 @@ interface Props {
 /** What the confirmation dialog is asking about, or that none is open. */
 type Confirming = "remove" | "clear-cache" | null;
 
+type StatusState =
+  | { kind: "loading" }
+  | { kind: "ready"; data: BookColoringStatus }
+  | { kind: "error" };
+
 /** Wrapping in a memo is what keeps a shelf worth of tiles from re-rendering
     when one tile's cover loads or its menu opens. */
 export const BookTile = memo(function BookTile({
@@ -35,15 +44,13 @@ export const BookTile = memo(function BookTile({
   onClearCache,
   onRemove,
 }: Props) {
-  // A running job holds this book: opening, exporting, clearing or removing it
-  // would race the analysis, so they are all refused while `progress` is set.
+  // A running job holds this book: exporting, clearing or removing it would
+  // race the analysis, so they are all refused while `progress` is set.
   const coloring = progress !== null;
   const [coverBroken, setCoverBroken] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  /** Whether this book has coloring to clear, asked each time the menu opens. */
-  const [hasColoring, setHasColoring] = useState<boolean | null>(null);
-  /** …and coloring under the *active* weights, which is what an export reads. */
-  const [hasActiveColoring, setHasActiveColoring] = useState<boolean | null>(null);
+  /** Book's coloring coverage + model readiness, queried fresh each menu-open. */
+  const [status, setStatus] = useState<StatusState>({ kind: "loading" });
   const [confirming, setConfirming] = useState<Confirming>(null);
   const [exporting, setExporting] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
@@ -73,47 +80,47 @@ export const BookTile = memo(function BookTile({
     document.addEventListener("keydown", onKeyDown);
     // The menu only exists while open, so its first item takes focus itself.
     firstItem.current?.focus();
-    // 清除着色缓存 and 导出着色后的图书 may only be offered when this book
-    // has coloring — to clear, any weights' markers; to export, the active
-    // weights' (the only slice the exporter reads). The answers have to be
-    // current when an item is clicked, so they are asked here, at menu-open,
-    // not carried over from an earlier look.
-    let stale = false;
-    setHasColoring(null);
-    setHasActiveColoring(null);
-    const settle = (asked: Promise<boolean>, got: (value: boolean) => void) => {
-      asked
-        // A failed check must not hide the item it feeds: clearing an empty
-        // cache is a harmless no-op, exporting an uncolored book writes an
-        // honest plain copy, while a hidden item looks like a missing one.
-        .then((value) => {
-          if (!stale) got(value);
-        })
-        .catch(() => {
-          if (!stale) got(true);
-        });
-    };
-    settle(bookHasColoring(book.id), setHasColoring);
-    settle(bookHasActiveColoring(book.id), setHasActiveColoring);
     return () => {
-      stale = true;
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [menuOpen, book.id]);
+  }, [menuOpen]);
+
+  // Query coloring coverage & model availability whenever the menu opens (or a
+  // running job on this book finishes while the menu is open). Re-asking on
+  // each open ensures model installs/switches, reader progress, and cache
+  // clears are always reflected immediately with zero stale state.
+  useEffect(() => {
+    if (!menuOpen || coloring) return;
+    let stale = false;
+    setStatus({ kind: "loading" });
+    bookColoringStatus(book.id)
+      .then((data) => {
+        if (!stale) setStatus({ kind: "ready", data });
+      })
+      .catch(() => {
+        if (!stale) setStatus({ kind: "error" });
+      });
+    return () => {
+      stale = true;
+    };
+  }, [menuOpen, book.id, coloring]);
 
   // A real modal, not just a dialog with the `open` attribute: the page behind
   // it is inert and focus is trapped until the user decides.
   useDialog(dialog, confirming !== null);
 
-  /** Arrow keys walk the menu, as a `role="menu"` is expected to. */
+  /** Arrow keys walk the enabled menu items, as a `role="menu"` is expected to. */
   const moveMenuFocus = (event: React.KeyboardEvent<HTMLUListElement>) => {
     const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
     if (step === 0) return;
     event.preventDefault();
-    const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    const items = [
+      ...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)'),
+    ];
+    if (items.length === 0) return;
     const index = items.indexOf(document.activeElement as HTMLElement);
-    const next = (index + step + items.length) % items.length;
+    const next = index === -1 ? 0 : (index + step + items.length) % items.length;
     items[next]?.focus();
   };
 
@@ -125,6 +132,100 @@ export const BookTile = memo(function BookTile({
   };
 
   const showCover = cover !== undefined && !coverBroken;
+
+  const info = status.kind === "ready" ? status.data : null;
+  const isFull =
+    info !== null &&
+    info.hasModel &&
+    info.totalChapters > 0 &&
+    info.activeColored >= info.totalChapters;
+  const isPartial =
+    info !== null &&
+    info.hasModel &&
+    info.activeColored > 0 &&
+    info.activeColored < info.totalChapters;
+
+  // 1. 着色全书 / 取消着色全书
+  let colorizeDisabled = false;
+  let colorizeTitle: string | undefined;
+  if (!coloring) {
+    if (anyJob) {
+      colorizeDisabled = true;
+      colorizeTitle = "已有书在着色全书中，等它结束";
+    } else if (status.kind === "error") {
+      colorizeDisabled = true;
+      colorizeTitle = "无法读取书籍着色状态";
+    } else if (info === null) {
+      colorizeDisabled = true;
+    } else if (!info.hasModel) {
+      colorizeDisabled = true;
+      colorizeTitle = "请先在设置中下载模型";
+    } else if (info.totalChapters === 0) {
+      colorizeDisabled = true;
+      colorizeTitle = "这本书没有可着色的章节";
+    } else if (isFull) {
+      colorizeDisabled = true;
+      colorizeTitle = "全书已着色";
+    } else if (isPartial) {
+      colorizeTitle = `已着色 ${info.activeColored}/${info.totalChapters} 章，点击补齐剩余章节`;
+    }
+  }
+
+  // 2. 导出着色后的图书 — strictly requires FULL coloring under active weights
+  let exportDisabled = true;
+  let exportTitle: string | undefined;
+  if (coloring) {
+    exportTitle = "着色全书中，完成后才能导出";
+  } else if (status.kind === "error") {
+    exportTitle = "无法读取书籍着色状态";
+  } else if (info !== null) {
+    if (!info.hasModel) {
+      exportTitle = "请先在设置中下载模型";
+    } else if (info.totalChapters === 0) {
+      exportTitle = "这本书没有可导出的章节";
+    } else if (isPartial) {
+      exportTitle = `已着色 ${info.activeColored}/${info.totalChapters} 章，完成着色全书后才能导出`;
+    } else if (!isFull) {
+      exportTitle = "还没有着色，先着色全书再导出";
+    } else {
+      exportDisabled = false;
+    }
+  }
+
+  // 3. 清除着色缓存 — enabled whenever any weights have markers (even without a model)
+  let clearDisabled = true;
+  let clearTitle: string | undefined;
+  if (coloring) {
+    clearTitle = "着色全书中，完成后才能清除";
+  } else if (status.kind === "error") {
+    clearTitle = "无法读取书籍着色状态";
+  } else if (info !== null) {
+    if (!info.hasAnyCache) {
+      clearTitle = "还没有着色缓存";
+    } else {
+      clearDisabled = false;
+    }
+  }
+
+  // 4. 从书架移除
+  const removeDisabled = coloring;
+  const removeTitle = coloring ? "先取消着色全书，再移除" : undefined;
+
+  // Compact status line shown inside the menu so disabled reasons are visible
+  // at a glance (including on touch devices and webviews where disabled buttons
+  // suppress hover tooltips).
+  let menuNote: string | null = null;
+  if (!coloring && info !== null) {
+    if (!info.hasModel) {
+      menuNote = "请先在设置中下载模型";
+    } else if (isFull) {
+      menuNote = `全书已着色（${info.totalChapters} 章）`;
+    } else if (isPartial) {
+      menuNote = `已着色 ${info.activeColored}/${info.totalChapters} 章`;
+    } else if (info.hasAnyCache) {
+      menuNote = "当前模型尚未着色";
+    }
+  }
 
   return (
     <li>
@@ -191,19 +292,21 @@ export const BookTile = memo(function BookTile({
                 className="dropdown-content menu z-20 mt-1 w-48 rounded-box bg-base-100 p-2 shadow-lg ring-1 ring-base-content/10"
                 onKeyDown={moveMenuFocus}
               >
-                <li role="none">
+                {menuNote !== null && (
+                  <li
+                    role="none"
+                    className="menu-title px-3 py-1 text-xs font-normal text-base-content/55"
+                  >
+                    {menuNote}
+                  </li>
+                )}
+                <li role="none" title={colorizeTitle}>
                   <button
                     ref={firstItem}
                     type="button"
                     role="menuitem"
-                    // One job at a time, and the job holds the model: a second
-                    // pass would queue behind it for hours and duplicate its
-                    // work. Offering it disabled is clearer than a refusal.
-                    // The one job it can be is this book's, and then the item
-                    // is its cancel button — the strip on the tile deliberately
-                    // carries no controls.
-                    disabled={progress === null && anyJob}
-                    title={progress === null && anyJob ? "已有书在着色全书中，等它结束" : undefined}
+                    disabled={colorizeDisabled}
+                    title={colorizeTitle}
                     onClick={() => {
                       closeMenu();
                       if (coloring) onCancel();
@@ -213,24 +316,12 @@ export const BookTile = memo(function BookTile({
                     {coloring ? "取消着色全书" : "着色全书"}
                   </button>
                 </li>
-                <li role="none">
+                <li role="none" title={exportTitle}>
                   <button
                     type="button"
                     role="menuitem"
-                    // Exporting reads only the active weights' slice, and it
-                    // reads what the job writes: without coloring under these
-                    // weights the file would be the plain book back out, and
-                    // the chapter being analyzed right now would leave as a
-                    // plain chapter. Export once there is something colored
-                    // and the job is over.
-                    disabled={coloring || hasActiveColoring !== true}
-                    title={
-                      coloring
-                        ? "着色全书中，完成后才能导出"
-                        : hasActiveColoring === false
-                          ? "还没有着色，先着色全书再导出"
-                          : undefined
-                    }
+                    disabled={exportDisabled}
+                    title={exportTitle}
                     onClick={() => {
                       closeMenu();
                       setExporting(true);
@@ -239,22 +330,12 @@ export const BookTile = memo(function BookTile({
                     导出着色后的图书
                   </button>
                 </li>
-                <li role="none">
+                <li role="none" title={clearTitle}>
                   <button
                     type="button"
                     role="menuitem"
-                    // Grey until there is something to clear, and while the job
-                    // is writing exactly the rows a clear deletes: clearing
-                    // mid-job would leave the strip finishing over a book that
-                    // shows no coloring.
-                    disabled={coloring || hasColoring !== true}
-                    title={
-                      coloring
-                        ? "着色全书中，完成后才能清除"
-                        : hasColoring === false
-                          ? "还没有着色缓存"
-                          : undefined
-                    }
+                    disabled={clearDisabled}
+                    title={clearTitle}
                     onClick={() => {
                       closeMenu();
                       setConfirming("clear-cache");
@@ -263,16 +344,13 @@ export const BookTile = memo(function BookTile({
                     清除着色缓存
                   </button>
                 </li>
-                <li role="none">
+                <li role="none" title={removeTitle}>
                   <button
                     type="button"
                     role="menuitem"
                     className="text-error"
-                    // The job is reading this book's file; removing it mid-job
-                    // would leave the bar coloring a book that no longer
-                    // exists. Cancel first, then remove.
-                    disabled={coloring}
-                    title={coloring ? "先取消着色全书，再移除" : undefined}
+                    disabled={removeDisabled}
+                    title={removeTitle}
                     onClick={() => {
                       closeMenu();
                       setConfirming("remove");
