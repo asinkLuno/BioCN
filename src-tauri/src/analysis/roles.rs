@@ -6,8 +6,6 @@
 //! surface their subject via `nsubjpass`; 把字句 splits agent/patient on the
 //! `ba` marker; attributive relations never reach the core roles.
 
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::utf16::{find_utf16, from_utf16, to_utf16};
@@ -78,11 +76,14 @@ fn token_char_starts(sentence: &[u16], tokens: &[String]) -> Vec<usize> {
 }
 
 /// Tokens reachable from the root through `PRED_RELS` edges only.
-fn reachable_core(rels: &[String], heads: &[i32]) -> Vec<usize> {
+fn reachable_core(rels: &[&str], heads: &[i32]) -> Vec<usize> {
     let n = heads.len();
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); n + 1];
     for (i, &head) in heads.iter().enumerate() {
-        let h = head.max(0) as usize;
+        if head < 0 {
+            continue;
+        }
+        let h = head as usize;
         if h <= n {
             children[h].push(i);
         }
@@ -95,7 +96,7 @@ fn reachable_core(rels: &[String], heads: &[i32]) -> Vec<usize> {
         if is_pred[i] {
             continue;
         }
-        if !PRED_RELS.contains(&rels[i].as_str()) {
+        if !PRED_RELS.contains(&rels[i]) {
             continue;
         }
         is_pred[i] = true;
@@ -106,10 +107,10 @@ fn reachable_core(rels: &[String], heads: &[i32]) -> Vec<usize> {
 }
 
 /// Predicate candidates: POS-verbish tokens reachable from the root.
-fn reachable_pred_idxs(rels: &[String], heads: &[i32], pos_tags: &[String]) -> Vec<usize> {
+fn reachable_pred_idxs(rels: &[&str], heads: &[i32], pos_tags: &[String]) -> Vec<usize> {
     reachable_core(rels, heads)
         .into_iter()
-        .filter(|i| VERB_POS.contains(&pos_tags[*i].as_str()))
+        .filter(|&i| pos_tags.get(i).is_some_and(|p| VERB_POS.contains(&p.as_str())))
         .collect()
 }
 
@@ -118,21 +119,20 @@ fn in_set(set: &[&str], s: &str) -> bool {
 }
 
 /// 把字句: agent and post-把 patient are both nsubj; `ba` splits them.
-fn ba_roles(rels: &[String], heads: &[i32], preds: &[usize]) -> (Vec<usize>, Vec<usize>) {
+fn ba_roles(rels: &[&str], heads: &[i32], is_pred: &[bool]) -> (Vec<usize>, Vec<usize>) {
     let ba = rels
         .iter()
-        .position(|r| r == "ba")
+        .position(|&r| r == "ba")
         .map(|i| i as i32)
         .unwrap_or(-1);
-    let pred_set: HashSet<usize> = preds.iter().copied().collect();
     let mut subjs = Vec::new();
     let mut objs = Vec::new();
-    for (i, rel) in rels.iter().enumerate() {
+    for (i, &rel) in rels.iter().enumerate() {
         if !in_set(&SUBJ_RELS, rel) {
             continue;
         }
         let h = heads[i] - 1;
-        if h < 0 || !pred_set.contains(&(h as usize)) {
+        if h < 0 || !is_pred.get(h as usize).copied().unwrap_or(false) {
             continue;
         }
         if (i as i32) < ba {
@@ -144,36 +144,78 @@ fn ba_roles(rels: &[String], heads: &[i32], preds: &[usize]) -> (Vec<usize>, Vec
     (subjs, objs)
 }
 
-fn rel_candidates(rels: &[String], heads: &[i32], preds: &[usize], set: &[&str]) -> Vec<usize> {
-    let pred_set: HashSet<usize> = preds.iter().copied().collect();
+fn rel_candidates(rels: &[&str], heads: &[i32], is_pred: &[bool], set: &[&str]) -> Vec<usize> {
     let mut cands = Vec::new();
-    for (i, rel) in rels.iter().enumerate() {
-        if in_set(set, rel) && heads[i] > 0 && pred_set.contains(&((heads[i] - 1) as usize)) {
+    for (i, &rel) in rels.iter().enumerate() {
+        let h = heads[i] - 1;
+        if in_set(set, rel) && h >= 0 && is_pred.get(h as usize).copied().unwrap_or(false) {
             cands.push(i);
         }
     }
     cands
 }
 
-fn sv_roles(rels: &[String], heads: &[i32], preds: &[usize]) -> (Vec<usize>, Vec<usize>) {
-    if rels.iter().any(|r| r == "nsubjpass") {
+fn sv_roles(rels: &[&str], heads: &[i32], is_pred: &[bool]) -> (Vec<usize>, Vec<usize>) {
+    if rels.contains(&"nsubjpass") {
         // 被动句: only the passive subject; the 施事 in the 被-phrase is not one.
         return (
             rels.iter()
                 .enumerate()
-                .filter(|(_, r)| *r == "nsubjpass")
+                .filter(|(_, r)| **r == "nsubjpass")
                 .map(|(i, _)| i)
                 .collect(),
             Vec::new(),
         );
     }
-    if rels.iter().any(|r| r == "ba") {
-        return ba_roles(rels, heads, preds);
+    if rels.contains(&"ba") {
+        return ba_roles(rels, heads, is_pred);
     }
     (
-        rel_candidates(rels, heads, preds, &SUBJ_RELS),
-        rel_candidates(rels, heads, preds, &OBJ_RELS),
+        rel_candidates(rels, heads, is_pred, &SUBJ_RELS),
+        rel_candidates(rels, heads, is_pred, &OBJ_RELS),
     )
+}
+
+/// BioCN `_token_spans` + `_fill_roles`: per-character roles for one
+/// sentence using precomputed `(start, end)` UTF-16 word spans.
+pub fn char_roles_from_spans(
+    sentence_len: usize,
+    spans: &[(usize, usize)],
+    deps: &[Dep],
+    pos_tags: &[String],
+) -> Vec<Role> {
+    let mut roles = vec![Role::Normal; sentence_len];
+    if spans.is_empty() || deps.is_empty() {
+        return roles;
+    }
+
+    let rels: Vec<&str> = deps.iter().map(|d| d.deprel.as_str()).collect();
+    let heads: Vec<i32> = deps.iter().map(|d| d.head).collect();
+    let preds = reachable_pred_idxs(&rels, &heads, pos_tags);
+    let mut is_pred = vec![false; deps.len()];
+    for &p in &preds {
+        is_pred[p] = true;
+    }
+    let (subjs, objs) = sv_roles(&rels, &heads, &is_pred);
+
+    let groups: [(Role, &[usize]); 3] = [
+        (Role::Subject, &subjs),
+        (Role::Object, &objs),
+        (Role::Predicate, &preds),
+    ];
+    for (role, idxs) in groups {
+        for &ti in idxs {
+            let Some(&(begin, end)) = spans.get(ti) else {
+                continue;
+            };
+            for slot in roles.iter_mut().take(end.min(sentence_len)).skip(begin) {
+                if role.priority() > slot.priority() {
+                    *slot = role;
+                }
+            }
+        }
+    }
+    roles
 }
 
 /// BioCN `_token_spans` + `_fill_roles`: per-character roles for one
@@ -184,37 +226,16 @@ pub fn char_roles(
     deps: &[Dep],
     pos_tags: &[String],
 ) -> Vec<Role> {
-    let mut roles = vec![Role::Normal; sentence.len()];
     if tokens.is_empty() {
-        return roles;
+        return vec![Role::Normal; sentence.len()];
     }
     let starts = token_char_starts(sentence, tokens);
-
-    let rels: Vec<String> = deps.iter().map(|d| d.deprel.clone()).collect();
-    let heads: Vec<i32> = deps.iter().map(|d| d.head).collect();
-    let preds = reachable_pred_idxs(&rels, &heads, pos_tags);
-    let (subjs, objs) = sv_roles(&rels, &heads, &preds);
-
-    let groups: [(Role, &Vec<usize>); 3] = [
-        (Role::Subject, &subjs),
-        (Role::Object, &objs),
-        (Role::Predicate, &preds),
-    ];
-    for (role, idxs) in groups {
-        for &ti in idxs {
-            if ti >= starts.len() || ti >= tokens.len() {
-                continue;
-            }
-            let begin = starts[ti];
-            let end = begin + crate::analysis::utf16::utf16_len(&tokens[ti]);
-            for slot in roles.iter_mut().take(end.min(sentence.len())).skip(begin) {
-                if role.priority() > slot.priority() {
-                    *slot = role;
-                }
-            }
-        }
-    }
-    roles
+    let spans: Vec<(usize, usize)> = starts
+        .into_iter()
+        .zip(tokens.iter())
+        .map(|(begin, tok)| (begin, begin + crate::analysis::utf16::utf16_len(tok)))
+        .collect();
+    char_roles_from_spans(sentence.len(), &spans, deps, pos_tags)
 }
 
 /// BioCN `_to_segments`: fold the per-char role array into contiguous runs.
@@ -280,5 +301,46 @@ mod json_tests {
             .unwrap(),
             serde_json::json!({ "text": "。", "start": 1, "role": "normal" })
         );
+    }
+
+    #[test]
+    fn char_roles_assigns_svo_ba_and_passive_and_handles_short_pos_tags() {
+        let s = to_utf16("小明吃苹果");
+        let tokens: Vec<String> = ["小明", "吃", "苹果"].iter().map(|t| t.to_string()).collect();
+        let deps = vec![
+            Dep { head: 2, deprel: "nsubj".into() },
+            Dep { head: 0, deprel: "root".into() },
+            Dep { head: 2, deprel: "dobj".into() },
+        ];
+        let pos: Vec<String> = ["NR", "VV", "NN"].iter().map(|t| t.to_string()).collect();
+        let segs = to_segments(&s, &char_roles(&s, &tokens, &deps, &pos));
+        assert_eq!(
+            segs,
+            vec![
+                Segment { text: "小明".into(), start: 0, role: Role::Subject },
+                Segment { text: "吃".into(), start: 2, role: Role::Predicate },
+                Segment { text: "苹果".into(), start: 3, role: Role::Object },
+            ]
+        );
+
+        // 把字句: pre-把 nsubj -> Subject, post-把 nsubj -> Object
+        let ba_s = to_utf16("他把书看了");
+        let ba_toks: Vec<String> = ["他", "把", "书", "看", "了"].iter().map(|t| t.to_string()).collect();
+        let ba_deps = vec![
+            Dep { head: 4, deprel: "nsubj".into() },
+            Dep { head: 4, deprel: "ba".into() },
+            Dep { head: 4, deprel: "nsubj".into() },
+            Dep { head: 0, deprel: "root".into() },
+            Dep { head: 4, deprel: "asp".into() },
+        ];
+        let ba_pos: Vec<String> = ["PN", "BA", "NN", "VV", "AS"].iter().map(|t| t.to_string()).collect();
+        let ba_roles = char_roles(&ba_s, &ba_toks, &ba_deps, &ba_pos);
+        assert_eq!(ba_roles[0], Role::Subject);
+        assert_eq!(ba_roles[2], Role::Object);
+        assert_eq!(ba_roles[3], Role::Predicate);
+
+        // Short pos_tags must not panic even if deps has more entries.
+        let safe = char_roles(&s, &tokens, &deps, &["NR".to_string()]);
+        assert_eq!(safe.len(), s.len());
     }
 }

@@ -89,8 +89,8 @@ impl StageRunner for OrtRunner {
         pos_stage(&self.resources, &self.sessions, text, words)
     }
 
-    fn run_dep(&self, (text, tokens, pos, packs): Self::PosOut) -> Result<Vec<Segment>> {
-        dep_stage(&self.resources, &self.sessions, text, tokens, pos, packs)
+    fn run_dep(&self, bundle: Self::PosOut) -> Result<Vec<Segment>> {
+        dep_stage(&self.resources, &self.sessions, bundle)
     }
 }
 
@@ -159,11 +159,15 @@ struct QueueState {
     next_seq: u64,
     in_flight: usize,
     last_activity: Instant,
+    /// Throttles repeated `on_idle` notifications without touching
+    /// `last_activity` (so `is_idle(timeout)` stays true while the async
+    /// reaper handles the callback).
+    last_idle_notify: Option<Instant>,
     shutdown: bool,
 }
 
 impl QueueState {
-    fn pop_next(&mut self, shared: &Arc<Shared>) -> Option<TokWork> {
+    fn pop_next(&mut self, shared: &Arc<Shared>) -> Option<WorkItem<()>> {
         self.jobs.retain(|j| !j.is_cancelled() && !j.sentences.is_empty());
         let best_pos = self
             .jobs
@@ -182,11 +186,13 @@ impl QueueState {
 
         self.in_flight += 1;
         self.last_activity = Instant::now();
-        Some(TokWork {
+        self.last_idle_notify = None;
+        Some(WorkItem {
             index,
             sentence,
             cancel,
             reply_tx,
+            payload: (),
             _guard: InFlightGuard {
                 shared: shared.clone(),
             },
@@ -197,6 +203,7 @@ impl QueueState {
 struct Shared {
     state: Mutex<QueueState>,
     cv: Condvar,
+    shutdown: AtomicBool,
 }
 
 /// Decrements `in_flight` on every exit path (normal delivery, early
@@ -210,53 +217,54 @@ impl Drop for InFlightGuard {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         state.in_flight = state.in_flight.saturating_sub(1);
         state.last_activity = Instant::now();
+        state.last_idle_notify = None;
         if state.in_flight == 0 && state.jobs.is_empty() {
             self.shared.cv.notify_all();
         }
     }
 }
 
-struct TokWork {
+struct WorkItem<T> {
     index: usize,
     sentence: String,
     cancel: Arc<AtomicBool>,
     reply_tx: Sender<ScheduledResult>,
+    payload: T,
     _guard: InFlightGuard,
 }
 
-impl TokWork {
-    fn is_cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed) || self.reply_tx.is_closed()
+impl<T> WorkItem<T> {
+    fn is_cancelled(&self, shared: &Shared) -> bool {
+        shared.shutdown.load(Ordering::Acquire)
+            || self.cancel.load(Ordering::Relaxed)
+            || self.reply_tx.is_closed()
+    }
+
+    fn with_payload<U>(self, payload: U) -> WorkItem<U> {
+        WorkItem {
+            index: self.index,
+            sentence: self.sentence,
+            cancel: self.cancel,
+            reply_tx: self.reply_tx,
+            payload,
+            _guard: self._guard,
+        }
     }
 }
 
-struct PosWork<T> {
-    index: usize,
-    sentence: String,
-    cancel: Arc<AtomicBool>,
-    reply_tx: Sender<ScheduledResult>,
-    tok_out: T,
-    _guard: InFlightGuard,
+/// Ensures any unexpected exit from `tok_loop` marks the scheduler shut down
+/// and drains queued jobs so callers never hang waiting on closed channels.
+struct TokExitGuard {
+    shared: Arc<Shared>,
 }
 
-impl<T> PosWork<T> {
-    fn is_cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed) || self.reply_tx.is_closed()
-    }
-}
-
-struct DepWork<P> {
-    index: usize,
-    sentence: String,
-    cancel: Arc<AtomicBool>,
-    reply_tx: Sender<ScheduledResult>,
-    pos_out: P,
-    _guard: InFlightGuard,
-}
-
-impl<P> DepWork<P> {
-    fn is_cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed) || self.reply_tx.is_closed()
+impl Drop for TokExitGuard {
+    fn drop(&mut self) {
+        self.shared.shutdown.store(true, Ordering::Release);
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.shutdown = true;
+        state.jobs.clear();
+        self.shared.cv.notify_all();
     }
 }
 
@@ -280,13 +288,15 @@ impl<R: StageRunner> Scheduler<R> {
                 next_seq: 0,
                 in_flight: 0,
                 last_activity: Instant::now(),
+                last_idle_notify: None,
                 shutdown: false,
             }),
             cv: Condvar::new(),
+            shutdown: AtomicBool::new(false),
         });
 
-        let (tok_tx, tok_rx) = mpsc::sync_channel::<PosWork<R::TokOut>>(STAGE_QUEUE_CAP);
-        let (dep_tx, dep_rx) = mpsc::sync_channel::<DepWork<R::PosOut>>(STAGE_QUEUE_CAP);
+        let (tok_tx, tok_rx) = mpsc::sync_channel::<WorkItem<R::TokOut>>(STAGE_QUEUE_CAP);
+        let (dep_tx, dep_rx) = mpsc::sync_channel::<WorkItem<R::PosOut>>(STAGE_QUEUE_CAP);
 
         let tok_handle = {
             let shared = shared.clone();
@@ -300,21 +310,23 @@ impl<R: StageRunner> Scheduler<R> {
         };
 
         let pos_handle = {
+            let shared = shared.clone();
             let runner = runner.clone();
             std::thread::Builder::new()
                 .name("biocn-pos".into())
                 .spawn(move || {
-                    pos_loop(runner.as_ref(), tok_rx, dep_tx);
+                    pos_loop(&shared, runner.as_ref(), tok_rx, dep_tx);
                 })
                 .expect("spawn biocn-pos worker")
         };
 
         let dep_handle = {
+            let shared = shared.clone();
             let runner = runner;
             std::thread::Builder::new()
                 .name("biocn-dep".into())
                 .spawn(move || {
-                    dep_loop(runner.as_ref(), dep_rx);
+                    dep_loop(&shared, runner.as_ref(), dep_rx);
                 })
                 .expect("spawn biocn-dep worker")
         };
@@ -348,6 +360,7 @@ impl<R: StageRunner> Scheduler<R> {
         let seq = state.next_seq;
         state.next_seq += 1;
         state.last_activity = Instant::now();
+        state.last_idle_notify = None;
         state.jobs.push(QueuedJob {
             priority,
             seq,
@@ -366,12 +379,15 @@ impl<R: StageRunner> Scheduler<R> {
     }
 
     pub fn wake(&self) {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.jobs.retain(|j| !j.is_cancelled() && !j.sentences.is_empty());
         self.shared.cv.notify_all();
     }
 }
 
 impl<R: StageRunner> Drop for Scheduler<R> {
     fn drop(&mut self) {
+        self.shared.shutdown.store(true, Ordering::Release);
         {
             let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
             state.shutdown = true;
@@ -391,10 +407,13 @@ impl<R: StageRunner> Drop for Scheduler<R> {
 fn tok_loop<R: StageRunner>(
     shared: &Arc<Shared>,
     runner: &R,
-    tok_tx: mpsc::SyncSender<PosWork<R::TokOut>>,
+    tok_tx: mpsc::SyncSender<WorkItem<R::TokOut>>,
     idle_timeout: Option<Duration>,
     on_idle: Option<Arc<dyn Fn() + Send + Sync>>,
 ) {
+    let _exit_guard = TokExitGuard {
+        shared: shared.clone(),
+    };
     loop {
         let work = {
             let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -407,12 +426,15 @@ fn tok_loop<R: StageRunner>(
                 }
                 if let Some(timeout) = idle_timeout {
                     if state.in_flight == 0 {
-                        let elapsed = state.last_activity.elapsed();
-                        if elapsed >= timeout {
-                            // Reset activity clock so if the callback's async
-                            // unload skips (e.g. lock contention), we wait one
-                            // full timeout before retrying instead of spinning.
-                            state.last_activity = Instant::now();
+                        let idle_elapsed = state.last_activity.elapsed();
+                        let notify_elapsed = state.last_idle_notify.map(|t| t.elapsed());
+                        let ready_to_notify = idle_elapsed >= timeout
+                            && notify_elapsed.is_none_or(|e| e >= timeout);
+                        if ready_to_notify {
+                            // Throttle retries via `last_idle_notify` without
+                            // resetting `last_activity`, so `is_idle(timeout)`
+                            // remains true when the async reaper runs.
+                            state.last_idle_notify = Some(Instant::now());
                             let cb = on_idle.clone();
                             drop(state);
                             if let Some(cb) = cb {
@@ -421,7 +443,11 @@ fn tok_loop<R: StageRunner>(
                             state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
                             continue;
                         }
-                        let wait_for = timeout - elapsed;
+                        let wait_activity = timeout.saturating_sub(idle_elapsed);
+                        let wait_notify = notify_elapsed
+                            .map(|e| timeout.saturating_sub(e))
+                            .unwrap_or(Duration::ZERO);
+                        let wait_for = wait_activity.max(wait_notify);
                         let (s, _) = shared
                             .cv
                             .wait_timeout(state, wait_for)
@@ -436,23 +462,15 @@ fn tok_loop<R: StageRunner>(
             }
         };
 
-        if work.is_cancelled() {
+        if work.is_cancelled(shared) {
             continue;
         }
         match runner.run_tok(&work.sentence) {
             Ok(Some(tok_out)) => {
-                if work.is_cancelled() {
+                if work.is_cancelled(shared) {
                     continue;
                 }
-                let next = PosWork {
-                    index: work.index,
-                    sentence: work.sentence,
-                    cancel: work.cancel,
-                    reply_tx: work.reply_tx,
-                    tok_out,
-                    _guard: work._guard,
-                };
-                if tok_tx.send(next).is_err() {
+                if tok_tx.send(work.with_payload(tok_out)).is_err() {
                     return;
                 }
             }
@@ -469,33 +487,37 @@ fn tok_loop<R: StageRunner>(
 }
 
 fn pos_loop<R: StageRunner>(
+    shared: &Arc<Shared>,
     runner: &R,
-    tok_rx: mpsc::Receiver<PosWork<R::TokOut>>,
-    dep_tx: mpsc::SyncSender<DepWork<R::PosOut>>,
+    tok_rx: mpsc::Receiver<WorkItem<R::TokOut>>,
+    dep_tx: mpsc::SyncSender<WorkItem<R::PosOut>>,
 ) {
     for work in tok_rx {
-        if work.is_cancelled() {
+        if work.is_cancelled(shared) {
             continue;
         }
-        let PosWork {
+        let WorkItem {
             index,
             sentence,
             cancel,
             reply_tx,
-            tok_out,
+            payload: tok_out,
             _guard,
         } = work;
         match runner.run_pos(tok_out) {
             Ok(pos_out) => {
-                if cancel.load(Ordering::Relaxed) || reply_tx.is_closed() {
+                if shared.shutdown.load(Ordering::Acquire)
+                    || cancel.load(Ordering::Relaxed)
+                    || reply_tx.is_closed()
+                {
                     continue;
                 }
-                let next = DepWork {
+                let next = WorkItem {
                     index,
                     sentence,
                     cancel,
                     reply_tx,
-                    pos_out,
+                    payload: pos_out,
                     _guard,
                 };
                 if dep_tx.send(next).is_err() {
@@ -509,13 +531,17 @@ fn pos_loop<R: StageRunner>(
     }
 }
 
-fn dep_loop<R: StageRunner>(runner: &R, dep_rx: mpsc::Receiver<DepWork<R::PosOut>>) {
+fn dep_loop<R: StageRunner>(
+    shared: &Arc<Shared>,
+    runner: &R,
+    dep_rx: mpsc::Receiver<WorkItem<R::PosOut>>,
+) {
     for work in dep_rx {
-        if work.is_cancelled() {
+        if work.is_cancelled(shared) {
             continue;
         }
         let answer = runner
-            .run_dep(work.pos_out)
+            .run_dep(work.payload)
             .map(Some)
             .map_err(|e| e.to_string());
         let _ = work.reply_tx.try_send((work.index, work.sentence, answer));
@@ -747,6 +773,10 @@ mod tests {
         assert!(
             idle_hits.load(Ordering::SeqCst) >= 1,
             "idle callback must fire after inactivity"
+        );
+        assert!(
+            scheduler.is_idle(Duration::from_millis(40)),
+            "scheduler must still report is_idle(timeout) when on_idle fires"
         );
         assert!(!probe.dropped.load(Ordering::SeqCst));
 

@@ -81,6 +81,9 @@ fn is_chinese_char(cp: u32) -> bool {
 
 /// NFD -> drop combining marks (`\p{Mn}`) -> NFC.
 fn strip_accents(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_owned();
+    }
     s.nfd()
         .filter(|c| get_general_category(*c) != GeneralCategory::NonspacingMark)
         .collect::<String>()
@@ -138,20 +141,37 @@ pub fn wordpiece_strs(word: &str, vocab: &HashMap<String, u32>) -> Vec<String> {
     if word.is_empty() {
         return vec!["[UNK]".to_string()];
     }
-    // Slice on char boundaries: candidates that would split a surrogate pair
-    // can never be in the vocab, so char-based shrinking finds the same match
-    // as the TS UTF-16-based loop.
-    let chars: Vec<char> = word.chars().collect();
+    if vocab.contains_key(word) {
+        return vec![word.to_owned()];
+    }
+    // Slice on UTF-8 char boundaries using one reusable scratch buffer for
+    // "##" continuation probes, avoiding per-probe heap allocations.
+    let mut bounds: Vec<usize> = word.char_indices().map(|(i, _)| i).collect();
+    bounds.push(word.len());
+    let char_count = bounds.len() - 1;
+
     let mut out: Vec<String> = Vec::new();
+    let mut scratch = String::with_capacity(word.len() + 2);
     let mut start = 0;
-    while start < chars.len() {
-        let mut end = chars.len();
+    while start < char_count {
+        let mut end = char_count;
         let mut found: Option<String> = None;
         while start < end {
-            let sub: String = chars[start..end].iter().collect();
-            let candidate = if start > 0 { format!("##{sub}") } else { sub };
-            if vocab.contains_key(&candidate) {
-                found = Some(candidate);
+            let slice = &word[bounds[start]..bounds[end]];
+            let hit = if start > 0 {
+                scratch.clear();
+                scratch.push_str("##");
+                scratch.push_str(slice);
+                vocab.contains_key(scratch.as_str())
+            } else {
+                vocab.contains_key(slice)
+            };
+            if hit {
+                found = Some(if start > 0 {
+                    scratch.clone()
+                } else {
+                    slice.to_owned()
+                });
                 break;
             }
             end -= 1;
@@ -186,15 +206,22 @@ pub fn encode(text: &[u16], vocab: &HashMap<String, u32>) -> Vec<Sub> {
             });
             continue;
         }
+        let count = strs.len();
         let mut pos = a;
-        for s in strs {
+        for (idx, s) in strs.into_iter().enumerate() {
             let n = utf16_len(&s) - if s.starts_with("##") { 2 } else { 0 };
+            let sub_start = pos.min(b);
+            let sub_end = if idx + 1 == count {
+                b
+            } else {
+                (pos + n).min(b)
+            };
             out.push(Sub {
                 sub: s,
-                start: pos,
-                end: pos + n,
+                start: sub_start,
+                end: sub_end,
             });
-            pos += n;
+            pos = sub_end;
         }
     }
     out
@@ -241,6 +268,16 @@ mod tests {
         assert_eq!(subs[1].sub, "##s");
         // offsets stay in the ORIGINAL text space
         assert_eq!((subs[1].start, subs[1].end), (4, 5));
+    }
+
+    #[test]
+    fn decomposed_accent_keeps_full_piece_span() {
+        let v = vocab(&["cafe", "##s"]);
+        // 'e' + U+0301 (combining acute) = 6 UTF-16 units total: c a f e \u0301 s
+        let text = to_utf16("cafe\u{0301}s");
+        let subs = encode(&text, &v);
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs.last().unwrap().end, text.len());
     }
 
     #[test]

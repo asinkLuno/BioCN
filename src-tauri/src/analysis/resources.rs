@@ -47,10 +47,13 @@ fn parse_normalize(json: &str) -> Result<HashMap<char, char>> {
     let raw: HashMap<String, String> = serde_json::from_str(json)?;
     let mut out = HashMap::with_capacity(raw.len());
     for (k, v) in raw {
-        // JS indexes this map by a single UTF-16 unit, so multi-unit keys can
-        // never match there either; skip them instead of pretending otherwise.
+        // Normalization must be strictly 1:1 in UTF-16 code units (BMP -> BMP)
+        // so normalized-text offsets stay identical to original-text offsets.
         let (mut kc, mut vc) = (k.chars(), v.chars());
-        if let (Some(k1), None, Some(v1), None) = (kc.next(), kc.next(), vc.next(), vc.next()) {
+        if let (Some(k1), None, Some(v1), None) = (kc.next(), kc.next(), vc.next(), vc.next())
+            && k1.len_utf16() == 1
+            && v1.len_utf16() == 1
+        {
             out.insert(k1, v1);
         }
     }
@@ -70,12 +73,29 @@ impl BioCNResources {
         pos_tags_json: &str,
         rel_labels_json: &str,
     ) -> Result<Self> {
+        let vocab = parse_vocab(vocab_txt);
+        let normalize = parse_normalize(normalize_json)?;
+        let tok_tags = parse_list(tok_tags_json)?;
+        let pos_tags = parse_list(pos_tags_json)?;
+        let rel_labels = parse_list(rel_labels_json)?;
+        if vocab.is_empty() {
+            return Err("vocab.txt is empty".into());
+        }
+        if tok_tags.is_empty() {
+            return Err("tok_tags.json is empty".into());
+        }
+        if pos_tags.is_empty() {
+            return Err("pos_tags.json is empty".into());
+        }
+        if rel_labels.is_empty() {
+            return Err("dep_rel_labels.json is empty".into());
+        }
         Ok(Self {
-            vocab: parse_vocab(vocab_txt),
-            normalize: parse_normalize(normalize_json)?,
-            tok_tags: parse_list(tok_tags_json)?,
-            pos_tags: parse_list(pos_tags_json)?,
-            rel_labels: parse_list(rel_labels_json)?,
+            vocab,
+            normalize,
+            tok_tags,
+            pos_tags,
+            rel_labels,
         })
     }
 
@@ -111,8 +131,17 @@ impl BioCNResources {
     }
 
     #[inline]
-    fn id(&self, sub: &str) -> i64 {
+    pub(crate) fn id(&self, sub: &str) -> i64 {
         self.vocab.get(sub).map(|id| *id as i64).unwrap_or(UNK_ID)
+    }
+
+    /// Subword vocab ids for a single decoded word, normalized 1:1.
+    pub fn word_subword_ids(&self, word: &str) -> Vec<i64> {
+        let normalized = self.normalize_text(&to_utf16(word));
+        crate::analysis::tokenizer::encode(&normalized, &self.vocab)
+            .into_iter()
+            .map(|g| self.id(&g.sub))
+            .collect()
     }
 }
 
@@ -138,24 +167,20 @@ pub fn tok_prep(text: &[u16], res: &BioCNResources) -> TokPrep {
 }
 
 /// Per-word wordpiece for POS/DEP: `ids` = concat of each word's subwords,
-/// `spans[t]` = absolute positions of word `t`'s subwords in `ids` (no CLS
-/// shift here — the +1 for CLS happens in [`pack_word_rows`]).
+/// `spans[t]` = contiguous `(start, end)` range of word `t`'s subwords in `ids`
+/// (no CLS shift here — the +1 for CLS happens in [`pack_word_rows`]).
 pub struct WordsPrep {
     pub ids: Vec<i64>,
-    pub spans: Vec<Vec<usize>>,
+    pub spans: Vec<(usize, usize)>,
 }
 
 pub fn words_prep(words: &[String], res: &BioCNResources) -> WordsPrep {
     let mut ids: Vec<i64> = Vec::new();
-    let mut spans: Vec<Vec<usize>> = Vec::with_capacity(words.len());
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(words.len());
     for w in words {
-        let normalized = res.normalize_text(&to_utf16(w));
-        let mut span: Vec<usize> = Vec::new();
-        for g in crate::analysis::tokenizer::encode(&normalized, &res.vocab) {
-            span.push(ids.len());
-            ids.push(res.id(&g.sub));
-        }
-        spans.push(span);
+        let start = ids.len();
+        ids.extend(res.word_subword_ids(w));
+        spans.push((start, ids.len()));
     }
     WordsPrep { ids, spans }
 }
@@ -169,15 +194,20 @@ pub struct PackedWords {
     /// int64 [1, N, K] — span rows (+1 CLS shift), row 0 = root for DEP
     pub token_span: Vec<i64>,
     pub span_shape: (i64, i64, i64),
-    /// [1, N] real-token mask (the decoder mask clears column 0 itself)
-    pub mask: Vec<u8>,
+    /// Number of rows `N` (`words + root_rows`), used to size the DEP mask.
+    pub row_count: usize,
 }
 
 /// `root_rows` = 1 for DEP (row 0 is the root pointing at CLS), 0 for POS.
-pub fn pack_word_rows(ids: &[i64], spans: &[Vec<usize>], root_rows: usize) -> PackedWords {
+pub fn pack_word_rows(ids: &[i64], spans: &[(usize, usize)], root_rows: usize) -> PackedWords {
     let s = ids.len() + 2;
     let n = spans.len() + root_rows;
-    let k = spans.iter().map(|sp| sp.len()).max().unwrap_or(0).max(1);
+    let k = spans
+        .iter()
+        .map(|&(a, b)| b.saturating_sub(a))
+        .max()
+        .unwrap_or(0)
+        .max(1);
 
     let mut input_ids = vec![0i64; s];
     input_ids[0] = CLS;
@@ -185,16 +215,11 @@ pub fn pack_word_rows(ids: &[i64], spans: &[Vec<usize>], root_rows: usize) -> Pa
     input_ids[1..1 + ids.len()].copy_from_slice(ids);
 
     let mut token_span = vec![0i64; n * k];
-    for (t, span) in spans.iter().enumerate() {
+    for (t, &(a, b)) in spans.iter().enumerate() {
         let row = root_rows + t;
-        for (j, pos) in span.iter().enumerate() {
-            token_span[row * k + j] = (*pos as i64) + 1; // +1 for CLS
+        for (j, pos) in (a..b).enumerate() {
+            token_span[row * k + j] = (pos as i64) + 1; // +1 for CLS
         }
-    }
-
-    let mut mask = vec![0u8; n];
-    for t in 0..spans.len() {
-        mask[root_rows + t] = 1;
     }
 
     PackedWords {
@@ -202,6 +227,53 @@ pub fn pack_word_rows(ids: &[i64], spans: &[Vec<usize>], root_rows: usize) -> Pa
         input_shape: (1, s as i64),
         token_span,
         span_shape: (1, n as i64, k as i64),
-        mask,
+        row_count: n,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_vocab_preserves_u2028_without_splitting_lines() {
+        let vocab = parse_vocab("[PAD]\n\u{2028}\n好\n");
+        assert_eq!(vocab.get("[PAD]"), Some(&0));
+        assert_eq!(vocab.get("\u{2028}"), Some(&1));
+        assert_eq!(vocab.get("好"), Some(&2));
+    }
+
+    #[test]
+    fn parse_rejects_empty_label_tables_and_ignores_non_bmp_normalize() {
+        assert!(BioCNResources::parse("", "{}", r#"["S"]"#, r#"["VV"]"#, r#"["root"]"#).is_err());
+        assert!(BioCNResources::parse("a\n", "{}", "[]", r#"["VV"]"#, r#"["root"]"#).is_err());
+        assert!(BioCNResources::parse("a\n", "{}", r#"["S"]"#, "[]", r#"["root"]"#).is_err());
+        assert!(BioCNResources::parse("a\n", "{}", r#"["S"]"#, r#"["VV"]"#, "[]").is_err());
+
+        // Mapping a BMP char to an astral emoji (len_utf16 == 2) would shift offsets;
+        // parse_normalize must skip it while keeping 1:1 BMP entries.
+        let res = BioCNResources::parse(
+            "a\nb\n",
+            r#"{"a":"b","c":"😀"}"#,
+            r#"["S"]"#,
+            r#"["VV"]"#,
+            r#"["root"]"#,
+        )
+        .unwrap();
+        assert_eq!(res.normalize.get(&'a'), Some(&'b'));
+        assert_eq!(res.normalize.get(&'c'), None);
+        let norm = res.normalize_text(&to_utf16("ac"));
+        assert_eq!(norm.len(), 2);
+    }
+
+    #[test]
+    fn pack_word_rows_shifts_by_cls_and_adds_root_row_for_dep() {
+        let packed = pack_word_rows(&[10, 20, 30], &[(0, 2), (2, 3)], 1);
+        assert_eq!(packed.input_ids, vec![CLS, 10, 20, 30, SEP]);
+        assert_eq!(packed.input_shape, (1, 5));
+        assert_eq!(packed.span_shape, (1, 3, 2));
+        assert_eq!(packed.row_count, 3);
+        // row 0 (root) = [0, 0]; row 1 (word 0) = [1, 2]; row 2 (word 1) = [3, 0]
+        assert_eq!(packed.token_span, vec![0, 0, 1, 2, 3, 0]);
     }
 }

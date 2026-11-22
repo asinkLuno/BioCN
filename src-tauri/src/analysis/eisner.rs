@@ -69,20 +69,32 @@ pub fn is_tree(sequence: &[i32], proj: bool) -> bool {
         }
     }
     let n = sequence.len();
-    let mut seen = vec![false; n];
+    // 3-color cycle detection: 0 = unvisited, 1 = on current path, 2 = verified acyclic.
+    let mut state = vec![0u8; n];
+    let mut path = Vec::new();
     for start in 0..n {
-        seen.iter_mut().for_each(|s| *s = false);
+        if state[start] == 2 {
+            continue;
+        }
+        path.clear();
         let mut v = start;
         loop {
-            if seen[v] {
-                return false; // cycle
+            match state[v] {
+                1 => return false, // cycle
+                2 => break,
+                _ => {
+                    state[v] = 1;
+                    path.push(v);
+                }
             }
-            seen[v] = true;
             let h = sequence[v] - 1;
             if h < 0 || h >= n as i32 {
                 break; // root / dangling
             }
             v = h as usize;
+        }
+        for node in path.drain(..) {
+            state[node] = 2;
         }
     }
     true
@@ -92,38 +104,42 @@ fn backtrack(
     p_i: &[i32],
     p_c: &[i32],
     heads: &mut [i32],
-    i: usize,
-    j: usize,
-    complete: bool,
+    start_i: usize,
+    start_j: usize,
+    start_complete: bool,
     l: usize,
 ) {
-    if i == j {
-        return;
-    }
-    if complete {
-        let r = p_c[i * l + j] as usize;
-        backtrack(p_i, p_c, heads, i, r, false, l);
-        backtrack(p_i, p_c, heads, r, j, true, l);
-    } else {
-        let r = p_i[i * l + j] as usize;
-        heads[j] = i as i32;
-        let a = i.min(j);
-        let b = i.max(j);
-        backtrack(p_i, p_c, heads, a, r, true, l);
-        backtrack(p_i, p_c, heads, b, r + 1, true, l);
+    let mut stack = Vec::with_capacity(l * 2);
+    stack.push((start_i, start_j, start_complete));
+    while let Some((i, j, complete)) = stack.pop() {
+        if i == j {
+            continue;
+        }
+        if complete {
+            let r = p_c[i * l + j] as usize;
+            stack.push((r, j, true));
+            stack.push((i, r, false));
+        } else {
+            let r = p_i[i * l + j] as usize;
+            heads[j] = i as i32;
+            let a = i.min(j);
+            let b = i.max(j);
+            stack.push((b, r + 1, true));
+            stack.push((a, r, true));
+        }
     }
 }
 
 /// First-order Eisner (`hanlp alg.eisner`, batch = 1) on transposed scores.
+///
+/// `scores` is `[L, L]` row-major (`scores[dep][head]`). Transposed view `sc`
+/// satisfies `sc[a][b] = scores[b][a]`, indexed directly without allocating
+/// a separate `l * l` transpose buffer.
 fn eisner(scores: &[f32], n: usize) -> Vec<i32> {
-    let l = n + 1;
-    // sc = scores.permute(2, 1, 0): sc[a][b] = scores[b][a]
-    let mut sc = vec![0f32; l * l];
-    for a in 0..l {
-        for b in 0..l {
-            sc[a * l + b] = scores[b * l + a];
-        }
+    if n == 0 {
+        return Vec::new();
     }
+    let l = n + 1;
 
     let mut s_i = vec![NEG_INF; l * l];
     let mut s_c = vec![NEG_INF; l * l];
@@ -145,11 +161,11 @@ fn eisner(scores: &[f32], n: usize) -> Vec<i32> {
                     best_j = j;
                 }
             }
-            // I on diagonal(-w): sc[i+w][i] += sc.diagonal(-w)[i] (input value)
-            s_i[(i + w) * l + i] = best + sc[(i + w) * l + i];
+            // I on diagonal(-w): sc[i+w][i] == scores[i][i+w]
+            s_i[(i + w) * l + i] = best + scores[i * l + (i + w)];
             p_i[(i + w) * l + i] = best_j as i32 + i as i32;
-            // I on diagonal(+w): sc[i][i+w]
-            s_i[i * l + (i + w)] = best + sc[i * l + (i + w)];
+            // I on diagonal(+w): sc[i][i+w] == scores[i+w][i]
+            s_i[i * l + (i + w)] = best + scores[(i + w) * l + i];
             p_i[i * l + (i + w)] = best_j as i32 + i as i32;
 
             // cl[i][j] = sc[i+j][i] + sI[w+i][i+j]   (stripe0 (0,0) + stripe1 (w,0))
@@ -189,6 +205,9 @@ fn eisner(scores: &[f32], n: usize) -> Vec<i32> {
 /// `decode_dep(tree=True, proj=True)` for one sentence.
 /// Returns `heads[0..n-1]` where `heads[k]` is the head (0 = root) of word k+1.
 pub fn decode_dep_heads(s_arc: &[f32], n: usize) -> Vec<i32> {
+    if n == 0 {
+        return Vec::new();
+    }
     let l = n + 1;
     let mut argmax = vec![0i32; n];
     for d in 1..=n {
@@ -235,5 +254,10 @@ mod tests {
         assert!(!is_tree(&[2, 5, 0, 3, 1], true)); // tarjan cycle example
         assert!(is_tree(&[0, 1, 2], true)); // simple chain to root
         assert!(!is_tree(&[2, 0, 1], true)); // matches hanlp istree(proj=True)
+    }
+
+    #[test]
+    fn decode_dep_heads_handles_empty_input() {
+        assert_eq!(decode_dep_heads(&[], 0), Vec::<i32>::new());
     }
 }

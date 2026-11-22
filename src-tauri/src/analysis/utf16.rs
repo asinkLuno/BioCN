@@ -8,6 +8,9 @@
 /// Number of UTF-16 code units of `s` (== JS `s.length`).
 #[inline]
 pub fn utf16_len(s: &str) -> usize {
+    if s.is_ascii() {
+        return s.len();
+    }
     s.encode_utf16().count()
 }
 

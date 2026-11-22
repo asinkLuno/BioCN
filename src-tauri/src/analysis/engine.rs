@@ -180,15 +180,13 @@ fn lock(session: &Mutex<Session>) -> std::sync::MutexGuard<'_, Session> {
     session.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn ids_tensor(shape: (i64, i64), ids: &[i64]) -> Result<Tensor<i64>> {
-    Tensor::from_array((vec![shape.0, shape.1], ids.to_vec())).map_err(oerr)
+fn ids_tensor(shape: (i64, i64), ids: Vec<i64>) -> Result<Tensor<i64>> {
+    Tensor::from_array((vec![shape.0, shape.1], ids)).map_err(oerr)
 }
 
-/// The three model calls as plain methods; `pipeline.rs` documents why there
-/// is no runner trait (no mocks exist; reintroduce one for tensor-replay
-/// tests).
+/// The three model calls as plain methods.
 impl Sessions {
-    pub fn run_tok(&self, input_ids: &[i64], shape: (i64, i64)) -> Result<Vec<f32>> {
+    pub fn run_tok(&self, input_ids: Vec<i64>, shape: (i64, i64)) -> Result<Vec<f32>> {
         let input = ids_tensor(shape, input_ids)?;
         let mut session = lock(&self.tok);
         let outputs = session.run(ort::inputs![input]).map_err(oerr)?;
@@ -198,15 +196,15 @@ impl Sessions {
 
     pub fn run_pos(
         &self,
-        input_ids: &[i64],
+        input_ids: Vec<i64>,
         ids_shape: (i64, i64),
-        token_span: &[i64],
+        token_span: Vec<i64>,
         span_shape: (i64, i64, i64),
     ) -> Result<Vec<f32>> {
         let input = ids_tensor(ids_shape, input_ids)?;
         let span = Tensor::from_array((
             vec![span_shape.0, span_shape.1, span_shape.2],
-            token_span.to_vec(),
+            token_span,
         ))
         .map_err(oerr)?;
         let mut session = lock(&self.pos);
@@ -215,30 +213,30 @@ impl Sessions {
         Ok(logits.to_vec())
     }
 
-    pub fn run_dep(
+    /// Runs the DEP graph and passes borrowed `(s_arc, s_rel)` views directly
+    /// to `decode` so the ~45 MB `[L, L, R]` relation tensor is never copied.
+    pub fn run_dep_with<T>(
         &self,
-        input_ids: &[i64],
+        input_ids: Vec<i64>,
         ids_shape: (i64, i64),
-        token_span: &[i64],
+        token_span: Vec<i64>,
         span_shape: (i64, i64, i64),
-        mask: &[u8],
-    ) -> Result<(Vec<f32>, Vec<f32>)> {
+        row_count: usize,
+        decode: impl FnOnce(&[f32], &[f32]) -> Result<T>,
+    ) -> Result<T> {
         let input = ids_tensor(ids_shape, input_ids)?;
         let span = Tensor::from_array((
             vec![span_shape.0, span_shape.1, span_shape.2],
-            token_span.to_vec(),
+            token_span,
         ))
         .map_err(oerr)?;
-        let mask = Tensor::from_array((
-            vec![ids_shape.0, mask.len() as i64],
-            mask.iter().map(|m| *m != 0).collect::<Vec<bool>>(),
-        ))
-        .map_err(oerr)?;
+        let mask = Tensor::from_array((vec![ids_shape.0, row_count as i64], vec![true; row_count]))
+            .map_err(oerr)?;
         let mut session = lock(&self.dep);
         let outputs = session.run(ort::inputs![input, span, mask]).map_err(oerr)?;
         let (_, s_arc) = outputs[0].try_extract_tensor::<f32>().map_err(oerr)?;
         let (_, s_rel) = outputs[1].try_extract_tensor::<f32>().map_err(oerr)?;
-        Ok((s_arc.to_vec(), s_rel.to_vec()))
+        decode(s_arc, s_rel)
     }
 }
 
