@@ -30,16 +30,16 @@ pub const MAX_SUBS: usize = 508;
 pub const MAX_WORDS: usize = 500;
 
 /// One DEP chunk: the packed tensors plus the word count that produced them.
-type DepPack = (PackedWords, usize);
+pub type DepPack = (PackedWords, usize);
 
 /// What stage two hands stage three: the utf16 text, stage one's decoded
 /// tokens, their POS tags, and one pack per word chunk.
-type PosBundle = (Vec<u16>, Vec<String>, Vec<String>, Vec<DepPack>);
+pub type PosBundle = (Vec<u16>, Vec<String>, Vec<String>, Vec<DepPack>);
 
 /// One sentence's final answer: `Ok(Some(..))` carries the 主谓宾 segments,
 /// `Ok(None)` marks "analyzed, nothing to paint", `Err` fails that one
 /// sentence alone.
-type SentenceAnswer = std::result::Result<Option<Vec<Segment>>, String>;
+pub type SentenceAnswer = std::result::Result<Option<Vec<Segment>>, String>;
 
 /// `(index, answer)` pairs a stage reports for the sentences it finished,
 /// FIFO over its slice of the input.

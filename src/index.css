@@ -4,6 +4,28 @@
 }
 
 @layer base {
+  /*
+   * Brand double-helix palette tokens mirroring the SVO colors below, adapting
+   * automatically in dark mode so the helix stays crisp on dark frosted covers.
+   */
+  :root {
+    --biocn-helix-o: #d95f02;
+    --biocn-helix-o-shade: #b84e00;
+    --biocn-helix-g: #1b9e77;
+    --biocn-helix-g-shade: #147e5e;
+    --biocn-helix-p: #7570b3;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --biocn-helix-o: #f28e4b;
+      --biocn-helix-o-shade: #cc6d2e;
+      --biocn-helix-g: #4ec6a3;
+      --biocn-helix-g-shade: #349f80;
+      --biocn-helix-p: #a99cf0;
+    }
+  }
+
   html {
     font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue",
       Arial, sans-serif;
@@ -59,12 +81,9 @@
   }
 
   /*
-   * Brand double-helix loading animation (same paths/gradients as
-   * design/logo/biocn-helix-launch.svg). Inlined as DOM SVG + stylesheet
-   * keyframes rather than <img> because WebKitGTK / WebViews often freeze CSS
-   * animations inside <img> SVGs, and whole-book coloring needs a continuous
-   * loop rather than a one-shot splash draw. Stroke gradients live on the SVG
-   * elements via per-instance useId() refs so multiple tiles never collide.
+   * Brand double-helix loading loop (same paths & 3D crossings as
+   * design/logo/biocn-helix-launch.svg). Custom CSS is kept here because
+   * daisyUI has no equivalent for a brand-shaped SVG loop.
    */
   .biocn-helix-strand {
     fill: none;
@@ -85,7 +104,7 @@
   }
 
   .biocn-helix-rung {
-    stroke: #7570b3;
+    stroke: var(--biocn-helix-p);
     stroke-width: 3.8;
     stroke-linecap: round;
     stroke-dasharray: 100 110;

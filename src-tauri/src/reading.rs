@@ -6,7 +6,7 @@
 //! CSS, fonts) are read on demand without re-parsing the zip directory or
 //! holding every chapter's parsed text in memory.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -19,6 +19,49 @@ use crate::reader::{BookHandle, BookIndex, Chapter, TocEntry};
 
 type Result<T> = std::result::Result<T, String>;
 
+/// Maximum parsed chapters kept in RAM per open book (HTML + char-level source
+/// maps). Large enough for back-and-forth reading and next-chapter prefetch,
+/// bounded so reading a 500-chapter novel does not grow RAM indefinitely.
+#[cfg(target_os = "android")]
+const MAX_CACHED_CHAPTERS: usize = 8;
+#[cfg(not(target_os = "android"))]
+const MAX_CACHED_CHAPTERS: usize = 16;
+
+/// Small LRU cache of parsed chapters keyed by spine index.
+struct ChapterLru {
+    cap: usize,
+    /// Ordered oldest -> most recently used.
+    entries: Vec<(usize, Arc<Chapter>)>,
+}
+
+impl ChapterLru {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap: cap.max(1),
+            entries: Vec::with_capacity(cap.max(1)),
+        }
+    }
+
+    fn get(&mut self, index: usize) -> Option<Arc<Chapter>> {
+        let pos = self.entries.iter().position(|(k, _)| *k == index)?;
+        let entry = self.entries.remove(pos);
+        let value = entry.1.clone();
+        self.entries.push(entry);
+        Some(value)
+    }
+
+    fn insert(&mut self, index: usize, chapter: Arc<Chapter>) -> Arc<Chapter> {
+        if let Some(existing) = self.get(index) {
+            return existing;
+        }
+        if self.entries.len() >= self.cap {
+            self.entries.remove(0);
+        }
+        self.entries.push((index, chapter.clone()));
+        chapter
+    }
+}
+
 /// Shown when a book has no usable title anywhere (OPF and file name both
 /// empty). One shared constant so the fallback word cannot drift between the
 /// reader, the coloring job and the index.
@@ -29,7 +72,7 @@ pub struct ActiveBook {
     pub id: String,
     handle: Mutex<BookHandle>,
     pub index: BookIndex,
-    chapters: Mutex<HashMap<usize, Arc<Chapter>>>,
+    chapters: Mutex<ChapterLru>,
 }
 
 impl ActiveBook {
@@ -40,18 +83,17 @@ impl ActiveBook {
             id,
             handle: Mutex::new(handle),
             index,
-            chapters: Mutex::new(HashMap::new()),
+            chapters: Mutex::new(ChapterLru::new(MAX_CACHED_CHAPTERS)),
         })
     }
 
-    /// Parses and caches a single spine chapter on demand.
+    /// Parses and caches a single spine chapter on demand (bounded LRU).
     pub fn chapter(&self, index: usize) -> Result<Arc<Chapter>> {
         if let Some(cached) = self
             .chapters
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .get(&index)
-            .cloned()
+            .get(index)
         {
             return Ok(cached);
         }
@@ -60,7 +102,7 @@ impl ActiveBook {
             Arc::new(handle.read_chapter(index).map_err(|e| e.to_string())?)
         };
         let mut cache = self.chapters.lock().unwrap_or_else(|p| p.into_inner());
-        Ok(cache.entry(index).or_insert_with(|| parsed.clone()).clone())
+        Ok(cache.insert(index, parsed))
     }
 
     /// Resolves a normalized container path to its spine chapter, if it is one.
@@ -101,6 +143,13 @@ impl ReadingState {
         {
             *active = None;
         }
+        self.clear_full_book(id);
+    }
+
+    /// Releases the full-book parsed chapter cache for `id` once a whole-book
+    /// coloring or cache-clear pass completes so tens of MB of parsed XHTML and
+    /// character source maps do not stay resident indefinitely.
+    pub fn clear_full_book(&self, id: &str) {
         if let Ok(mut full) = self.full_book.lock()
             && full.as_ref().is_some_and(|(cached_id, _)| cached_id == id)
         {
@@ -383,5 +432,28 @@ mod tests {
         let json = serde_json::to_string(&summary).expect("serialize");
         assert!(json.contains("\"href\":\"OEBPS/Text/ch3.xhtml\""), "{json}");
         assert!(json.contains("\"colored\":true"), "{json}");
+    }
+
+    #[test]
+    fn chapter_lru_evicts_least_recently_used_entry() {
+        let dummy = |index: usize| {
+            Arc::new(Chapter {
+                index,
+                manifest_id: String::new(),
+                title: None,
+                html: String::new(),
+                paragraphs: Vec::new(),
+            })
+        };
+        let mut lru = ChapterLru::new(2);
+        lru.insert(0, dummy(0));
+        lru.insert(1, dummy(1));
+        // Touch 0 so 1 becomes least recently used.
+        assert_eq!(lru.get(0).unwrap().index, 0);
+        lru.insert(2, dummy(2));
+
+        assert!(lru.get(1).is_none(), "least recently used chapter should be evicted");
+        assert_eq!(lru.get(0).unwrap().index, 0);
+        assert_eq!(lru.get(2).unwrap().index, 2);
     }
 }

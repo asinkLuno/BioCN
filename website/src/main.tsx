@@ -7,6 +7,7 @@ import Monitor from 'lucide-react/icons/monitor';
 import Smartphone from 'lucide-react/icons/smartphone';
 import Terminal from 'lucide-react/icons/terminal';
 import type { LucideIcon } from 'lucide-react';
+import { HeroBrandLockup } from './components/HeroTitle';
 import './index.css';
 
 // 发布元数据由 CI 的 scripts/pages-release.mjs 从 GitHub Releases 生成并写进部署目录；
@@ -182,6 +183,103 @@ function SvoLegend() {
   );
 }
 
+const MODEL_BENCHMARKS = [
+  {
+    name: '省流 (INT8)',
+    recommended: true,
+    size: '64.3 MB',
+    throughput: '331 句/秒',
+    wholeBook: '约 2 分 10 秒',
+    firstPaint: '50 ms',
+    peakMemory: '约 189 MB',
+  },
+  {
+    name: '高精度 (FP16)',
+    recommended: false,
+    size: '74.6 MB',
+    throughput: '107 句/秒',
+    wholeBook: '约 6 分 43 秒',
+    firstPaint: '136 ms',
+    peakMemory: '约 368 MB',
+  },
+] as const;
+
+function BenchmarkSection() {
+  return (
+    <section id="benchmark" aria-labelledby="benchmark-title" className="scroll-mt-8 space-y-6">
+      <div className="space-y-2">
+        <h2 id="benchmark-title" className="text-3xl font-semibold tracking-tight">
+          性能参考
+        </h2>
+        <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
+          全流程本地 CPU 运行，不依赖显卡或云端接口。安装后可在应用设置中按需选择「省流」或「高精度」模型；以下为实测参考数据（测试样本：107 万字《红楼梦》，137 章）。
+        </p>
+      </div>
+
+      <div className="stats stats-vertical w-full bg-base-200 shadow-sm lg:stats-horizontal">
+        <div className="stat">
+          <div className="stat-title">首屏着色响应（INT8）</div>
+          <div className="stat-value text-primary">~50 ms</div>
+          <div className="stat-desc">后台全书着色满载时抢占实测（首句 28.6 ms）</div>
+        </div>
+        <div className="stat">
+          <div className="stat-title">持续分析吞吐（INT8）</div>
+          <div className="stat-value">331 句/秒</div>
+          <div className="stat-desc">含本地持久化写入，整本《红楼梦》约 2 分 10 秒</div>
+        </div>
+        <div className="stat">
+          <div className="stat-title">二次阅读缓存命中</div>
+          <div className="stat-value">~36 ms</div>
+          <div className="stat-desc">已着色章节直接读取本地 SQLite，零模型调用</div>
+        </div>
+      </div>
+
+      <div className="card bg-base-100 shadow-sm ring-1 ring-base-200">
+        <div className="card-body gap-4 p-5 sm:p-6">
+          <div className="overflow-x-auto">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>模型版本</th>
+                  <th>下载体积</th>
+                  <th>分析吞吐</th>
+                  <th>整本《红楼梦》</th>
+                  <th>首屏着色（8 句）</th>
+                  <th>推理峰值内存</th>
+                </tr>
+              </thead>
+              <tbody>
+                {MODEL_BENCHMARKS.map((row) => (
+                  <tr key={row.name}>
+                    <td className="font-medium whitespace-nowrap">
+                      <span className="inline-flex items-center gap-2">
+                        {row.name}
+                        {row.recommended ? (
+                          <span className="badge badge-primary badge-sm">推荐</span>
+                        ) : null}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap">{row.size}</td>
+                    <td className="font-medium whitespace-nowrap">{row.throughput}</td>
+                    <td className="whitespace-nowrap">{row.wholeBook}</td>
+                    <td className="whitespace-nowrap">{row.firstPaint}</td>
+                    <td className="whitespace-nowrap">{row.peakMemory}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs leading-relaxed text-base-content/60">
+            测试口径：AMD Ryzen 7 9700X（桌面端纯 CPU · ONNX Runtime），跨《红楼梦》全书 137 章抽样 9,742
+            个唯一句含 SQLite WAL 落盘实测，整本耗时按全书 42,961 个唯一句折算；二次缓存命中为 9,898
+            句跨章读取耗时。实际耗时视设备 CPU 性能而定，阅读或任务闲置后会自动卸载模型释放内存。
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PlatformDownloads({ downloads }: { downloads: Download[] }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -267,6 +365,9 @@ function App() {
           </a>
         </div>
         <nav aria-label="主导航" className="navbar-end flex items-center gap-2">
+          <a className="btn btn-ghost" href="#benchmark">
+            性能
+          </a>
           <a className="btn btn-ghost" href="#download">
             下载
           </a>
@@ -277,105 +378,18 @@ function App() {
       </header>
 
       <main className="mx-auto max-w-7xl space-y-20 px-4 pb-12 sm:px-6 sm:pb-20 2xl:max-w-[96rem]">
-        <section aria-labelledby="intro-title" className="hero py-10 md:py-16">
+        <section aria-labelledby="intro-title" className="hero overflow-x-clip py-10 md:py-16">
           <div className="hero-content flex-col items-start gap-12 lg:flex-row lg:items-center lg:gap-16">
-            <div className="hero-brand-lockup max-w-xl">
-              <div className="hero-brand-mark" aria-hidden="true">
-                {/* 品牌双螺旋内联 SVG 动画（与 design/logo/biocn-helix-launch.svg 同一标记与编排），
-                    通过中段 clipPath 与纵深渐变呈现「绿压橙 → 橙压绿 → 绿压橙」3D 穿插；
-                    零 three.js/WebGL 开销，首屏直接绘制并兼容 Safari/WebView。 */}
-                <svg viewBox="0 0 100 100" className="size-24 sm:size-40">
-                  <defs>
-                    <clipPath id="biocn-hero-over-mid">
-                      <rect x="34" y="40" width="32" height="20" />
-                    </clipPath>
-                    <linearGradient
-                      id="biocn-hero-grad-o"
-                      gradientUnits="userSpaceOnUse"
-                      x1="0"
-                      y1="89.9"
-                      x2="0"
-                      y2="10.1"
-                    >
-                      <stop offset="0%" stopColor="#d95f02" />
-                      <stop offset="6.1%" stopColor="#d95f02" />
-                      <stop offset="11.1%" stopColor="#b84e00" />
-                      <stop offset="16.1%" stopColor="#d95f02" />
-                      <stop offset="83.9%" stopColor="#d95f02" />
-                      <stop offset="88.9%" stopColor="#b84e00" />
-                      <stop offset="93.9%" stopColor="#d95f02" />
-                      <stop offset="100%" stopColor="#d95f02" />
-                    </linearGradient>
-                    <linearGradient
-                      id="biocn-hero-grad-g"
-                      gradientUnits="userSpaceOnUse"
-                      x1="0"
-                      y1="89.9"
-                      x2="0"
-                      y2="10.1"
-                    >
-                      <stop offset="0%" stopColor="#1b9e77" />
-                      <stop offset="45%" stopColor="#1b9e77" />
-                      <stop offset="50%" stopColor="#147e5e" />
-                      <stop offset="55%" stopColor="#1b9e77" />
-                      <stop offset="100%" stopColor="#1b9e77" />
-                    </linearGradient>
-                  </defs>
-                  <line
-                    className="biocn-helix-rung biocn-helix-rung-1"
-                    pathLength={100}
-                    x1="28"
-                    y1="65.5"
-                    x2="72"
-                    y2="65.5"
-                  />
-                  <line
-                    className="biocn-helix-rung biocn-helix-rung-2"
-                    pathLength={100}
-                    x1="72"
-                    y1="34.5"
-                    x2="28"
-                    y2="34.5"
-                  />
-                  <path
-                    className="biocn-helix-strand biocn-helix-strand-o"
-                    stroke="url(#biocn-hero-grad-o)"
-                    pathLength={100}
-                    d="M 68.2 89.9 C 56.4 81.6 27 74.9 27 65.5 C 27 53.7 73 46.3 73 34.5 C 73 25.1 43.6 18.4 31.8 10.1"
-                  />
-                  <path
-                    className="biocn-helix-strand biocn-helix-strand-g"
-                    stroke="url(#biocn-hero-grad-g)"
-                    pathLength={100}
-                    d="M 31.8 89.9 C 43.6 81.6 73 74.9 73 65.5 C 73 53.7 27 46.3 27 34.5 C 27 25.1 56.4 18.4 68.2 10.1"
-                  />
-                  <path
-                    className="biocn-helix-strand biocn-helix-strand-o"
-                    stroke="url(#biocn-hero-grad-o)"
-                    clipPath="url(#biocn-hero-over-mid)"
-                    pathLength={100}
-                    d="M 68.2 89.9 C 56.4 81.6 27 74.9 27 65.5 C 27 53.7 73 46.3 73 34.5 C 73 25.1 43.6 18.4 31.8 10.1"
-                  />
-                </svg>
+            <HeroBrandLockup>
+              <div className="flex flex-wrap gap-3">
+                <a className="btn btn-primary btn-lg" href="#download">
+                  <ArrowDownToLine aria-hidden="true" /> 下载 BioCN
+                </a>
+                <a className="btn btn-outline btn-lg" href={repository}>
+                  <Code2 aria-hidden="true" /> GitHub
+                </a>
               </div>
-              <div className="space-y-7">
-                <h1
-                  id="intro-title"
-                  className="space-y-2 font-semibold"
-                >
-                  <span className="block text-[2.75rem] leading-tight tracking-tight sm:text-6xl"><span className="text-[#1b9e77]">Bio</span><span className="text-[#7570b3]">CN</span></span>
-                  <span className="block text-xl leading-snug tracking-tight text-base-content/70 sm:text-2xl">中文仿生阅读</span>
-                </h1>
-                <div className="flex flex-wrap gap-3">
-                  <a className="btn btn-primary btn-lg" href="#download">
-                    <ArrowDownToLine aria-hidden="true" /> 下载 BioCN
-                  </a>
-                  <a className="btn btn-outline btn-lg" href={repository}>
-                    <Code2 aria-hidden="true" /> GitHub
-                  </a>
-                </div>
-              </div>
-            </div>
+            </HeroBrandLockup>
             <div className="flex w-full max-w-md flex-col items-center gap-6">
               <div className="card w-full bg-base-200 shadow-xl">
                 <div className="card-body gap-4">
@@ -397,6 +411,9 @@ function App() {
           </p>
           <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">完全离线运行。</p>
         </section>
+
+        <BenchmarkSection />
+
         <section id="download" aria-labelledby="download-title" className="scroll-mt-8">
           <div className="card bg-base-100 shadow-sm ring-1 ring-base-200">
             <div className="card-body gap-6">

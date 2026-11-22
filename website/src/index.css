@@ -5,6 +5,25 @@
 }
 
 @layer base {
+  /* Hero double-helix SVO palette tokens (light & dark). */
+  :root {
+    --biocn-hero-o: #d95f02;
+    --biocn-hero-o-shade: #b84e00;
+    --biocn-hero-g: #1b9e77;
+    --biocn-hero-g-shade: #147e5e;
+    --biocn-hero-p: #7570b3;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --biocn-hero-o: #f28e4b;
+      --biocn-hero-o-shade: #cc6d2e;
+      --biocn-hero-g: #4ec6a3;
+      --biocn-hero-g-shade: #349f80;
+      --biocn-hero-p: #a99cf0;
+    }
+  }
+
   .hero-brand-lockup {
     display: grid;
     grid-template-columns: 10rem minmax(0, 1fr);
@@ -51,42 +70,6 @@
       font-size: 1.0625rem;
     }
   }
-
-  .hero-brand-stage {
-    display: grid;
-    grid-template-columns: 6rem minmax(0, 1fr);
-    align-items: center;
-    column-gap: 1rem;
-    width: min(100%, 36rem);
-    min-height: 7.5rem;
-  }
-
-  .hero-brand-mark {
-    display: grid;
-    width: 6rem;
-    height: 6rem;
-    place-items: center;
-  }
-
-  .hero-brand-stage h1 {
-    display: grid;
-    width: 100%;
-    min-height: 1.35em;
-    align-items: center;
-  }
-
-  @media (max-width: 639px) {
-    .hero-brand-stage {
-      grid-template-columns: 4.5rem minmax(0, 1fr);
-      column-gap: 0.75rem;
-      min-height: 6rem;
-    }
-
-    .hero-brand-mark {
-      width: 4.5rem;
-      height: 4.5rem;
-    }
-  }
 }
 
 @layer components {
@@ -127,98 +110,317 @@
     }
   }
   /*
-   * HeroTitle：hero 大标题的名字由来动画（中文仿生阅读 → Chinese Bionic Reading →
-   * 逐字消融 → CN 与 Bio 左右交换成 BioCN）。两组 grid 叠在同一格，
-   * stage 由 HeroTitle.tsx 定时器推进；颜色沿用主/谓/宾三色。
+   * HeroTitle: brand-origin typography animation
+   * 中文仿生阅读 -> Chinese Bionic Reading -> Cn Bio -> CNBio -> BioCN
+   * Custom CSS is minimal and scoped to glyph collapse, case morph, and the
+   * FLIP-measured counter-arc swap, which daisyUI has no equivalent for.
    */
-  .brand-layer {
-    grid-area: 1 / 1;
-    visibility: hidden;
+  .hero-zh-layer {
+    position: absolute;
+    left: 0;
+    transition:
+      opacity 300ms ease,
+      transform 360ms cubic-bezier(0.32, 0.72, 0, 1),
+      filter 300ms ease;
   }
 
-  .brand-layer-active {
-    visibility: visible;
-    animation: brand-layer-in 0.55s cubic-bezier(0.2, 0.8, 0.3, 1);
+  .hero-zh-layer[data-state='in'] {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+    animation: hero-zh-enter 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
-  .brand-layer-out {
-    visibility: visible;
-    animation: brand-layer-out 0.55s ease forwards;
-  }
-
-  /* 消融：EN 层进入 stage ≥2 后，非 solid 的逐字 span 依次上飘、缩小、透明 */
-  .brand-char-melt {
-    display: inline-block;
-    transition: opacity 0.6s ease, transform 0.6s ease, filter 0.6s ease;
-  }
-
-  .brand-melt .brand-char-melt {
+  .hero-zh-layer[data-state='out'] {
     opacity: 0;
-    transform: translateY(-0.35em) scale(0.6);
+    transform: translateY(-0.34em);
+    filter: blur(3px);
+    pointer-events: none;
+  }
+
+  .hero-en-stage {
+    position: absolute;
+    left: 0;
+    width: max-content;
+    --hero-phrase-scale: 0.45;
+    transform-origin: left center;
+    transform: scale(var(--hero-phrase-scale));
+    opacity: 0;
+    transition:
+      opacity 320ms ease 40ms,
+      transform 580ms cubic-bezier(0.32, 0.04, 0.18, 1) 140ms;
+  }
+
+  @media (max-width: 639px) {
+    .hero-en-stage {
+      --hero-phrase-scale: 0.36;
+    }
+  }
+
+  .hero-en-stage[data-visible='true'] {
+    opacity: 1;
+  }
+
+  .hero-en-stage[data-visible='true'][data-swapping='false'] .hero-en-group-cn {
+    animation: hero-en-rise 400ms cubic-bezier(0.16, 1, 0.3, 1) 40ms both;
+  }
+
+  .hero-en-stage[data-visible='true'][data-swapping='false'] .hero-en-group-bio {
+    animation: hero-en-rise 400ms cubic-bezier(0.16, 1, 0.3, 1) 110ms both;
+  }
+
+  .hero-en-stage[data-full-scale='true'] {
+    transform: scale(1);
+  }
+
+  .hero-gap {
+    display: inline-grid;
+    grid-template-columns: 1fr;
+    transition: grid-template-columns 320ms cubic-bezier(0.32, 0.04, 0.18, 1) 20ms;
+  }
+
+  .hero-gap[data-closed='true'] {
+    grid-template-columns: 0fr;
+  }
+
+  /* Collapsible letter spans: fade & drift up, then smoothly close to 0fr width
+     using `overflow: clip` so typographic baseline stays locked to sibling letters. */
+  .hero-vanish {
+    display: inline-grid;
+    grid-template-columns: 1fr;
+    transition:
+      grid-template-columns 460ms cubic-bezier(0.32, 0.04, 0.18, 1) calc(var(--vanish-delay, 0ms) + 110ms),
+      opacity 260ms ease var(--vanish-delay, 0ms),
+      transform 320ms cubic-bezier(0.32, 0.72, 0, 1) var(--vanish-delay, 0ms),
+      filter 260ms ease var(--vanish-delay, 0ms);
+  }
+
+  .hero-vanish-inner {
+    min-width: 0;
+    overflow: clip;
+    white-space: pre;
+  }
+
+  .hero-vanish[data-gone='true'] {
+    grid-template-columns: 0fr;
+    opacity: 0;
+    transform: translateY(-0.26em) scale(0.86);
     filter: blur(3px);
   }
 
+  /* Lowercase n -> uppercase N morph: keeps native kerning in "Chinese"
+     (N starts at 0fr), then cross-transitions cleanly into uppercase N. */
+  .hero-case-slot {
+    display: inline-flex;
+    align-items: baseline;
+  }
 
+  .hero-case-lower,
+  .hero-case-upper {
+    display: inline-grid;
+    transition:
+      grid-template-columns 340ms cubic-bezier(0.32, 0.04, 0.18, 1),
+      opacity 220ms ease,
+      transform 340ms cubic-bezier(0.16, 1, 0.3, 1),
+      filter 220ms ease;
+  }
 
-  .brand-melt .brand-char-keep {
+  .hero-case-inner {
+    min-width: 0;
+    overflow: clip;
+  }
+
+  .hero-case-lower {
+    grid-template-columns: 1fr;
     opacity: 1;
-    transform: none;
-    filter: none;
-  }
-  /* 收场：stage 走完后历史层直接消失，终帧只有合体层 */
-  .brand-layer-drop {
-    display: none;
+    transform: translateY(0);
+    filter: blur(0);
   }
 
-  /* reduced-motion：不要入场/出场动画，直接只显示合体层 */
-  .brand-instant .brand-layer {
+  .hero-case-upper {
+    grid-template-columns: 0fr;
+    opacity: 0;
+    transform: translateY(0.24em);
+    filter: blur(2px);
+  }
+
+  .hero-case-slot[data-upper='true'] .hero-case-lower {
+    grid-template-columns: 0fr;
+    opacity: 0;
+    transform: translateY(-0.24em);
+    filter: blur(2px);
+  }
+
+  .hero-case-slot[data-upper='true'] .hero-case-upper {
+    grid-template-columns: 1fr;
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+
+  /* Counter-arc FLIP swap: CN and Bio glide past each other along a smooth S-curve. */
+  .hero-en-stage[data-swapping='true'] .hero-en-group.hero-swap-cn {
+    animation: hero-swap-cn 700ms cubic-bezier(0.42, 0, 0.16, 1) forwards;
+  }
+
+  .hero-en-stage[data-swapping='true'] .hero-en-group.hero-swap-bio {
+    animation: hero-swap-bio 700ms cubic-bezier(0.42, 0, 0.16, 1) forwards;
+  }
+
+  .hero-settled {
+    transition:
+      opacity 420ms ease,
+      transform 420ms cubic-bezier(0.32, 0.72, 0, 1),
+      filter 420ms ease;
+  }
+
+  .hero-settled-out {
+    opacity: 0;
+    transform: translateY(-0.18em);
+    filter: blur(3px);
+  }
+
+  .hero-subtitle {
+    opacity: 0;
+    transform: translateY(0.3em);
+    transition:
+      opacity 420ms ease,
+      transform 440ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .hero-subtitle-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /*
+   * Continuous Hero double-helix choreography (HeroTitle.tsx):
+   * Strands draw in ONE unbroken stroke (zero mid-path braking), rungs bridge
+   * naturally as the strands pass each loop belly, pulse gently at `n -> N`,
+   * counter-twist smoothly during `CN <-> Bio`, and flow into calm breathing.
+   */
+  .hero-helix-svg {
+    transform-origin: center center;
+  }
+
+  .hero-helix-twist {
+    animation: hero-helix-twist 700ms cubic-bezier(0.42, 0, 0.16, 1);
+  }
+
+  .hero-helix-ink {
+    transition: opacity 420ms ease;
+  }
+
+  .hero-helix-fadeout .hero-helix-ink {
+    opacity: 0;
+  }
+
+  .hero-helix-guide {
+    opacity: 0.11;
+    animation: hero-helix-guide-fade 640ms ease 1.85s forwards;
+  }
+
+  .hero-helix-guide-return {
+    animation: hero-helix-guide-return 420ms ease forwards;
+  }
+
+  .hero-helix-guide-strand {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 5.6;
+    stroke-linecap: round;
+  }
+
+  .hero-helix-guide-rung {
+    stroke: currentColor;
+    stroke-width: 3.8;
+    stroke-linecap: round;
+  }
+
+  .hero-helix-strand {
+    fill: none;
+    stroke-width: 5.6;
+    stroke-linecap: round;
+    stroke-dasharray: 100 110;
+    stroke-dashoffset: 105;
+    opacity: 0;
+    animation:
+      hero-helix-draw 2.45s cubic-bezier(0.36, 0.04, 0.22, 1) forwards,
+      hero-helix-show 60ms linear forwards;
+  }
+
+  .hero-helix-strand-o {
+    animation-delay: 40ms, 40ms;
+  }
+
+  .hero-helix-strand-g {
+    animation-delay: 170ms, 170ms;
+  }
+
+  .hero-helix-rung {
+    stroke: var(--biocn-hero-p);
+    stroke-width: 3.8;
+    stroke-linecap: round;
+    stroke-dasharray: 100 110;
+    stroke-dashoffset: 105;
+    opacity: 0;
+  }
+
+  /* Draw as strands pass each belly -> soft accent on n->N (2.25s) -> calm breath (3.45s+). */
+  .hero-helix-rung-1 {
+    animation:
+      hero-helix-draw 420ms cubic-bezier(0.22, 0.72, 0.25, 1) 880ms forwards,
+      hero-helix-show 50ms linear 880ms forwards,
+      hero-helix-rung-accent 460ms cubic-bezier(0.42, 0, 0.2, 1) 2260ms,
+      biocn-helix-breathe 3.4s ease-in-out 3.55s infinite;
+  }
+
+  .hero-helix-rung-2 {
+    animation:
+      hero-helix-draw 420ms cubic-bezier(0.22, 0.72, 0.25, 1) 1680ms forwards,
+      hero-helix-show 50ms linear 1680ms forwards,
+      hero-helix-rung-accent 460ms cubic-bezier(0.42, 0, 0.2, 1) 2320ms,
+      biocn-helix-breathe 3.4s ease-in-out 3.85s infinite;
+  }
+
+  .hero-helix-static .hero-helix-strand,
+  .hero-helix-static .hero-helix-rung {
     animation: none;
-    visibility: hidden;
+    stroke-dashoffset: 0;
+    opacity: 1;
   }
 
-  .brand-instant .brand-layer:last-child {
-    visibility: visible;
+  @keyframes hero-helix-draw {
+    to {
+      stroke-dashoffset: 0;
+    }
   }
 
-  /* 收场：stage 走完后历史层直接消失，终帧只有合体层 */
-
-  /* Swap CN and Bio inside one stable layer so the title does not jump. */
-  .brand-wordmark-layer {
-    z-index: 1;
+  @keyframes hero-helix-show {
+    to {
+      opacity: 1;
+    }
   }
 
-  .brand-wordmark {
-    position: relative;
-    left: 0;
-    min-height: 1em;
-    justify-content: flex-start;
-    column-gap: 0;
+  @keyframes hero-helix-guide-fade {
+    to {
+      opacity: 0;
+    }
   }
 
-  .brand-token {
-    display: inline-block;
-    transition: transform 0.7s cubic-bezier(0.65, 0, 0.25, 1);
-  }
-
-  .brand-group-cn {
-    order: 1;
-  }
-
-  .brand-group-bio {
-    order: 2;
-  }
-
-  .brand-token-swap-cn {
-    transform: translateX(1.5em);
-  }
-
-  .brand-token-swap-bio {
-    transform: translateX(-0.9em);
-  }
-  @keyframes brand-layer-in {
+  @keyframes hero-helix-guide-return {
     from {
       opacity: 0;
-      transform: translateY(0.25em);
+    }
+    to {
+      opacity: 0.11;
+    }
+  }
+
+  @keyframes hero-zh-enter {
+    from {
+      opacity: 0;
+      transform: translateY(0.2em);
       filter: blur(2px);
     }
     to {
@@ -228,81 +430,84 @@
     }
   }
 
-  /* 历史层：渐隐并向上让位 */
-  @keyframes brand-layer-out {
-    to {
+  @keyframes hero-en-rise {
+    from {
       opacity: 0;
-      transform: translateY(-0.35em);
-      filter: blur(2px);
+      transform: translateY(0.26em);
+      filter: blur(3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      filter: blur(0);
     }
   }
 
-  /*
-   * Brand double-helix launch animation (same geometry, 3D weave & choreography
-   * as design/logo/biocn-helix-launch.svg): inlined as DOM SVG + stylesheet
-   * keyframes with pathLength=100 so Safari/WebKit/WebViews always animate
-   * reliably. Stroke gradients live on the SVG elements.
-   */
-  .biocn-helix-strand {
-    fill: none;
-    stroke-width: 5.6;
-    stroke-linecap: round;
-    stroke-dasharray: 100 110;
-    stroke-dashoffset: 105;
-    opacity: 0;
-    animation:
-      biocn-helix-draw 1.35s cubic-bezier(0.38, 0.04, 0.22, 1) forwards,
-      biocn-helix-show 0.05s linear forwards;
+  @keyframes hero-swap-cn {
+    0% {
+      transform: translate(0, 0);
+    }
+    50% {
+      transform: translate(calc(var(--swap-x, 0px) * 0.5), 0.15em);
+    }
+    100% {
+      transform: translate(var(--swap-x, 0px), 0);
+    }
   }
 
-  .biocn-helix-strand-o {
-    animation-delay: 0.08s, 0.13s;
+  @keyframes hero-swap-bio {
+    0% {
+      transform: translate(0, 0);
+    }
+    50% {
+      transform: translate(calc(var(--swap-x, 0px) * 0.5), -0.15em);
+    }
+    100% {
+      transform: translate(var(--swap-x, 0px), 0);
+    }
   }
 
-  .biocn-helix-strand-g {
-    animation-delay: 0.26s, 0.31s;
+  @keyframes hero-helix-rung-accent {
+    0%,
+    100% {
+      stroke-width: 3.8;
+    }
+    42% {
+      stroke-width: 5.1;
+    }
   }
 
-  .biocn-helix-rung {
-    stroke: #7570b3;
-    stroke-width: 3.8;
-    stroke-linecap: round;
-    stroke-dasharray: 100 110;
-    stroke-dashoffset: 105;
-    opacity: 0;
-    animation:
-      biocn-helix-draw 0.36s cubic-bezier(0.22, 0.72, 0.25, 1) forwards,
-      biocn-helix-show 0.05s linear forwards,
-      biocn-helix-breathe 3.4s ease-in-out infinite;
-  }
-
-  .biocn-helix-rung-1 {
-    animation-delay: 0.52s, 0.56s, 1.75s;
-  }
-
-  .biocn-helix-rung-2 {
-    animation-delay: 0.76s, 0.8s, 2.05s;
+  @keyframes hero-helix-twist {
+    0%,
+    100% {
+      transform: scale(1) rotate(0deg);
+    }
+    50% {
+      transform: scale(1.04) rotate(-4.5deg);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .biocn-helix-strand,
-    .biocn-helix-rung {
+    .hero-subtitle {
+      transition: none;
+    }
+
+    .hero-helix-twist,
+    .hero-helix-guide,
+    .hero-helix-strand,
+    .hero-helix-rung {
       animation: none;
+    }
+
+    .hero-helix-strand,
+    .hero-helix-rung {
       stroke-dashoffset: 0;
       opacity: 1;
     }
-  }
-}
 
-@keyframes biocn-helix-draw {
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-
-@keyframes biocn-helix-show {
-  to {
-    opacity: 1;
+    .hero-helix-guide {
+      opacity: 0;
+    }
   }
 }
 

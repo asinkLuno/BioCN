@@ -99,13 +99,20 @@ fn builder() -> Result<ort::environment::EnvironmentBuilder> {
 
 /// Enough threads to matter, few enough not to fight the UI thread.
 ///
-/// The pipeline runs three stages concurrently, so each session gets few
-/// intra threads on purpose: measured on desktop (9700X, int8, per stage),
-/// two is the sweet spot and it falls off monotonically past that — 3 intra
-/// threads −6%, 4 −12% — while the old serial layout cratered at 8 (−65%).
-/// `ORT_INTRA_THREADS` overrides the default — same spirit as
-/// `ORT_DYLIB_PATH`: a knob for benches and odd hardware, read when a session
-/// commits, so a bench can reload per configuration.
+/// The pipeline runs three sessions concurrently (TOK / POS / DEP), so total
+/// active ORT threads is roughly `3 * intra`:
+/// - Android (big.LITTLE + thermal budget): 1 per session (3 total) to avoid
+///   spilling onto efficiency cores and stalling barrier syncs.
+/// - Desktop with <= 5 logical cores (e.g. 2–4 core laptops): 1 per session
+///   (3 total) so UI/WebView keeps headroom instead of 150% oversubscription.
+/// - Desktop with >= 6 logical cores: 2 per session (6 total) — measured on
+///   desktop (9700X, int8, per stage), 2 is the sweet spot and it falls off
+///   monotonically past that (3 intra threads -6%, 4 -12%), while the old
+///   serial layout cratered at 8 (-65%).
+///
+/// `ORT_INTRA_THREADS` overrides the default — same spirit as `ORT_DYLIB_PATH`:
+/// a knob for benches and odd hardware, read when a session commits, so a bench
+/// can reload per configuration.
 fn threads() -> usize {
     let overridden = std::env::var("ORT_INTRA_THREADS")
         .ok()
@@ -113,9 +120,17 @@ fn threads() -> usize {
     if let Some(n) = overridden.filter(|n| *n >= 1) {
         return n;
     }
-    std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(1).clamp(1, 2))
-        .unwrap_or(2)
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    default_intra_threads(cores, cfg!(target_os = "android"))
+}
+
+fn default_intra_threads(available_cores: usize, is_android: bool) -> usize {
+    if is_android {
+        return 1;
+    }
+    if available_cores >= 6 { 2 } else { 1 }
 }
 
 fn session(env: &'static Environment, path: &Path) -> Result<Session> {
@@ -205,5 +220,30 @@ impl Sessions {
         let (_, s_arc) = outputs[0].try_extract_tensor::<f32>().map_err(oerr)?;
         let (_, s_rel) = outputs[1].try_extract_tensor::<f32>().map_err(oerr)?;
         Ok((s_arc.to_vec(), s_rel.to_vec()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_budget_avoids_oversubscription_on_small_desktop_and_android() {
+        // Android always caps at 1 intra thread per session (3 total across
+        // the 3-stage pipeline) regardless of core count.
+        assert_eq!(default_intra_threads(4, true), 1);
+        assert_eq!(default_intra_threads(8, true), 1);
+        assert_eq!(default_intra_threads(12, true), 1);
+
+        // Desktop <= 5 logical cores uses 1 per session (3 total) to leave UI headroom.
+        assert_eq!(default_intra_threads(1, false), 1);
+        assert_eq!(default_intra_threads(2, false), 1);
+        assert_eq!(default_intra_threads(4, false), 1);
+        assert_eq!(default_intra_threads(5, false), 1);
+
+        // Desktop >= 6 logical cores uses the measured 2-per-session sweet spot (6 total).
+        assert_eq!(default_intra_threads(6, false), 2);
+        assert_eq!(default_intra_threads(8, false), 2);
+        assert_eq!(default_intra_threads(16, false), 2);
     }
 }

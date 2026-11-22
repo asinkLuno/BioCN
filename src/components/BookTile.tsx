@@ -1,6 +1,7 @@
-import { memo, useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
 import { bookHasColoring, bookHasActiveColoring, type ColoringProgress } from "../lib/reading";
+import { ColoringOverlay } from "./ColoringOverlay";
 import { ExportDialog } from "./ExportDialog";
 import { useDialog, ModalBackdrop } from "./dialog";
 
@@ -37,7 +38,6 @@ export const BookTile = memo(function BookTile({
   // A running job holds this book: opening, exporting, clearing or removing it
   // would race the analysis, so they are all refused while `progress` is set.
   const coloring = progress !== null;
-  const helixUid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const [coverBroken, setCoverBroken] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   /** Whether this book has coloring to clear, asked each time the menu opens. */
@@ -166,117 +166,7 @@ export const BookTile = memo(function BookTile({
             )}
           </button>
 
-          {progress !== null && (
-            // Full-cover overlay for the running whole-book coloring job: the
-            // frosted veil + centered brand helix covers the entire cover while
-            // staying `pointer-events-none` so clicking the cover still opens
-            // the book and the top-right menu stays reachable above it.
-            <div
-              role="status"
-              aria-label="着色进度"
-              className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between bg-base-100/75 p-3 backdrop-blur-sm"
-            >
-              {/* 居中放大展示品牌双螺旋内联 SVG 动画（与 design/logo/biocn-helix-launch.svg 同一标记），
-                  通过中段 clipPath 与纵深渐变呈现「绿压橙 → 橙压绿 → 绿压橙」3D 穿插；
-                  进度信息由底部的进度条与百分比承担。 */}
-              <div className="flex flex-1 items-center justify-center pt-4">
-                <svg
-                  aria-hidden="true"
-                  data-helix-loader=""
-                  viewBox="0 0 100 100"
-                  className="aspect-square w-3/5 max-w-32"
-                >
-                  <defs>
-                    <clipPath id={`biocn-${helixUid}-over-mid`}>
-                      <rect x="34" y="40" width="32" height="20" />
-                    </clipPath>
-                    <linearGradient
-                      id={`biocn-${helixUid}-grad-o`}
-                      gradientUnits="userSpaceOnUse"
-                      x1="0"
-                      y1="89.9"
-                      x2="0"
-                      y2="10.1"
-                    >
-                      <stop offset="0%" stopColor="#d95f02" />
-                      <stop offset="6.1%" stopColor="#d95f02" />
-                      <stop offset="11.1%" stopColor="#b84e00" />
-                      <stop offset="16.1%" stopColor="#d95f02" />
-                      <stop offset="83.9%" stopColor="#d95f02" />
-                      <stop offset="88.9%" stopColor="#b84e00" />
-                      <stop offset="93.9%" stopColor="#d95f02" />
-                      <stop offset="100%" stopColor="#d95f02" />
-                    </linearGradient>
-                    <linearGradient
-                      id={`biocn-${helixUid}-grad-g`}
-                      gradientUnits="userSpaceOnUse"
-                      x1="0"
-                      y1="89.9"
-                      x2="0"
-                      y2="10.1"
-                    >
-                      <stop offset="0%" stopColor="#1b9e77" />
-                      <stop offset="45%" stopColor="#1b9e77" />
-                      <stop offset="50%" stopColor="#147e5e" />
-                      <stop offset="55%" stopColor="#1b9e77" />
-                      <stop offset="100%" stopColor="#1b9e77" />
-                    </linearGradient>
-                  </defs>
-                  <line
-                    className="biocn-helix-rung biocn-helix-rung-1"
-                    pathLength={100}
-                    x1="28"
-                    y1="65.5"
-                    x2="72"
-                    y2="65.5"
-                  />
-                  <line
-                    className="biocn-helix-rung biocn-helix-rung-2"
-                    pathLength={100}
-                    x1="72"
-                    y1="34.5"
-                    x2="28"
-                    y2="34.5"
-                  />
-                  <path
-                    className="biocn-helix-strand biocn-helix-strand-o"
-                    stroke={`url(#biocn-${helixUid}-grad-o)`}
-                    pathLength={100}
-                    d="M 68.2 89.9 C 56.4 81.6 27 74.9 27 65.5 C 27 53.7 73 46.3 73 34.5 C 73 25.1 43.6 18.4 31.8 10.1"
-                  />
-                  <path
-                    className="biocn-helix-strand biocn-helix-strand-g"
-                    stroke={`url(#biocn-${helixUid}-grad-g)`}
-                    pathLength={100}
-                    d="M 31.8 89.9 C 43.6 81.6 73 74.9 73 65.5 C 73 53.7 27 46.3 27 34.5 C 27 25.1 56.4 18.4 68.2 10.1"
-                  />
-                  <path
-                    className="biocn-helix-strand biocn-helix-strand-o"
-                    stroke={`url(#biocn-${helixUid}-grad-o)`}
-                    clipPath={`url(#biocn-${helixUid}-over-mid)`}
-                    pathLength={100}
-                    d="M 68.2 89.9 C 56.4 81.6 27 74.9 27 65.5 C 27 53.7 73 46.3 73 34.5 C 73 25.1 43.6 18.4 31.8 10.1"
-                  />
-                </svg>
-              </div>
-              <div className="flex w-full items-center gap-2">
-                {progress.total > 0 ? (
-                  <progress
-                    className="progress progress-primary h-2 min-w-0 flex-1"
-                    value={progress.done}
-                    max={progress.total}
-                  />
-                ) : (
-                  <progress className="progress progress-primary h-2 min-w-0 flex-1" />
-                )}
-                <span className="shrink-0 text-xs font-medium tabular-nums">
-                  {progress.total > 0
-                    ? `${Math.min(100, Math.round((progress.done / progress.total) * 100))}%`
-                    : "准备中…"}
-                </span>
-              </div>
-            </div>
-          )}
+          {progress !== null && <ColoringOverlay progress={progress} />}
 
           <div ref={menuRoot} className="dropdown dropdown-end absolute top-2 right-2 z-20">
             <button

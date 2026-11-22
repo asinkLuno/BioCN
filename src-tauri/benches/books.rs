@@ -40,8 +40,8 @@
 //! Numbers are wall time via `Instant`; the loops do nothing but analysis.
 //! ORT keeps its own intra threads (`engine::threads`).
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use biocn_lib::analysis::decode::{Word, decode_dep, decode_pos, decode_words};
@@ -49,7 +49,10 @@ use biocn_lib::analysis::engine::Sessions;
 use biocn_lib::analysis::resources::{pack_word_rows, tok_prep, words_prep};
 use biocn_lib::analysis::roles::{char_roles, to_segments};
 use biocn_lib::analysis::utf16::to_utf16;
-use biocn_lib::analysis::{BioCNResources, MAX_SUBS, MAX_WORDS, analyze_all};
+use biocn_lib::analysis::{
+    BioCNResources, MAX_SUBS, MAX_WORDS, PipelineScheduler, Priority, Segment, analyze_all,
+};
+use biocn_lib::cache::AnalysisCache;
 use biocn_lib::reader;
 
 /// Same order as `models.rs` publishes them.
@@ -100,6 +103,7 @@ fn main() {
     let mut limit: Option<usize> = None;
     let mut stages = false;
     let mut pipeline = false;
+    let mut e2e = false;
     let mut positional: Vec<String> = Vec::new();
     for arg in std::env::args().skip(1) {
         if let Some(value) = arg.strip_prefix("--variant=") {
@@ -118,6 +122,8 @@ fn main() {
             stages = true;
         } else if arg == "--pipeline" {
             pipeline = true;
+        } else if arg == "--e2e" {
+            e2e = true;
         } else if arg == "--bench" {
             // `cargo bench` appends its own mode flag to the argv of a
             // `harness = false` binary; not one of ours, just drop it.
@@ -180,6 +186,10 @@ fn main() {
     }
     if pipeline {
         mode_pipeline(&models, variant, threads_first, &parsed);
+        return;
+    }
+    if e2e {
+        mode_e2e(&models, &variants, threads_first, &parsed);
         return;
     }
 
@@ -721,10 +731,367 @@ fn truncate(title: &str) -> String {
     out
 }
 
+/// Reads Linux `VmRSS` in MiB from `/proc/self/status`, if available.
+fn current_rss_mib() -> Option<f64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    let kb: f64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb / 1024.0)
+}
+
+/// `--e2e`: real end-to-end comparison of old `chunks(8) + analyze_all` vs
+/// new persistent `PipelineScheduler`, including SQLite WAL writes, cache-hit
+/// re-reads, exact output parity, P0 preemption latency under P3 load,
+/// cancellation latency, idle auto-unload callback, and RSS memory delta.
+fn mode_e2e(models: &Path, variants: &[String], threads: &str, books: &[Book]) {
+    let book = &books[0];
+    let mut seen_pool = std::collections::HashSet::new();
+    let all_unique_texts: Vec<String> = book
+        .chapter_uniques
+        .iter()
+        .flat_map(|ch| ch.iter())
+        .map(|&idx| book.sentences[idx].clone())
+        .filter(|s| seen_pool.insert(s.clone()))
+        .collect();
+
+    for variant in variants {
+        println!("\n================ E2E [{variant} t={threads}] ================");
+        let rss_before = current_rss_mib();
+        let loaded = match load_variant(models, variant, threads) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                println!("  FAILED to load: {error}");
+                continue;
+            }
+        };
+        let rss_loaded = current_rss_mib();
+        println!(
+            "  load={:.2}s  RSS: {:.1} MiB -> {:.1} MiB (+{:.1} MiB)",
+            loaded.load.as_secs_f64(),
+            rss_before.unwrap_or(0.0),
+            rss_loaded.unwrap_or(0.0),
+            rss_loaded.unwrap_or(0.0) - rss_before.unwrap_or(0.0),
+        );
+
+        // 1. Old runtime path: per-chapter misses chunked by 8 + analyze_all + SQLite save/8.
+        let old_dir = tempfile::tempdir().expect("tempdir");
+        let old_cache = AnalysisCache::open(old_dir.path()).expect("open old cache");
+        let mut old_answers: std::collections::HashMap<String, Option<Vec<Segment>>> =
+            std::collections::HashMap::with_capacity(book.unique.len());
+        let mut old_analyzed = 0usize;
+        let mut old_failed = 0usize;
+        let mut old_txs = 0usize;
+        let old_start = Instant::now();
+        for (ch_idx, chapter) in book.chapter_uniques.iter().enumerate() {
+            let sentences: Vec<String> = chapter
+                .iter()
+                .map(|&idx| book.sentences[idx].clone())
+                .collect();
+            let cached = old_cache.get(variant, &sentences).expect("cache get");
+            let misses: Vec<&str> = sentences
+                .iter()
+                .filter(|s| !cached.contains_key(*s))
+                .map(String::as_str)
+                .collect();
+            if misses.is_empty() {
+                old_cache.mark_chapter(variant, "book", ch_idx).expect("mark");
+                continue;
+            }
+            let mut ch_failed = 0usize;
+            for chunk in misses.chunks(8) {
+                let mut fresh = Vec::with_capacity(chunk.len());
+                for (s, ans) in analyze_all(&loaded.resources, &loaded.sessions, chunk) {
+                    old_analyzed += 1;
+                    match ans {
+                        Ok(segs) => {
+                            old_answers.insert(s.to_owned(), segs.clone());
+                            fresh.push((s.to_owned(), segs));
+                        }
+                        Err(_) => {
+                            old_failed += 1;
+                            ch_failed += 1;
+                        }
+                    }
+                }
+                if !fresh.is_empty() {
+                    old_cache
+                        .save_chapter(variant, "book", ch_idx, false, &fresh)
+                        .expect("save old");
+                    old_txs += 1;
+                }
+            }
+            if ch_failed == 0 {
+                old_cache.mark_chapter(variant, "book", ch_idx).expect("mark");
+            }
+        }
+        let old_wall = old_start.elapsed();
+        let old_rate = old_analyzed as f64 / old_wall.as_secs_f64().max(f64::EPSILON);
+        println!(
+            "  [旧方案 batch=8 + analyze_all + SQLite] wall={:.2}s  {:.1} 句/s  analyzed={} failed={} sqlite_txs={}",
+            old_wall.as_secs_f64(),
+            old_rate,
+            old_analyzed,
+            old_failed,
+            old_txs,
+        );
+
+        // 2. New runtime path: persistent PipelineScheduler + per-chapter submit + SQLite save/32.
+        let idle_hits = Arc::new(AtomicUsize::new(0));
+        let idle_hits_cb = idle_hits.clone();
+        let scheduler = PipelineScheduler::new(
+            loaded.resources,
+            loaded.sessions,
+            Some(Duration::from_millis(250)),
+            Some(Arc::new(move || {
+                idle_hits_cb.fetch_add(1, Ordering::SeqCst);
+            })),
+        );
+
+        let new_dir = tempfile::tempdir().expect("tempdir");
+        let new_cache = AnalysisCache::open(new_dir.path()).expect("open new cache");
+        let mut new_analyzed = 0usize;
+        let mut new_failed = 0usize;
+        let mut new_txs = 0usize;
+        let mut mismatches = 0usize;
+        let new_start = Instant::now();
+        tauri::async_runtime::block_on(async {
+            let cancel = Arc::new(AtomicBool::new(false));
+            for (ch_idx, chapter) in book.chapter_uniques.iter().enumerate() {
+                let sentences: Vec<String> = chapter
+                    .iter()
+                    .map(|&idx| book.sentences[idx].clone())
+                    .collect();
+                let cached = new_cache.get(variant, &sentences).expect("cache get");
+                let misses: Vec<String> = sentences
+                    .iter()
+                    .filter(|s| !cached.contains_key(*s))
+                    .cloned()
+                    .collect();
+                if misses.is_empty() {
+                    new_cache.mark_chapter(variant, "book", ch_idx).expect("mark");
+                    continue;
+                }
+                let mut rx = scheduler.submit(Priority::Background, cancel.clone(), misses);
+                let mut ch_failed = 0usize;
+                let mut fresh = Vec::with_capacity(32);
+                while let Some((_, s, ans)) = rx.recv().await {
+                    new_analyzed += 1;
+                    match ans {
+                        Ok(segs) => {
+                            if old_answers.get(&s) != Some(&segs) {
+                                mismatches += 1;
+                            }
+                            fresh.push((s, segs));
+                        }
+                        Err(_) => {
+                            new_failed += 1;
+                            ch_failed += 1;
+                        }
+                    }
+                    if fresh.len() >= 32 {
+                        let batch = std::mem::take(&mut fresh);
+                        new_cache
+                            .save_chapter(variant, "book", ch_idx, false, &batch)
+                            .expect("save new");
+                        new_txs += 1;
+                    }
+                }
+                if !fresh.is_empty() {
+                    new_cache
+                        .save_chapter(variant, "book", ch_idx, false, &fresh)
+                        .expect("save new tail");
+                    new_txs += 1;
+                }
+                if ch_failed == 0 {
+                    new_cache.mark_chapter(variant, "book", ch_idx).expect("mark");
+                }
+            }
+        });
+        let new_wall = new_start.elapsed();
+        let new_rate = new_analyzed as f64 / new_wall.as_secs_f64().max(f64::EPSILON);
+        let speedup = (new_rate / old_rate - 1.0) * 100.0;
+        let db_mib = std::fs::metadata(new_dir.path().join("analysis.db"))
+            .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+            .unwrap_or(0.0);
+        println!(
+            "  [新方案 PipelineScheduler + SQLite/32]  wall={:.2}s  {:.1} 句/s ({:+.1}%)  analyzed={} failed={} sqlite_txs={} mismatch={} db={:.2} MiB",
+            new_wall.as_secs_f64(),
+            new_rate,
+            speedup,
+            new_analyzed,
+            new_failed,
+            new_txs,
+            mismatches,
+            db_mib,
+        );
+        assert_eq!(mismatches, 0, "PipelineScheduler output drifted from analyze_all!");
+        drop(old_answers);
+        drop(old_cache);
+        drop(old_dir);
+
+        // 3. Cache-hit pass across all chapters (0 model calls).
+        let hit_start = Instant::now();
+        let mut hit_sentences = 0usize;
+        for chapter in &book.chapter_uniques {
+            let sentences: Vec<String> = chapter
+                .iter()
+                .map(|&idx| book.sentences[idx].clone())
+                .collect();
+            let found = new_cache.get(variant, &sentences).expect("cache hit get");
+            hit_sentences += found.len();
+        }
+        let hit_wall = hit_start.elapsed();
+        println!(
+            "  [二次全书 SQLite 缓存命中]              wall={:.1}ms  hits={}/{} (零模型调用)",
+            hit_wall.as_secs_f64() * 1000.0,
+            hit_sentences,
+            new_analyzed,
+        );
+
+        // 4. P0 preemption latency under active P3 load (real sentences from the book).
+        let p3_len = all_unique_texts.len().min(600);
+        let p0_len = all_unique_texts.len().min(24);
+        if p3_len >= 100 && p0_len >= 8 {
+            let p3_sentences = all_unique_texts[..p3_len].to_vec();
+            let p0_pool = &all_unique_texts[..p3_len];
+            let (first_ms, patch8_ms, full24_ms, p3_done, p0_before_p3) =
+                tauri::async_runtime::block_on(async {
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    let mut rx_p3 =
+                        scheduler.submit(Priority::Background, cancel.clone(), p3_sentences);
+                    let p3_finished_at = Arc::new(Mutex::new(None::<Instant>));
+                    let p3_finished_clone = p3_finished_at.clone();
+                    let p3_task = tauri::async_runtime::spawn(async move {
+                        let mut count = 0usize;
+                        while rx_p3.recv().await.is_some() {
+                            count += 1;
+                        }
+                        *p3_finished_clone.lock().unwrap() = Some(Instant::now());
+                        count
+                    });
+
+                    // Let P3 enter steady state before firing P0 reader bursts.
+                    let _ = tauri::async_runtime::spawn_blocking(|| {
+                        std::thread::sleep(Duration::from_millis(30));
+                    })
+                    .await;
+
+                    let mut first_ms = Vec::new();
+                    let mut patch8_ms = Vec::new();
+                    let mut full24_ms = Vec::new();
+                    let mut p0_end_times = Vec::new();
+
+                    for burst in 0..5 {
+                        let start_off = (burst * p0_len) % (p0_pool.len() - p0_len);
+                        let p0_sentences = p0_pool[start_off..start_off + p0_len].to_vec();
+                        let t0 = Instant::now();
+                        let mut rx_p0 =
+                            scheduler.submit(Priority::Reader, Arc::new(AtomicBool::new(false)), p0_sentences);
+                        let mut got = 0usize;
+                        let mut t_first = None;
+                        let mut t_eight = None;
+                        while rx_p0.recv().await.is_some() {
+                            got += 1;
+                            if got == 1 {
+                                t_first = Some(t0.elapsed().as_secs_f64() * 1000.0);
+                            }
+                            if got == 8 {
+                                t_eight = Some(t0.elapsed().as_secs_f64() * 1000.0);
+                            }
+                        }
+                        let t_all = t0.elapsed().as_secs_f64() * 1000.0;
+                        p0_end_times.push(Instant::now());
+                        first_ms.push(t_first.unwrap_or(t_all));
+                        patch8_ms.push(t_eight.unwrap_or(t_all));
+                        full24_ms.push(t_all);
+
+                        let _ = tauri::async_runtime::spawn_blocking(|| {
+                            std::thread::sleep(Duration::from_millis(40));
+                        })
+                        .await;
+                    }
+
+                    let p3_done = p3_task.await.expect("p3 task join");
+                    let p3_end = p3_finished_at.lock().unwrap().unwrap();
+                    let p0_before_p3 = p0_end_times.iter().filter(|t| **t < p3_end).count();
+                    (first_ms, patch8_ms, full24_ms, p3_done, p0_before_p3)
+                });
+            let avg = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+            let max = |v: &[f64]| v.iter().copied().fold(0.0f64, f64::max);
+            println!(
+                "  [P0 抢占实测 (P3={p3_len}句满载期间 5×P0({p0_len}句))] 首句 avg={:.1}ms max={:.1}ms | 首屏8句 avg={:.1}ms max={:.1}ms | 整批24句 avg={:.1}ms max={:.1}ms | P0早于P3结束={}/5 | P3完整={}/{p3_len}",
+                avg(&first_ms),
+                max(&first_ms),
+                avg(&patch8_ms),
+                max(&patch8_ms),
+                avg(&full24_ms),
+                max(&full24_ms),
+                p0_before_p3,
+                p3_done,
+            );
+
+            // 5. Cancellation latency test.
+            let cancel_flag = Arc::new(AtomicBool::new(false));
+            let cancel_sentences = all_unique_texts[..p3_len].to_vec();
+            let (cancel_drain_ms, cancel_ran) = tauri::async_runtime::block_on(async {
+                let mut rx =
+                    scheduler.submit(Priority::Background, cancel_flag.clone(), cancel_sentences);
+                let flag_clone = cancel_flag.clone();
+                let cancel_at = Arc::new(Mutex::new(None::<Instant>));
+                let cancel_at_clone = cancel_at.clone();
+                let trigger = tauri::async_runtime::spawn_blocking(move || {
+                    std::thread::sleep(Duration::from_millis(25));
+                    *cancel_at_clone.lock().unwrap() = Some(Instant::now());
+                    flag_clone.store(true, Ordering::Relaxed);
+                });
+                let mut ran = 0usize;
+                while rx.recv().await.is_some() {
+                    ran += 1;
+                }
+                let _ = trigger.await;
+                let drain_ms = cancel_at
+                    .lock()
+                    .unwrap()
+                    .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                (drain_ms, ran)
+            });
+            println!(
+                "  [快速取消实测 ({p3_len}句任务 25ms 后取消)] 排空耗时={:.1}ms  已算={cancel_ran}句  跳过={}句",
+                cancel_drain_ms,
+                p3_len.saturating_sub(cancel_ran),
+            );
+        }
+
+        // 6. Idle auto-unload callback + Drop RSS release verification.
+        idle_hits.store(0, Ordering::SeqCst);
+        let idle_start = Instant::now();
+        while idle_hits.load(Ordering::SeqCst) == 0 && idle_start.elapsed() < Duration::from_secs(2)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let idle_triggered_ms = idle_start.elapsed().as_secs_f64() * 1000.0;
+        let idle_fired = idle_hits.load(Ordering::SeqCst) > 0;
+        let rss_before_drop = current_rss_mib();
+        let drop_start = Instant::now();
+        drop(scheduler);
+        let drop_ms = drop_start.elapsed().as_secs_f64() * 1000.0;
+        let rss_after_drop = current_rss_mib();
+        println!(
+            "  [空闲卸载 & 回收] idle_fired={idle_fired} ({:.0}ms, 设定250ms)  drop_join={:.2}ms  RSS: {:.1} MiB -> {:.1} MiB ({:+.1} MiB)",
+            idle_triggered_ms,
+            drop_ms,
+            rss_before_drop.unwrap_or(0.0),
+            rss_after_drop.unwrap_or(0.0),
+            rss_after_drop.unwrap_or(0.0) - rss_before_drop.unwrap_or(0.0),
+        );
+    }
+}
+
 fn usage(reason: &str) -> ! {
     eprintln!(
         "{reason}\nusage: cargo bench -p biocn --bench books -- \
-         [--variant=int8,fp16] [--threads=auto,1,2] [--limit=N] \
+         [--variant=int8,fp16] [--threads=auto,1,2] [--limit=N] [--e2e] \
          <models-root> <book.epub>..."
     );
     std::process::exit(2);
