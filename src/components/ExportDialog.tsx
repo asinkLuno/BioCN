@@ -15,31 +15,28 @@ import { ModalBackdrop, useDialog } from "./dialog";
 interface StylesheetOption {
   readonly label: string;
   readonly summary: string;
-  readonly heading: string;
   readonly detail: string;
 }
 
 const STYLESHEET_ORDER: readonly Stylesheet[] = ["inline", "external"];
 
 /**
- * Single source of truth for the stylesheet choices and their explanations.
- * Keyed by `Stylesheet` so any new mode must declare both its short radio copy
- * and its detailed explanation at compile time.
+ * Single source of truth for the stylesheet choices and their hover tips.
+ * Keyed by `Stylesheet` so any new mode must declare both its radio copy
+ * and its tooltip explanation at compile time.
  */
 const STYLESHEET_OPTIONS: Record<Stylesheet, StylesheetOption> = {
   inline: {
     label: "内联",
     summary: "颜色样式写进每一章，单文件即可阅读",
-    heading: "内联（默认推荐）",
     detail:
-      "把配色规则以 <style> 写入每个章节的 XHTML。各章自带样式，兼容性最好（部分阅读器忽略外链样式或拆章查看时也能保留颜色）；但若需手动改配色，要逐章修改。",
+      "导出单个 .epub 文件，将配色规则以 <style> 写入每个章节的 XHTML。各章自带样式，兼容绝大多数阅读器（部分阅读器忽略外链样式或拆章查看时也能保留颜色）；手动改配色需逐章修改。",
   },
   external: {
     label: "外联",
     summary: "样式存为书内单独的 biocn.css，方便修改配色",
-    heading: "外联",
     detail:
-      "在 EPUB 内部生成一份统一的 biocn.css，各章节通过 <link> 引用。无重复样式、结构更精简；之后若用 Calibre、Sigil 等工具自定义主谓宾或深色模式配色，只改这一份文件即可生效全书。",
+      "导出单个 .epub 文件，在书内生成统一的 biocn.css 并由各章通过 <link> 引用。无重复样式、体积更精简；之后若用 Calibre、Sigil 等工具自定义主谓宾或深色模式配色，只改这一份文件即可生效全书。",
   },
 };
 
@@ -147,7 +144,7 @@ export function ExportDialog({ id, title, onClose }: Props) {
         else onClose();
       }}
     >
-      <div className="modal-box max-w-md">
+      <div className="modal-box max-w-md overflow-visible">
         <h3 id={`export-title-${id}`} className="text-base font-semibold">
           导出《{title}》
         </h3>
@@ -208,7 +205,7 @@ export function ExportDialog({ id, title, onClose }: Props) {
   );
 }
 
-/** Radio selector for inline vs. external EPUB CSS, with an expandable guide. */
+/** Radio selector for inline vs. external EPUB CSS, each with a hover info tip. */
 function StylesheetPicker({
   id,
   value,
@@ -220,89 +217,77 @@ function StylesheetPicker({
   disabled: boolean;
   onChange: (next: Stylesheet) => void;
 }) {
-  const [showInfo, setShowInfo] = useState(false);
-  const legendId = `export-style-legend-${id}`;
-  const infoId = `export-style-info-${id}`;
-
   return (
-    <fieldset className="fieldset mt-4" aria-labelledby={legendId}>
-      <legend className="fieldset-legend">
-        <span id={legendId}>CSS 样式</span>
-        <button
-          type="button"
-          className={`btn btn-ghost btn-circle btn-xs ${
-            showInfo ? "text-info" : "text-base-content/60"
-          }`}
-          aria-label="了解内联与外联样式的区别"
-          title="了解内联与外联样式的区别"
-          aria-expanded={showInfo}
-          aria-controls={infoId}
-          onClick={() => setShowInfo((open) => !open)}
-        >
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            className="size-4"
-          >
-            <circle cx="10" cy="10" r="7.5" />
-            <path strokeLinecap="round" d="M10 9v4.5" />
-            <circle cx="10" cy="6.25" r="0.85" fill="currentColor" stroke="none" />
-          </svg>
-        </button>
-      </legend>
-
-      {showInfo && <StylesheetInfo id={infoId} />}
+    <fieldset className="fieldset mt-4">
+      <legend className="fieldset-legend">CSS 样式</legend>
 
       {STYLESHEET_ORDER.map((kind) => {
         const option = STYLESHEET_OPTIONS[kind];
+        const radioId = `export-style-${id}-${kind}`;
+        const tipId = `export-style-tip-${id}-${kind}`;
         return (
-          <label key={kind} className="label cursor-pointer justify-start gap-3">
+          <div key={kind} className="flex items-start gap-3 py-1">
             <input
+              id={radioId}
               type="radio"
               name={`stylesheet-${id}`}
-              className="radio radio-primary radio-sm"
+              className="radio radio-primary radio-sm mt-0.5 shrink-0"
               value={kind}
               checked={value === kind}
               disabled={disabled}
               onChange={() => onChange(kind)}
             />
-            <span className="flex flex-col">
-              <span className="text-sm">{option.label}</span>
-              <span className="text-xs text-base-content/55">{option.summary}</span>
-            </span>
-          </label>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1">
+                <label htmlFor={radioId} className="cursor-pointer text-sm">
+                  {option.label}
+                </label>
+                <span className="tooltip tooltip-top tooltip-start">
+                  <span
+                    id={tipId}
+                    role="tooltip"
+                    className="tooltip-content z-10 w-56 p-2.5 text-left text-xs leading-relaxed sm:w-64"
+                  >
+                    {option.detail}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-circle btn-xs text-base-content/55 hover:text-base-content"
+                    aria-label={`${option.label}样式说明`}
+                    aria-describedby={tipId}
+                  >
+                    <InfoIcon />
+                  </button>
+                </span>
+              </div>
+              <label
+                htmlFor={radioId}
+                className="block cursor-pointer text-xs text-base-content/55"
+              >
+                {option.summary}
+              </label>
+            </div>
+          </div>
         );
       })}
     </fieldset>
   );
 }
 
-/** Explains how inline and external EPUB CSS differ in practice. */
-function StylesheetInfo({ id }: { id: string }) {
+function InfoIcon() {
   return (
-    <div
-      id={id}
-      role="note"
-      className="alert alert-info alert-soft mt-1 mb-1 text-xs leading-relaxed"
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      className="size-3.5"
     >
-      <div className="space-y-1.5 text-base-content/80">
-        <p className="font-medium text-base-content">
-          两种方式都会导出单个 .epub 文件，区别在于配色 CSS 的存放位置：
-        </p>
-        {STYLESHEET_ORDER.map((kind) => {
-          const option = STYLESHEET_OPTIONS[kind];
-          return (
-            <p key={kind}>
-              <strong className="text-base-content">{option.heading}：</strong>
-              {option.detail}
-            </p>
-          );
-        })}
-      </div>
-    </div>
+      <circle cx="10" cy="10" r="7.5" />
+      <path strokeLinecap="round" d="M10 9v4.5" />
+      <circle cx="10" cy="6.25" r="0.85" fill="currentColor" stroke="none" />
+    </svg>
   );
 }
 
