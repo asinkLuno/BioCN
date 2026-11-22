@@ -30,8 +30,24 @@ const openBookMock = vi.mocked(epub.openBook);
 const fetchBlobMock = vi.mocked(epub.fetchBookBlob);
 
 /** A fake parsed book: sections load lazily, one Document per call. */
+/**
+ * A fake parsed book: sections return blob: URLs (what foliate's `load()`
+ * really does), and a stubbed `fetch` resolves them back to the document
+ * HTML — same shape as the real loader's resource-rewritten blob.
+ */
 function fakeBook(sectionDocs: (string | null)[]) {
   const created: Document[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const doc = created.find((d) => `blob:${d.URL}` === url);
+      if (!doc) throw new Error(`no document for ${url}`);
+      return {
+        ok: true,
+        text: async () => `<!DOCTYPE html>${doc.documentElement.outerHTML}`,
+      };
+    }),
+  );
   return {
     created,
     book: {
@@ -39,13 +55,13 @@ function fakeBook(sectionDocs: (string | null)[]) {
         linear: "yes",
         size: 0,
         load: async () => {
-          if (src === null) return new Blob();
+          if (src === null) return null;
           const doc = new DOMParser().parseFromString(
             `<html><head><title>t</title></head><body>${src}</body></html>`,
             "text/html",
           );
           created.push(doc);
-          return doc;
+          return `blob:${doc.URL}`;
         },
         unload: () => {},
       })),

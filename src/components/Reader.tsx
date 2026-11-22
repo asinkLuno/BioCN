@@ -167,12 +167,24 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         // beats silently coloring the wrong chapter on a broken book).
         const section = opened.book.sections[index];
         if (!section) throw new Error("book-chapter: 这一章不在书文件里");
-        const doc = await section.load();
+        // `load()` returns a blob: URL of the whole serialized chapter — its
+        // resources (CSS, images) are already rewritten to blob: by the
+        // loader, which is exactly what an srcdoc render needs.
+        // `createDocument()` parses without rewriting, leaving the book's
+        // relative URLs broken. Same-origin fetch turns the URL back into a
+        // Document for the overlay.
+        const url = await section.load();
         if (cancelled) {
           section.unload();
           return;
         }
-        if (!(doc instanceof Document)) throw new Error("book-chapter: 这一章不是文档");
+        if (typeof url !== "string") {
+          throw new Error("book-chapter: 这一章不是文档");
+        }
+        const response = await fetch(url);
+        const str = await response.text();
+        const doc = new DOMParser().parseFromString(str, "text/html");
+        if (!doc.documentElement) throw new Error("book-chapter: 这一章解析失败");
         setSrcdoc(renderSection(doc, loaded.paragraphs));
         setChapter(loaded);
         setLoading(false);

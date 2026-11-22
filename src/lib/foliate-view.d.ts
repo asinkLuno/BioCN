@@ -17,7 +17,10 @@ declare module "foliate-js/view.js" {
     /** Spine order index equals the Rust reader's chapter index. */
     linear: string;
     size: number;
-    load(): Promise<Document | Blob>;
+    // For XHTML the loader branch returns a blob: URL of the whole
+    // resource-rewritten document; `createDocument()` parses but does not
+    // rewrite resources.
+    load(): Promise<string | Document | Blob | null>;
     unload(): void;
   }
 
