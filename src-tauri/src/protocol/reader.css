@@ -1,0 +1,201 @@
+/* BioCN reader base stylesheet injected into every chapter served via book://.
+   Book styles come first; these rules use CSS variables driven by the host
+   reader preferences so theme, typography, pagination and SVO coloring update
+   live without reloading the chapter. */
+
+:root {
+  color-scheme: light dark;
+  --reader-font-size: 17px;
+  --reader-line-height: 1.9;
+  --reader-measure: 46rem;
+  --reader-bg: #ffffff;
+  --reader-fg: #1f2328;
+  --reader-link: #2563eb;
+  --svo-subject: #d95f02;
+  --svo-predicate: #1b9e77;
+  --svo-object: #7570b3;
+  --page-pad-y: 28px;
+  --page-pad-x: 28px;
+  --spread-width: 100vw;
+  --col-width: auto;
+  --col-gap: 56px;
+}
+
+/* Auto theme follows system color scheme */
+@media (prefers-color-scheme: dark) {
+  html[data-theme="auto"] {
+    --reader-bg: #181a1f;
+    --reader-fg: #d4d8df;
+    --reader-link: #7aa2f7;
+    --svo-subject: #f28e4b;
+    --svo-predicate: #4ec6a3;
+    --svo-object: #a99cf0;
+  }
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --reader-bg: #ffffff;
+  --reader-fg: #1f2328;
+  --reader-link: #2563eb;
+}
+
+html[data-theme="sepia"] {
+  color-scheme: light;
+  --reader-bg: #f6f0e2;
+  --reader-fg: #3b3024;
+  --reader-link: #9a5b13;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --reader-bg: #181a1f;
+  --reader-fg: #d4d8df;
+  --reader-link: #7aa2f7;
+  --svo-subject: #f28e4b;
+  --svo-predicate: #4ec6a3;
+  --svo-object: #a99cf0;
+}
+
+/* Optional SVO palettes */
+html[data-palette="soft"] {
+  --svo-subject: #c26a2d;
+  --svo-predicate: #2f8a6e;
+  --svo-object: #6c689c;
+}
+html[data-palette="soft"][data-theme="dark"] {
+  --svo-subject: #dfa072;
+  --svo-predicate: #6ab59d;
+  --svo-object: #a69fd4;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-palette="soft"][data-theme="auto"] {
+    --svo-subject: #dfa072;
+    --svo-predicate: #6ab59d;
+    --svo-object: #a69fd4;
+  }
+}
+
+html[data-palette="vivid"] {
+  --svo-subject: #ea580c;
+  --svo-predicate: #059669;
+  --svo-object: #6d28d9;
+}
+html[data-palette="vivid"][data-theme="dark"] {
+  --svo-subject: #fb923c;
+  --svo-predicate: #34d399;
+  --svo-object: #c084fc;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-palette="vivid"][data-theme="auto"] {
+    --svo-subject: #fb923c;
+    --svo-predicate: #34d399;
+    --svo-object: #c084fc;
+  }
+}
+
+html {
+  background-color: var(--reader-bg) !important;
+  color: var(--reader-fg) !important;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  box-sizing: border-box !important;
+  background-color: var(--reader-bg) !important;
+  color: var(--reader-fg) !important;
+  font-size: var(--reader-font-size) !important;
+  line-height: var(--reader-line-height) !important;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* Ensure dark/sepia themes stay legible even when an EPUB hardcodes black text
+   or white backgrounds on paragraphs, while never overriding SVO spans. */
+html[data-theme="dark"] body *:not(.svo):not(a):not(img):not(svg):not(video),
+html[data-theme="sepia"] body *:not(.svo):not(a):not(img):not(svg):not(video) {
+  color: inherit !important;
+  background-color: transparent !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="auto"] body *:not(.svo):not(a):not(img):not(svg):not(video) {
+    color: inherit !important;
+    background-color: transparent !important;
+  }
+}
+
+body a {
+  color: var(--reader-link);
+}
+
+/* Scrolled mode: centered single column, native iframe vertical scrolling */
+html[data-mode="scrolled"] {
+  height: auto !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+
+html[data-mode="scrolled"] body {
+  margin: 0 auto !important;
+  max-width: var(--reader-measure) !important;
+  padding: 3.75rem 1.75rem 5rem !important;
+  min-height: 100vh;
+}
+
+/* Paginated mode: CSS multi-column horizontal pagination controlled by bridge.js */
+html[data-mode="paginated"] {
+  height: 100vh !important;
+  width: 100vw !important;
+  overflow: hidden !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+html[data-mode="paginated"] body {
+  width: var(--spread-width) !important;
+  height: 100vh !important;
+  max-width: none !important;
+  margin: 0 auto !important;
+  padding: var(--page-pad-y) var(--page-pad-x) !important;
+  column-width: var(--col-width) !important;
+  column-gap: var(--col-gap) !important;
+  column-fill: auto !important;
+  overflow: hidden !important;
+  touch-action: pan-y;
+  overscroll-behavior-x: contain;
+}
+
+html[data-mode="paginated"] img,
+html[data-mode="paginated"] svg,
+html[data-mode="paginated"] video,
+html[data-mode="paginated"] figure {
+  max-width: 100% !important;
+  max-height: calc(100vh - 2 * var(--page-pad-y) - 8px) !important;
+  height: auto !important;
+  object-fit: contain;
+  break-inside: avoid;
+}
+
+img, svg, video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Paragraph anchor is invisible zero-width phrasing content */
+span[data-bp] {
+  display: inline;
+  width: 0;
+  height: 0;
+  font-size: 0;
+  line-height: 0;
+}
+
+/* 主谓宾 SVO coloring — highest specificity so theme overrides never flatten it */
+.svo.svo-subject { color: var(--svo-subject) !important; }
+.svo.svo-predicate { color: var(--svo-predicate) !important; }
+.svo.svo-object { color: var(--svo-object) !important; }
+
+html[data-biocn="off"] .svo {
+  color: inherit !important;
+}

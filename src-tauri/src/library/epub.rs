@@ -49,7 +49,7 @@ impl From<std::io::Error> for Error {
 }
 
 /// Reads metadata from any seekable EPUB stream.
-pub fn read_metadata<R: Read + Seek + 'static>(reader: R) -> Result<Metadata, Error> {
+pub fn read_metadata<R: Read + Seek + Send + Sync + 'static>(reader: R) -> Result<Metadata, Error> {
     let book = rbook::Epub::read(reader).map_err(|error| invalid(&error))?;
 
     Ok(Metadata {

@@ -5,6 +5,8 @@ pub mod export;
 pub mod library;
 pub mod models;
 pub(crate) mod net;
+pub mod progress;
+pub mod protocol;
 pub mod reader;
 pub mod reading;
 pub mod settings;
@@ -23,6 +25,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .register_asynchronous_uri_scheme_protocol("book", protocol::handle)
         .setup(|app| {
             // The minimal libonnxruntime is a bundled resource, so point the
             // engine at it before anything initializes ORT: engine::builder()
@@ -57,6 +60,7 @@ pub fn run() {
                 }
             }
             app.manage(library::init(app.handle())?);
+            app.manage(progress::ProgressStore::init(app.handle())?);
             // The analysis cache lives beside the models rather than inside the
             // library: it is derived data, so losing it with the weights (or by
             // clearing app data) is a recompute and nothing else.
@@ -76,7 +80,11 @@ pub fn run() {
             models::models_remove,
             models::models_activate,
             reading::book_open,
-            reading::book_chapter,
+            reading::book_chapter_colorize,
+            reading::book_chapter_prefetch,
+            reading::book_chapter_cancel_stream,
+            progress::book_progress_get,
+            progress::book_progress_save,
             analyzer::colorize_book,
             analyzer::coloring_progress,
             analyzer::colorize_book_cancel,

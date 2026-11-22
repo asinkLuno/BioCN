@@ -23,6 +23,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -30,6 +32,57 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use crate::analysis::engine::Sessions;
 use crate::analysis::{BioCNResources, Segment, analyze_all};
 use crate::cache::AnalysisCache;
+use crate::reading::ChapterColorState;
+
+/// Event emitted as batches of sentences in the currently open chapter finish
+/// analyzing, carrying exact run-level HTML patches so the reader colors text
+/// in place without reloading.
+pub const CHAPTER_PATCH_EVENT: &str = "chapter://color-patch";
+
+/// Sentences analyzed per cooperative batch. Small enough that cancelling,
+/// navigating to another chapter, or preempting whole-book coloring takes
+/// sub-second latency while keeping ONNX pipeline throughput high.
+const BATCH_SIZE: usize = 8;
+
+/// One text-run HTML fragment ready to replace `<span data-br="{key}">` in the
+/// open chapter iframe.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPatch {
+    pub key: String,
+    pub html: String,
+}
+
+/// Progressive coloring update for the chapter currently on screen.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterColorPatch {
+    pub book: String,
+    pub chapter: usize,
+    pub done: usize,
+    pub total: usize,
+    pub finished: bool,
+    pub missing_model: bool,
+    pub error: Option<String>,
+    pub patches: Vec<RunPatch>,
+}
+
+/// RAII guard that increments `urgent_waiters` on creation and always decrements
+/// it on drop (including panics or early returns).
+struct UrgentGuard(Arc<AtomicUsize>);
+
+impl UrgentGuard {
+    fn acquire(counter: &Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter.clone())
+    }
+}
+
+impl Drop for UrgentGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -83,6 +136,16 @@ pub struct AnalyzerState {
     /// sentences twice), and the menu's progress bar shows this, so there is
     /// only ever one.
     job: std::sync::Mutex<Option<Job>>,
+    /// Cancel flag of the active P0 (current-chapter) progressive stream.
+    reader_stream: std::sync::Mutex<Option<Arc<AtomicBool>>>,
+    /// Cancel flag of the active P1 (next-chapter) silent prefetch.
+    prefetch_stream: std::sync::Mutex<Option<Arc<AtomicBool>>>,
+    /// Number of active P0 reader tasks waiting for or running inference.
+    /// Background P1/P2 tasks yield between batches while this is > 0.
+    urgent_waiters: Arc<AtomicUsize>,
+    /// Serializes small inference batches across P0, P1, and P2 so CPU cores
+    /// aren't oversubscribed and P0 can preempt between 8-sentence batches.
+    inference_gate: Arc<tauri::async_runtime::Mutex<()>>,
 }
 
 /// A whole-book coloring, as far as the UI is concerned.
@@ -220,6 +283,515 @@ impl AnalyzerState {
         })
         .await
         .map_err(err)?
+    }
+
+    /// Cancels both the active P0 chapter stream and any P1 prefetch stream.
+    pub fn cancel_reader_streams(&self) {
+        if let Some(flag) = self
+            .reader_stream
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+        {
+            flag.store(true, Ordering::Relaxed);
+        }
+        if let Some(flag) = self
+            .prefetch_stream
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+        {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Starts P0 progressive coloring for the chapter currently being read.
+    ///
+    /// Returns immediately with the chapter's cache snapshot; missing sentences
+    /// are analyzed in small batches and pushed via [`CHAPTER_PATCH_EVENT`].
+    /// Never fails when no model is installed — returns `missing_model: true`
+    /// so the reader still displays the original book seamlessly.
+    pub async fn start_chapter_stream<A: Runtime>(
+        &self,
+        app: &AppHandle<A>,
+        book: String,
+        index: usize,
+    ) -> Result<ChapterColorState> {
+        self.cancel_reader_streams();
+
+        let chapter = crate::reading::get_chapter(app, &book, index).await?;
+        let texts: Vec<String> = chapter
+            .paragraphs
+            .iter()
+            .map(|p| p.text.clone())
+            .collect();
+        let prepared = PreparedChapter::new(texts);
+        let total = prepared.sentences.len();
+
+        let Ok(weights) = crate::cache::weights(app) else {
+            return Ok(ChapterColorState {
+                index,
+                total_sentences: total,
+                cached_sentences: 0,
+                fully_colored: total == 0,
+                missing_model: true,
+            });
+        };
+
+        let cache = app.state::<AnalysisCache>().inner().clone();
+        let cached = {
+            let cache = cache.clone();
+            let weights = weights.clone();
+            let sentences = prepared.sentences.clone();
+            let book = book.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let found = cache.get(&weights, &sentences)?;
+                if sentences.iter().all(|s| found.contains_key(s)) {
+                    cache.mark_chapter(&weights, &book, index)?;
+                }
+                Ok::<_, String>(found)
+            })
+            .await
+            .map_err(err)??
+        };
+
+        let cached_count = prepared
+            .sentences
+            .iter()
+            .filter(|s| cached.contains_key(*s))
+            .count();
+
+        if cached_count == total {
+            return Ok(ChapterColorState {
+                index,
+                total_sentences: total,
+                cached_sentences: total,
+                fully_colored: true,
+                missing_model: false,
+            });
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self
+            .reader_stream
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(cancel.clone());
+
+        let app = app.clone();
+        let urgent = self.urgent_waiters.clone();
+        let gate = self.inference_gate.clone();
+        tauri::async_runtime::spawn(async move {
+            let _urgent = UrgentGuard::acquire(&urgent);
+            stream_chapter_batches(
+                &app,
+                book,
+                index,
+                chapter,
+                prepared,
+                cached,
+                weights,
+                cancel,
+                gate,
+            )
+            .await;
+        });
+
+        Ok(ChapterColorState {
+            index,
+            total_sentences: total,
+            cached_sentences: cached_count,
+            fully_colored: false,
+            missing_model: false,
+        })
+    }
+
+    /// Quietly pre-analyzes an upcoming chapter (P1) into SQLite cache so the
+    /// next page turn opens 100% colored with zero wait.
+    pub async fn start_prefetch<A: Runtime>(&self, app: &AppHandle<A>, book: String, index: usize) {
+        if let Some(prev) = self
+            .prefetch_stream
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+        {
+            prev.store(true, Ordering::Relaxed);
+        }
+        let Ok(weights) = crate::cache::weights(app) else {
+            return;
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        *self
+            .prefetch_stream
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(cancel.clone());
+
+        let app = app.clone();
+        let urgent = self.urgent_waiters.clone();
+        let gate = self.inference_gate.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(chapter) = crate::reading::get_chapter(&app, &book, index).await else {
+                return;
+            };
+            let texts: Vec<String> = chapter
+                .paragraphs
+                .iter()
+                .map(|p| p.text.clone())
+                .collect();
+            let prepared = PreparedChapter::new(texts);
+            if prepared.sentences.is_empty() {
+                return;
+            }
+            let cache = app.state::<AnalysisCache>().inner().clone();
+            let Ok(Ok(mut answers)) = ({
+                let cache = cache.clone();
+                let weights = weights.clone();
+                let sentences = prepared.sentences.clone();
+                tauri::async_runtime::spawn_blocking(move || cache.get(&weights, &sentences)).await
+            }) else {
+                return;
+            };
+            let misses: Vec<String> = prepared
+                .sentences
+                .iter()
+                .filter(|s| !answers.contains_key(*s))
+                .cloned()
+                .collect();
+            if misses.is_empty() {
+                let _ = cache.mark_chapter(&weights, &book, index);
+                return;
+            }
+            let state = app.state::<AnalyzerState>();
+            let Ok(analyzer) = state.analyzer(&app).await else {
+                return;
+            };
+            let mut failed = 0usize;
+            for chunk in misses.chunks(BATCH_SIZE) {
+                if cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                while urgent.load(Ordering::SeqCst) > 0 {
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let _ = tauri::async_runtime::spawn_blocking(|| {
+                        std::thread::sleep(Duration::from_millis(60));
+                    })
+                    .await;
+                }
+                let _guard = gate.lock().await;
+                if cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                let analyzer = analyzer.clone();
+                let batch: Vec<String> = chunk.to_vec();
+                let Ok(results) = tauri::async_runtime::spawn_blocking(move || {
+                    let refs: Vec<&str> = batch.iter().map(String::as_str).collect();
+                    analyze_all(&analyzer.resources, &analyzer.sessions, &refs)
+                        .into_iter()
+                        .map(|(s, r)| (s.to_owned(), r))
+                        .collect::<Vec<_>>()
+                })
+                .await
+                else {
+                    return;
+                };
+                let mut fresh = Vec::new();
+                for (sentence, answer) in results {
+                    match answer {
+                        Ok(segments) => {
+                            answers.insert(sentence.clone(), segments.clone());
+                            fresh.push((sentence, segments));
+                        }
+                        Err(_) => {
+                            failed += 1;
+                        }
+                    }
+                }
+                if !fresh.is_empty() {
+                    let cache = cache.clone();
+                    let weights = weights.clone();
+                    let book = book.clone();
+                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                        cache.save_chapter(&weights, &book, index, false, &fresh)
+                    })
+                    .await;
+                }
+            }
+            if failed == 0 && !cancel.load(Ordering::Relaxed) {
+                let _ = cache.mark_chapter(&weights, &book, index);
+            }
+        });
+    }
+}
+
+/// Builds the immediate reader XHTML for `chapter` using ONLY cached analyses
+/// from SQLite (never triggers ONNX inference).
+///
+/// Returns `(html, fully_colored)`.
+pub fn build_cached_reader_html(
+    cache: &AnalysisCache,
+    weights: Option<&str>,
+    chapter: &crate::reader::Chapter,
+) -> (String, bool) {
+    let texts: Vec<String> = chapter
+        .paragraphs
+        .iter()
+        .map(|p| p.text.clone())
+        .collect();
+    let prepared = PreparedChapter::new(texts);
+    let answers = match weights {
+        Some(w) if !prepared.sentences.is_empty() => cache
+            .get(w, &prepared.sentences)
+            .unwrap_or_default(),
+        _ => HashMap::new(),
+    };
+
+    let complete: Vec<bool> = prepared
+        .paragraphs
+        .iter()
+        .zip(prepared.split.iter())
+        .map(|(paragraph, ranges)| {
+            ranges.is_empty()
+                || (weights.is_some()
+                    && ranges
+                        .iter()
+                        .all(|r| answers.contains_key(&paragraph[r.clone()])))
+        })
+        .collect();
+
+    let fully_colored = complete.iter().all(|&c| c);
+    let colored = assemble(prepared, &answers);
+    let html = crate::export::colorize_for_reader(
+        &chapter.html,
+        &chapter.paragraphs,
+        &colored,
+        &complete,
+    );
+    (html, fully_colored)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stream_chapter_batches<A: Runtime>(
+    app: &AppHandle<A>,
+    book: String,
+    index: usize,
+    chapter: Arc<crate::reader::Chapter>,
+    prepared: PreparedChapter,
+    mut answers: HashMap<String, Option<Vec<Segment>>>,
+    weights: String,
+    cancel: Arc<AtomicBool>,
+    gate: Arc<tauri::async_runtime::Mutex<()>>,
+) {
+    let total = prepared.sentences.len();
+    let state = app.state::<AnalyzerState>();
+    let analyzer = match state.analyzer(app).await {
+        Ok(analyzer) => analyzer,
+        Err(error) => {
+            let missing_model = error.starts_with("models-missing:");
+            let _ = app.emit(
+                CHAPTER_PATCH_EVENT,
+                ChapterColorPatch {
+                    book,
+                    chapter: index,
+                    done: answers.len(),
+                    total,
+                    finished: true,
+                    missing_model,
+                    error: if missing_model { None } else { Some(error) },
+                    patches: Vec::new(),
+                },
+            );
+            return;
+        }
+    };
+
+    // Track which paragraphs were already complete before streaming so we only
+    // emit patches for paragraphs that transition to complete.
+    let mut emitted: Vec<bool> = prepared
+        .paragraphs
+        .iter()
+        .zip(prepared.split.iter())
+        .map(|(p, ranges)| {
+            ranges.is_empty() || ranges.iter().all(|r| answers.contains_key(&p[r.clone()]))
+        })
+        .collect();
+
+    let misses: Vec<String> = prepared
+        .sentences
+        .iter()
+        .filter(|s| !answers.contains_key(*s))
+        .cloned()
+        .collect();
+
+    let cache = app.state::<AnalysisCache>().inner().clone();
+    let mut failed = 0usize;
+    let mut analyzed = 0usize;
+    let mut first_error: Option<String> = None;
+
+    for chunk in misses.chunks(BATCH_SIZE) {
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        let _guard = gate.lock().await;
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        let analyzer = analyzer.clone();
+        let batch: Vec<String> = chunk.to_vec();
+        let results = match tauri::async_runtime::spawn_blocking(move || {
+            let refs: Vec<&str> = batch.iter().map(String::as_str).collect();
+            analyze_all(&analyzer.resources, &analyzer.sessions, &refs)
+                .into_iter()
+                .map(|(s, r)| (s.to_owned(), r))
+                .collect::<Vec<_>>()
+        })
+        .await
+        {
+            Ok(results) => results,
+            Err(error) => {
+                let _ = app.emit(
+                    CHAPTER_PATCH_EVENT,
+                    ChapterColorPatch {
+                        book,
+                        chapter: index,
+                        done: answers.len().min(total),
+                        total,
+                        finished: true,
+                        missing_model: false,
+                        error: Some(error.to_string()),
+                        patches: Vec::new(),
+                    },
+                );
+                return;
+            }
+        };
+
+        let mut fresh: Vec<(String, Option<Vec<Segment>>)> = Vec::new();
+        for (sentence, answer) in results {
+            analyzed += 1;
+            match answer {
+                Ok(segments) => {
+                    answers.insert(sentence.clone(), segments.clone());
+                    fresh.push((sentence, segments));
+                }
+                Err(error) => {
+                    failed += 1;
+                    first_error.get_or_insert(error);
+                    answers.insert(sentence, None);
+                }
+            }
+        }
+
+        if !fresh.is_empty() {
+            let cache = cache.clone();
+            let weights = weights.clone();
+            let book_copy = book.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                cache.save_chapter(&weights, &book_copy, index, false, &fresh)
+            })
+            .await;
+        }
+
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // Collect newly completed paragraphs and compute their exact run HTML.
+        let mut patches: Vec<RunPatch> = Vec::new();
+        for p_index in 0..prepared.paragraphs.len() {
+            if emitted[p_index] {
+                continue;
+            }
+            let p_text = &prepared.paragraphs[p_index];
+            let ranges = &prepared.split[p_index];
+            if ranges.iter().all(|r| answers.contains_key(&p_text[r.clone()])) {
+                emitted[p_index] = true;
+                let colored_p = assemble_paragraph(p_text, ranges, &answers);
+                for (key, html) in crate::export::colorize_paragraph_runs(
+                    &chapter.html,
+                    &chapter.paragraphs[p_index],
+                    p_index,
+                    &colored_p,
+                ) {
+                    patches.push(RunPatch { key, html });
+                }
+            }
+        }
+
+        let done = prepared
+            .sentences
+            .iter()
+            .filter(|s| answers.contains_key(*s))
+            .count();
+        let _ = app.emit(
+            CHAPTER_PATCH_EVENT,
+            ChapterColorPatch {
+                book: book.clone(),
+                chapter: index,
+                done,
+                total,
+                finished: false,
+                missing_model: false,
+                error: None,
+                patches,
+            },
+        );
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        return;
+    }
+
+    if failed == 0 {
+        let cache = cache.clone();
+        let weights = weights.clone();
+        let book_copy = book.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            cache.mark_chapter(&weights, &book_copy, index)
+        })
+        .await;
+    }
+
+    let fatal = if failed > 0 && failed == analyzed {
+        Some(first_error.unwrap_or_else(|| "分析失败".into()))
+    } else {
+        None
+    };
+
+    let _ = app.emit(
+        CHAPTER_PATCH_EVENT,
+        ChapterColorPatch {
+            book,
+            chapter: index,
+            done: total,
+            total,
+            finished: true,
+            missing_model: false,
+            error: fatal,
+            patches: Vec::new(),
+        },
+    );
+}
+
+fn assemble_paragraph(
+    paragraph: &str,
+    ranges: &[std::ops::Range<usize>],
+    answers: &HashMap<String, Option<Vec<Segment>>>,
+) -> ColoredParagraph {
+    let sentences = ranges
+        .iter()
+        .map(|range| {
+            let text = &paragraph[range.clone()];
+            ColoredSentence {
+                start: crate::analysis::utf16::utf16_len(&paragraph[..range.start]),
+                segments: answers.get(text).cloned().flatten().unwrap_or_default(),
+                text: text.to_owned(),
+            }
+        })
+        .collect();
+    ColoredParagraph {
+        text: paragraph.to_owned(),
+        sentences,
     }
 }
 
@@ -500,11 +1072,8 @@ struct Outcome {
     error: Option<String>,
 }
 
-/// Colors the chapters in `todo`, in order.
-///
-/// `todo` is decided once, before the job starts, rather than by asking the
-/// cache chapter by chapter: the bar's total has to be fixed when it appears,
-/// and a book that gains chapters mid-job (a re-import) must not move the goal.
+/// Colors the chapters in `todo`, in order, yielding cooperatively to any
+/// active reader chapter stream (P0) and cancelling within a single batch.
 async fn run_book<A: Runtime>(
     app: &AppHandle<A>,
     book: &str,
@@ -527,32 +1096,9 @@ async fn run_book<A: Runtime>(
         }
     };
 
-    let mut cancelled_midway = false;
-    for index in todo {
-        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-            cancelled_midway = true;
-            break;
-        }
-        // A chapter the list no longer has (the job was resumed from a stale
-        // view) is skipped rather than treated as a failure.
-        let Some(chapter) = parsed.iter().find(|chapter| chapter.index == *index) else {
-            continue;
-        };
-        let sentences = sentences_in(&chapter.paragraphs);
-        let texts: Vec<String> = chapter
-            .paragraphs
-            .iter()
-            .map(|paragraph| paragraph.text.clone())
-            .collect();
-        // The same entry point the reader uses, so a chapter colored here and a
-        // chapter colored by opening it leave exactly the same rows behind —
-        // and a cover page costs no model load in either path.
-        let result = state.colored(app, book.to_owned(), *index, texts).await;
-        if let Err(error) = result {
-            // The sessions are the shared resource: a failure that is not about
-            // one weird paragraph (those are cached as rejections) means the
-            // model is unusable, and every later chapter would fail the same
-            // way.
+    let weights = match crate::cache::weights(app) {
+        Ok(weights) => weights,
+        Err(error) => {
             return Outcome {
                 done,
                 chapters,
@@ -560,25 +1106,178 @@ async fn run_book<A: Runtime>(
                 error: Some(error),
             };
         }
-        chapters += 1;
-        done += sentences;
-        {
-            let mut job = state
-                .job
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            // Same identity check as the tail: a job cannot be replaced while
-            // it runs, but relying on that here would make the guard a puzzle
-            // for the next reader instead of a rule.
-            if let Some(job) = job
-                .as_mut()
-                .filter(|job| Arc::ptr_eq(&job.cancelled, cancelled))
-            {
-                job.progress.done = done.min(job.progress.total);
-                job.progress.chapters = chapters;
-            }
+    };
+    let cache = app.state::<AnalysisCache>().inner().clone();
+
+    let mut cancelled_midway = false;
+    'chapters: for index in todo {
+        if cancelled.load(Ordering::Relaxed) {
+            cancelled_midway = true;
+            break;
         }
-        emit(app);
+        let Some(chapter) = parsed.iter().find(|chapter| chapter.index == *index) else {
+            continue;
+        };
+        let chapter_sentences = sentences_in(&chapter.paragraphs);
+        let texts: Vec<String> = chapter
+            .paragraphs
+            .iter()
+            .map(|paragraph| paragraph.text.clone())
+            .collect();
+        let prepared = PreparedChapter::new(texts);
+
+        let cached = {
+            let cache = cache.clone();
+            let weights = weights.clone();
+            let sentences = prepared.sentences.clone();
+            match tauri::async_runtime::spawn_blocking(move || cache.get(&weights, &sentences))
+                .await
+            {
+                Ok(Ok(found)) => found,
+                Ok(Err(error)) => {
+                    return Outcome {
+                        done,
+                        chapters,
+                        cancelled: false,
+                        error: Some(error),
+                    };
+                }
+                Err(error) => {
+                    return Outcome {
+                        done,
+                        chapters,
+                        cancelled: false,
+                        error: Some(error.to_string()),
+                    };
+                }
+            }
+        };
+
+        let misses: Vec<String> = prepared
+            .sentences
+            .iter()
+            .filter(|s| !cached.contains_key(*s))
+            .cloned()
+            .collect();
+
+        if misses.is_empty() {
+            let _ = cache.mark_chapter(&weights, book, *index);
+            chapters += 1;
+            done += chapter_sentences;
+            update_job_progress(app, cancelled, done, chapters);
+            continue;
+        }
+
+        let analyzer = match state.analyzer(app).await {
+            Ok(analyzer) => analyzer,
+            Err(error) => {
+                return Outcome {
+                    done,
+                    chapters,
+                    cancelled: false,
+                    error: Some(error),
+                };
+            }
+        };
+
+        let mut failed = 0usize;
+        let mut analyzed = 0usize;
+        let mut first_error: Option<String> = None;
+        let mut chapter_done = chapter_sentences.saturating_sub(misses.len());
+
+        for chunk in misses.chunks(BATCH_SIZE) {
+            if cancelled.load(Ordering::Relaxed) {
+                cancelled_midway = true;
+                break 'chapters;
+            }
+            while state.urgent_waiters.load(Ordering::SeqCst) > 0 {
+                if cancelled.load(Ordering::Relaxed) {
+                    cancelled_midway = true;
+                    break 'chapters;
+                }
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    std::thread::sleep(Duration::from_millis(80));
+                })
+                .await;
+            }
+
+            let _guard = state.inference_gate.lock().await;
+            if cancelled.load(Ordering::Relaxed) {
+                cancelled_midway = true;
+                break 'chapters;
+            }
+            let analyzer = analyzer.clone();
+            let batch: Vec<String> = chunk.to_vec();
+            let results = match tauri::async_runtime::spawn_blocking(move || {
+                let refs: Vec<&str> = batch.iter().map(String::as_str).collect();
+                analyze_all(&analyzer.resources, &analyzer.sessions, &refs)
+                    .into_iter()
+                    .map(|(s, r)| (s.to_owned(), r))
+                    .collect::<Vec<_>>()
+            })
+            .await
+            {
+                Ok(results) => results,
+                Err(error) => {
+                    return Outcome {
+                        done: done + chapter_done,
+                        chapters,
+                        cancelled: false,
+                        error: Some(error.to_string()),
+                    };
+                }
+            };
+
+            let mut fresh = Vec::new();
+            for (sentence, answer) in results {
+                analyzed += 1;
+                match answer {
+                    Ok(segments) => fresh.push((sentence, segments)),
+                    Err(error) => {
+                        failed += 1;
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            if !fresh.is_empty() {
+                let cache = cache.clone();
+                let weights = weights.clone();
+                let book_copy = book.to_owned();
+                let idx = *index;
+                if let Err(error) = tauri::async_runtime::spawn_blocking(move || {
+                    cache.save_chapter(&weights, &book_copy, idx, false, &fresh)
+                })
+                .await
+                .map_err(err)
+                .and_then(|r| r)
+                {
+                    return Outcome {
+                        done: done + chapter_done,
+                        chapters,
+                        cancelled: false,
+                        error: Some(error),
+                    };
+                }
+            }
+
+            chapter_done += chunk.len();
+            update_job_progress(app, cancelled, done + chapter_done.min(chapter_sentences), chapters);
+        }
+
+        if failed > 0 && failed == analyzed {
+            return Outcome {
+                done,
+                chapters,
+                cancelled: false,
+                error: Some(first_error.unwrap_or_else(|| "分析失败".into())),
+            };
+        }
+        if failed == 0 {
+            let _ = cache.mark_chapter(&weights, book, *index);
+        }
+        chapters += 1;
+        done += chapter_sentences;
+        update_job_progress(app, cancelled, done, chapters);
     }
 
     Outcome {
@@ -587,6 +1286,29 @@ async fn run_book<A: Runtime>(
         cancelled: cancelled_midway,
         error: None,
     }
+}
+
+fn update_job_progress<A: Runtime>(
+    app: &AppHandle<A>,
+    cancelled: &Arc<AtomicBool>,
+    done: usize,
+    chapters: usize,
+) {
+    let state = app.state::<AnalyzerState>();
+    {
+        let mut job = state
+            .job
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(job) = job
+            .as_mut()
+            .filter(|job| Arc::ptr_eq(&job.cancelled, cancelled))
+        {
+            job.progress.done = done.min(job.progress.total);
+            job.progress.chapters = chapters;
+        }
+    }
+    emit(app);
 }
 
 fn emit<A: Runtime>(app: &AppHandle<A>) {

@@ -140,11 +140,7 @@ export const BookTile = memo(function BookTile({
           <button
             type="button"
             aria-label={`阅读《${book.title}》`}
-            // A book being colored cannot be opened: the job owns it, and the
-            // reader would analyze the same chapter a second time.
-            disabled={coloring}
-            title={coloring ? "着色全书中，完成后才能打开" : undefined}
-            className="group block h-full w-full cursor-pointer focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            className="group block h-full w-full cursor-pointer focus:outline-none"
             onClick={() => onOpen(book.id)}
           >
             {showCover ? (
@@ -336,11 +332,7 @@ export const BookTile = memo(function BookTile({
           <h3 className="text-sm leading-snug font-medium">
             <button
               type="button"
-              // The title is a second way to open the book, so it needs the
-              // same rule as the cover: a job holds the book it is coloring.
-              disabled={coloring}
-              title={coloring ? "着色全书中，完成后才能打开" : undefined}
-              className="line-clamp-2 w-full text-left break-words hover:underline disabled:cursor-not-allowed disabled:opacity-60 disabled:no-underline"
+              className="line-clamp-2 w-full text-left break-words hover:underline"
               onClick={() => onOpen(book.id)}
             >
               {book.title}

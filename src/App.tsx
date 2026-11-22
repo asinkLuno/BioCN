@@ -22,11 +22,9 @@ export default function App() {
   const coloring = useColoring();
   const [reading, setReading] = useState<string | null>(null);
   const [modelsOpen, setModelsOpen] = useState(false);
+  const [modelRevision, setModelRevision] = useState(0);
 
   const isEmpty = !loading && books.length === 0 && pending === 0;
-  // One job at a time, and it holds the book it is working on: the job and the
-  // reader would analyze the same chapter twice, and the reader would wait for
-  // the job's own chapter anyway.
   const job = coloring.job;
 
   // The reader owns the whole window while it is open: a shelf behind a book is
@@ -39,10 +37,12 @@ export default function App() {
           onClose={() => setReading(null)}
           onOpenSettings={() => setModelsOpen(true)}
           modelsOpen={modelsOpen}
+          modelRevision={modelRevision}
         />
         <ModelSheet
           open={modelsOpen}
           onClose={() => setModelsOpen(false)}
+          onChange={() => setModelRevision((n) => n + 1)}
         />
       </>
     );

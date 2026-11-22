@@ -166,9 +166,9 @@ describe("library", () => {
     await waitFor(() =>
       expect(jobStrip(tile).querySelector('img[src$="helix-launch.svg"]')).not.toBeNull(),
     );
-    // A job holds its book: opening it is what the user must not be able to do
-    // while the job and the reader would analyze the same chapters.
-    expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeDisabled();
+    // Whole-book coloring yields cooperatively to the active reader (P0 > P2),
+    // so the book stays openable even while coloring runs in the background.
+    expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeEnabled();
     // The other book is untouched: coloring is background work.
     expect(
       within(screen.getByRole("heading", { name: "Emma" }).closest("li")!).getByRole("button", {
@@ -196,7 +196,7 @@ describe("library", () => {
 
     const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
     expect(jobStrip(tile)).toHaveTextContent("25%");
-    expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeDisabled();
+    expect(within(tile).getByRole("button", { name: "阅读《Dune》" })).toBeEnabled();
     // Cancelling a job the user cannot see the start of is the point of
     // reading it on mount — the strip carries no controls, so the menu does it.
     await user.click(within(tile).getByRole("button", { name: "《Dune》的操作" }));

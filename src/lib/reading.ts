@@ -1,44 +1,75 @@
 /**
- * Typed bridge to the Rust `settings` and `reader` modules.
+ * Typed bridge to the Rust `reading`, `progress`, and `analyzer` modules.
  *
- * Shapes here mirror `src-tauri/src/settings.rs`, `analyzer.rs` and `reading.rs`
- * field for field. A chapter crosses the bridge as finished XHTML: the analyzer
- * works in UTF-16 offsets on the Rust side and splices its spans there, so no
- * offset ever has to be re-derived in the DOM.
+ * Chapters and resources are served directly from Rust over the `book://`
+ * custom protocol (zero frontend zip parsing or blob: URL rewriting). IPC here
+ * carries only lightweight metadata, reading progress, and progressive coloring
+ * commands/events.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+export interface TocEntry {
+  label: string;
+  chapterIndex: number | null;
+  anchor: string | null;
+  subitems: TocEntry[];
+}
+
 export interface ChapterSummary {
   index: number;
-  /** OPF manifest item ID; lets the frontend match parser sections after filtering. */
   manifestId: string;
+  /** Container path inside the EPUB (no leading `/`), e.g. `OEBPS/Text/ch1.xhtml`. */
+  href: string;
   title: string | null;
-  paragraphs: number;
+  /** Whether this chapter is already fully colored under the active model weights. */
+  colored: boolean;
+}
+
+export interface ReadingProgress {
+  chapterIndex: number;
+  paragraphIndex: number | null;
+  ratio: number;
+  updatedAt: number;
 }
 
 export interface BookView {
   id: string;
-  /** Book file path, for the asset-protocol fetch that feeds the EPUB parser. */
-  filePath: string | null;
   title: string;
   chapters: ChapterSummary[];
+  toc: TocEntry[];
+  /** Saved progress chapter if valid, otherwise the first chapter with prose. */
+  initialChapter: number | null;
+  progress: ReadingProgress | null;
+  hasModel: boolean;
 }
 
-export interface ChapterView {
+export interface ChapterColorState {
   index: number;
-  manifestId: string;
-  title: string | null;
-  /** The chapter's XHTML with `<span class="svo svo-*">` already spliced in. */
+  totalSentences: number;
+  cachedSentences: number;
+  fullyColored: boolean;
+  missingModel: boolean;
+}
+
+export interface RunPatch {
+  key: string;
   html: string;
+}
+
+export interface ChapterColorPatch {
+  book: string;
+  chapter: number;
+  done: number;
+  total: number;
+  finished: boolean;
+  missingModel: boolean;
+  error: string | null;
+  patches: RunPatch[];
 }
 
 /**
  * The `models-missing` prefix the analyzer uses when no weights are installed.
- *
- * A prefix rather than an error type because a command error crosses the IPC
- * bridge as a string; the reader turns it into the "download a model" prompt
- * instead of showing the raw message.
  */
 export const MODEL_MISSING = "models-missing";
 
@@ -57,75 +88,69 @@ export function commandPrefix(error: unknown): string | null {
 
 export const bookOpen = (id: string) => invoke<BookView>("book_open", { id });
 
-export const bookChapter = (id: string, index: number) =>
-  invoke<ChapterView>("book_chapter", { id, index });
+export const bookChapterColorize = (id: string, index: number) =>
+  invoke<ChapterColorState>("book_chapter_colorize", { id, index });
+
+export const bookChapterPrefetch = (id: string, index: number) =>
+  invoke<void>("book_chapter_prefetch", { id, index });
+
+export const bookChapterCancelStream = () =>
+  invoke<void>("book_chapter_cancel_stream");
+
+export const bookProgressSave = (
+  id: string,
+  chapterIndex: number,
+  paragraphIndex: number | null,
+  ratio: number,
+) =>
+  invoke<void>("book_progress_save", {
+    id,
+    chapterIndex,
+    paragraphIndex,
+    ratio,
+  });
+
+export const CHAPTER_PATCH_EVENT = "chapter://color-patch";
+
+export async function onChapterColorPatch(
+  handler: (patch: ChapterColorPatch) => void,
+) {
+  return listen<ChapterColorPatch>(CHAPTER_PATCH_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
 
 /**
  * How far a whole-book coloring job has got.
- *
- * One job at a time (`AnalyzerState` holds a single one), so this is the whole
- * of the job's state: a book either has a job or it does not.
  */
 export interface ColoringProgress {
   book: string;
-  /** Sentences analyzed so far, and how many the chapters in flight have. */
   done: number;
   total: number;
-  /** Chapters finished, and how many were uncolored when the job started. */
   chapters: number;
   chaptersTotal: number;
-  /** Set once the job is over — finished, failed or cancelled. */
   finished: boolean;
-  /** The user stopped it; what it colored stays colored, and it is not a failure. */
   cancelled: boolean;
-  /** A failure that stopped the job; what it colored stays colored. */
   error: string | null;
 }
 
 /** The event the backend emits for every change of a coloring job. */
 export const COLORING_EVENT = "coloring://progress";
 
-/**
- * Colors every chapter of `id` that has none yet, in the background.
- *
- * Resolves as soon as the job is accepted — the work takes hours, and the app
- * must stay usable meanwhile. Progress arrives on `COLORING_EVENT`, and the
- * book cannot be opened until the job is done with it.
- */
 export const colorizeBook = (id: string) => invoke<void>("colorize_book", { id });
 
-/** The running job, for a menu that opened after it started. */
 export const coloringProgress = () =>
   invoke<ColoringProgress | null>("coloring_progress");
 
-/** Stops the running job after the chapter it is in. */
 export const cancelColorizeBook = () => invoke<void>("colorize_book_cancel");
 
-/**
- * Forgets a book's coloring: the cached analyses of its sentences and its
- * chapter markers, under every model variant. The next read or whole-book
- * pass re-analyzes from scratch.
- *
- * Refused while this book is being colored; a refusal arrives as a rejection.
- */
 export const clearBookCache = (id: string) => invoke<void>("clear_book_cache", { id });
 
-/**
- * Whether `id` has coloring to clear: any chapter marker, under any weights —
- * the same scope `clearBookCache` works on. Asked when a book menu opens, so
- * the 清除着色缓存 item can be honest about an empty cache.
- */
 export const bookHasColoring = (id: string) => invoke<boolean>("book_has_coloring", { id });
 
-/**
- * Whether `id` has coloring under the *active* weights — the only slice
- * exporting reads. Asked when a book menu opens, so 导出着色后的图书 can be
- * honest about a book that would export plain.
- */
 export const bookHasActiveColoring = (id: string) =>
   invoke<boolean>("book_has_active_coloring", { id });
 
-/** Subscribes to coloring progress. Returns the unsubscribe function. */
 export async function onColoringProgress(
   handler: (progress: ColoringProgress) => void,
 ) {

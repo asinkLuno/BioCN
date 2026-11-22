@@ -120,6 +120,187 @@ pub fn colorize(html: &str, paragraphs: &[Paragraph], colored: &[ColoredParagrap
     out
 }
 
+/// A replacement slice in the source chapter document.
+struct Splice {
+    from: usize,
+    to: usize,
+    replacement: String,
+}
+
+/// Contiguous non-synthetic source byte ranges for one paragraph.
+///
+/// Each run lies inside a single text node (never spanning an inline tag), so
+/// wrapping a run in `<span data-br="p-r">` is always well-formed HTML.
+fn paragraph_runs(paragraph: &Paragraph) -> Vec<Range<usize>> {
+    let mut runs: Vec<Range<usize>> = Vec::new();
+    let mut current: Option<Range<usize>> = None;
+    for (index, placed) in paragraph.source.iter().enumerate() {
+        if placed.is_synthetic() || borrows(&paragraph.source, index) {
+            if let Some(run) = current.take() {
+                runs.push(run);
+            }
+            continue;
+        }
+        let from = placed.from as usize;
+        let to = placed.to as usize;
+        if from >= to {
+            continue;
+        }
+        match &mut current {
+            Some(run) if run.end == from => run.end = to,
+            _ => {
+                if let Some(run) = current.take() {
+                    runs.push(run);
+                }
+                current = Some(from..to);
+            }
+        }
+    }
+    if let Some(run) = current {
+        runs.push(run);
+    }
+    runs
+}
+
+/// Renders one run (`html[run]`) with any matching `span_edits` spliced in.
+fn render_run_with_edits(html: &str, run: &Range<usize>, edits: &[Edit]) -> String {
+    let mut out = String::with_capacity(run.len() + 32);
+    let mut at = run.start;
+    for edit in edits {
+        if edit.from < run.start || edit.to > run.end || edit.from < at || edit.from >= edit.to {
+            continue;
+        }
+        out.push_str(&html[at..edit.from]);
+        out.push_str("<span class=\"svo svo-");
+        out.push_str(edit.role);
+        out.push_str("\">");
+        out.push_str(&html[edit.from..edit.to]);
+        out.push_str("</span>");
+        at = edit.to;
+    }
+    out.push_str(&html[at..run.end]);
+    out
+}
+
+/// Prepares a chapter document for the live reader:
+///
+/// * Injects a zero-width `<span data-bp="{p}"></span>` anchor at the start of
+///   every paragraph so reading progress can track the exact visible paragraph
+///   across font-size / layout / mode changes.
+/// * For paragraphs whose analysis is already complete (`complete[p] == true`),
+///   splices `<span class="svo svo-*">` directly with zero extra wrappers.
+/// * For paragraphs still awaiting background analysis (`complete[p] == false`),
+///   wraps each text run in `<span data-br="{p}-{r}">…</span>` (preserving any
+///   already-cached spans inside it) so progressive patches can swap them in
+///   place without reloading the page.
+pub fn colorize_for_reader(
+    html: &str,
+    paragraphs: &[Paragraph],
+    colored: &[ColoredParagraph],
+    complete: &[bool],
+) -> String {
+    if paragraphs.len() != colored.len() || paragraphs.len() != complete.len() {
+        return html.to_owned();
+    }
+    let mut splices: Vec<Splice> = Vec::new();
+    for (p_index, ((paragraph, answer), &is_complete)) in paragraphs
+        .iter()
+        .zip(colored)
+        .zip(complete)
+        .enumerate()
+    {
+        let runs = paragraph_runs(paragraph);
+        if runs.is_empty() {
+            continue;
+        }
+        let edits = span_edits(paragraph, answer);
+        let anchor_at = runs[0].start;
+        if is_complete {
+            // Insert paragraph anchor at first run start, and standard svo spans.
+            splices.push(Splice {
+                from: anchor_at,
+                to: anchor_at,
+                replacement: format!("<span data-bp=\"{p_index}\"></span>"),
+            });
+            for edit in edits {
+                if edit.to <= html.len() && edit.from < edit.to {
+                    splices.push(Splice {
+                        from: edit.from,
+                        to: edit.to,
+                        replacement: format!(
+                            "<span class=\"svo svo-{}\">{}</span>",
+                            edit.role,
+                            &html[edit.from..edit.to]
+                        ),
+                    });
+                }
+            }
+        } else {
+            for (r_index, run) in runs.iter().enumerate() {
+                if run.end > html.len() {
+                    continue;
+                }
+                let inner = render_run_with_edits(html, run, &edits);
+                let mut replacement = String::with_capacity(inner.len() + 48);
+                if r_index == 0 {
+                    replacement.push_str(&format!("<span data-bp=\"{p_index}\"></span>"));
+                }
+                replacement.push_str(&format!(
+                    "<span data-br=\"{p_index}-{r_index}\">{inner}</span>"
+                ));
+                splices.push(Splice {
+                    from: run.start,
+                    to: run.end,
+                    replacement,
+                });
+            }
+        }
+    }
+
+    if splices.is_empty() {
+        return html.to_owned();
+    }
+    // Sort by start offset; zero-width anchors (`from == to`) come before
+    // content replacements starting at the same byte.
+    splices.sort_by_key(|s| (s.from, s.to));
+
+    let mut out = String::with_capacity(html.len() + splices.len() * 48);
+    let mut at = 0usize;
+    for splice in splices {
+        if splice.from < at || splice.to > html.len() || splice.from > splice.to {
+            continue;
+        }
+        out.push_str(&html[at..splice.from]);
+        out.push_str(&splice.replacement);
+        at = splice.to;
+    }
+    out.push_str(&html[at..]);
+    out
+}
+
+/// Computes progressive patch payloads `(key, inner_html)` for every text run
+/// of paragraph `p_index` once its sentences have been analyzed.
+pub fn colorize_paragraph_runs(
+    html: &str,
+    paragraph: &Paragraph,
+    p_index: usize,
+    colored: &ColoredParagraph,
+) -> Vec<(String, String)> {
+    let runs = paragraph_runs(paragraph);
+    if runs.is_empty() {
+        return Vec::new();
+    }
+    let edits = span_edits(paragraph, colored);
+    runs.iter()
+        .enumerate()
+        .filter(|(_, run)| run.end <= html.len())
+        .map(|(r_index, run)| {
+            let inner = render_run_with_edits(html, run, &edits);
+            (format!("{p_index}-{r_index}"), inner)
+        })
+        .collect()
+}
+
 /// One stretch of markup to wrap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Edit {
@@ -1158,6 +1339,63 @@ mod tests {
         assert_eq!(
             relative_href("/OEBPS/text/part1", "/OEBPS/biocn.css"),
             "../../biocn.css"
+        );
+    }
+
+    #[test]
+    fn colorize_for_reader_marks_incomplete_runs_and_patches_match_inline_markup() {
+        let html = "<body><p>他<em>走</em>了。</p><p>天黑了。</p></body>";
+        let paragraphs = reader::paragraphs(html);
+        let initial = vec![
+            ColoredParagraph {
+                text: "他走了。".into(),
+                sentences: vec![],
+            },
+            ColoredParagraph {
+                text: "天黑了。".into(),
+                sentences: vec![ColoredSentence {
+                    text: "天黑了。".into(),
+                    start: 0,
+                    segments: vec![subject("天", 0)],
+                }],
+            },
+        ];
+        // Paragraph 0 is still awaiting analysis; paragraph 1 is already complete.
+        let rendered = colorize_for_reader(html, &paragraphs, &initial, &[false, true]);
+        assert!(rendered.contains(r#"<span data-bp="0"></span>"#), "{rendered}");
+        assert!(rendered.contains(r#"<span data-br="0-0">他</span>"#), "{rendered}");
+        assert!(rendered.contains(r#"<em><span data-br="0-1">走</span></em>"#), "{rendered}");
+        assert!(rendered.contains(r#"<span data-br="0-2">了。</span>"#), "{rendered}");
+        assert!(
+            rendered.contains(r#"<span data-bp="1"></span><span class="svo svo-subject">天</span>黑了。"#),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(r#"data-br="1-"#), "{rendered}");
+
+        // Now paragraph 0 completes: its run patches line up with 0-0, 0-1, 0-2.
+        let finished_p0 = ColoredParagraph {
+            text: "他走了。".into(),
+            sentences: vec![ColoredSentence {
+                text: "他走了。".into(),
+                start: 0,
+                segments: vec![
+                    subject("他", 0),
+                    Segment {
+                        text: "走".into(),
+                        start: 1,
+                        role: Role::Predicate,
+                    },
+                ],
+            }],
+        };
+        let patches = colorize_paragraph_runs(html, &paragraphs[0], 0, &finished_p0);
+        assert_eq!(
+            patches,
+            vec![
+                ("0-0".into(), r#"<span class="svo svo-subject">他</span>"#.into()),
+                ("0-1".into(), r#"<span class="svo svo-predicate">走</span>"#.into()),
+                ("0-2".into(), "了。".into()),
+            ]
         );
     }
 }

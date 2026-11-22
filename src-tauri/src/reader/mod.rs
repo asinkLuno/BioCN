@@ -24,9 +24,11 @@
 //!   name, not by namespace URI.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use serde::Serialize;
 
 /// Blocks whose text is not prose and must not reach the analyzer.
 ///
@@ -190,12 +192,298 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// One nested entry of the book's table of contents, with its href already
+/// resolved to a spine chapter index and optional fragment anchor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TocEntry {
+    pub label: String,
+    pub chapter_index: Option<usize>,
+    pub anchor: Option<String>,
+    pub subitems: Vec<TocEntry>,
+}
+
+/// Lightweight metadata for one spine item, before its XHTML is read or parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpineEntry {
+    /// Original spine order (`entry.order()`), matching `Chapter::index` and cache keys.
+    pub index: usize,
+    pub manifest_id: String,
+    /// Container-relative path without a leading `/` (percent-decoded), e.g. `OEBPS/Text/ch1.xhtml`.
+    pub href: String,
+    pub title: Option<String>,
+}
+
+/// Structural index of an EPUB: spine order, nested TOC, and href lookup.
+///
+/// Built from the OPF/NCX/NAV alone — no chapter XHTML is unzipped or parsed.
+#[derive(Debug, Clone)]
+pub struct BookIndex {
+    pub spine: Vec<SpineEntry>,
+    pub toc: Vec<TocEntry>,
+    /// Normalized container path (no leading `/`, percent-decoded) -> spine index.
+    pub by_href: HashMap<String, usize>,
+}
+
+/// An open EPUB archive plus its structural index, serving chapters and raw
+/// resources (images, CSS, fonts) on demand without re-parsing the zip directory.
+pub struct BookHandle {
+    epub: rbook::Epub,
+    pub index: BookIndex,
+}
+
+impl BookHandle {
+    pub fn open(path: &Path) -> Result<Self, Error> {
+        let epub = rbook::Epub::open(path).map_err(|error| Error::Invalid(error.to_string()))?;
+        let index = build_index(&epub);
+        Ok(Self { epub, index })
+    }
+
+    pub fn from_reader<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
+        reader: R,
+    ) -> Result<Self, Error> {
+        let epub = rbook::Epub::read(reader).map_err(|error| Error::Invalid(error.to_string()))?;
+        let index = build_index(&epub);
+        Ok(Self { epub, index })
+    }
+
+    /// Reads and parses a single chapter on demand by its spine `index`.
+    pub fn read_chapter(&self, index: usize) -> Result<Chapter, Error> {
+        let entry = self
+            .index
+            .spine
+            .iter()
+            .find(|item| item.index == index)
+            .ok_or_else(|| Error::Chapter {
+                index,
+                reason: "章节不存在".into(),
+            })?;
+        let manifest = self
+            .epub
+            .manifest()
+            .by_id(&entry.manifest_id)
+            .ok_or_else(|| Error::Chapter {
+                index,
+                reason: "清单中缺少该章节".into(),
+            })?;
+        let bytes = manifest.read_bytes().map_err(|error| Error::Chapter {
+            index,
+            reason: error.to_string(),
+        })?;
+        let html = decode(&bytes);
+        let paragraphs = paragraphs(&html);
+        Ok(Chapter {
+            index: entry.index,
+            manifest_id: entry.manifest_id.clone(),
+            title: entry.title.clone(),
+            html,
+            paragraphs,
+        })
+    }
+
+    /// Spine index for a normalized container path (with or without leading `/`).
+    pub fn spine_index_for_href(&self, container_path: &str) -> Option<usize> {
+        let normalized = normalize_container_path(container_path)?;
+        self.index.by_href.get(&normalized).copied()
+    }
+
+    /// Reads any resource (image, CSS, font, SVG, etc.) from the EPUB archive,
+    /// returning `(bytes, mime_type)`. Also finds orphan files not listed in OPF.
+    pub fn read_resource(&self, container_path: &str) -> Result<Option<(Vec<u8>, String)>, Error> {
+        let Some(normalized) = normalize_container_path(container_path) else {
+            return Ok(None);
+        };
+        let rooted = format!("/{normalized}");
+        if let Some(entry) = self
+            .epub
+            .manifest()
+            .by_href(&rooted)
+            .or_else(|| self.epub.manifest().by_href(&normalized))
+        {
+            let bytes = entry.read_bytes().map_err(|error| Error::Chapter {
+                index: 0,
+                reason: error.to_string(),
+            })?;
+            let mime = resolve_mime(entry.media_type(), &normalized);
+            return Ok(Some((bytes, mime)));
+        }
+        // Fallback for orphan assets (fonts/images referenced from CSS but omitted
+        // from the manifest, which real EPUBs do frequently).
+        match self.epub.read_resource_bytes(rooted.as_str()) {
+            Ok(bytes) => {
+                let mime = guess_mime(&normalized).to_owned();
+                Ok(Some((bytes, mime)))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+}
+
+fn build_index(book: &rbook::Epub) -> BookIndex {
+    let titles = chapter_titles(book);
+    let mut spine = Vec::with_capacity(book.spine().len());
+    let mut by_href = HashMap::new();
+    let mut by_raw_path: HashMap<String, usize> = HashMap::new();
+
+    for entry in book.spine().iter() {
+        let index = entry.order();
+        let Some(manifest) = entry.manifest_entry() else {
+            continue;
+        };
+        let raw_path = manifest.href().path();
+        let decoded = raw_path.decode();
+        let normalized = decoded.trim_start_matches('/').to_owned();
+        by_raw_path.insert(raw_path.as_str().to_owned(), index);
+        by_href.insert(normalized.clone(), index);
+        spine.push(SpineEntry {
+            index,
+            manifest_id: entry.idref().to_owned(),
+            href: normalized,
+            title: titles.get(&index).cloned(),
+        });
+    }
+
+    let toc = extract_toc(book, &by_raw_path, &by_href);
+    BookIndex {
+        spine,
+        toc,
+        by_href,
+    }
+}
+
+fn extract_toc(
+    book: &rbook::Epub,
+    by_raw_path: &HashMap<String, usize>,
+    by_href: &HashMap<String, usize>,
+) -> Vec<TocEntry> {
+    let map_entry = |root: rbook::epub::toc::EpubTocEntry<'_>| -> Vec<TocEntry> {
+        root.iter()
+            .map(|child| convert_toc_node(child, by_raw_path, by_href))
+            .collect()
+    };
+
+    if let Some(contents) = book.toc().contents() {
+        let items = map_entry(contents);
+        if !items.is_empty() {
+            return items;
+        }
+    }
+    for root in book.toc() {
+        let items = map_entry(root);
+        if !items.is_empty() {
+            return items;
+        }
+    }
+    Vec::new()
+}
+
+fn convert_toc_node(
+    node: rbook::epub::toc::EpubTocEntry<'_>,
+    by_raw_path: &HashMap<String, usize>,
+    by_href: &HashMap<String, usize>,
+) -> TocEntry {
+    let label = {
+        let trimmed = node.label().trim();
+        if trimmed.is_empty() {
+            "未命名章节".to_owned()
+        } else {
+            trimmed.to_owned()
+        }
+    };
+    let (chapter_index, anchor) = match node.href() {
+        Some(href) => {
+            let path = href.path();
+            let index = by_raw_path.get(path.as_str()).copied().or_else(|| {
+                let decoded = path.decode();
+                by_href.get(decoded.trim_start_matches('/')).copied()
+            });
+            let anchor = href
+                .fragment()
+                .map(str::trim)
+                .filter(|frag| !frag.is_empty())
+                .map(str::to_owned);
+            (index, anchor)
+        }
+        None => (None, None),
+    };
+    let subitems = node
+        .iter()
+        .map(|child| convert_toc_node(child, by_raw_path, by_href))
+        .collect();
+    TocEntry {
+        label,
+        chapter_index,
+        anchor,
+        subitems,
+    }
+}
+
+/// Normalizes a container path, resolving `.` and `..` without allowing escape
+/// above the container root. Returns `None` if empty or escaping root.
+pub fn normalize_container_path(raw: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in raw.split('/') {
+        match segment {
+            "" | "." => continue,
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+fn resolve_mime(declared: &str, path: &str) -> String {
+    let declared = declared.trim();
+    if !declared.is_empty() && declared != "application/octet-stream" {
+        return declared.to_owned();
+    }
+    guess_mime(path).to_owned()
+}
+
+pub fn guess_mime(path: &str) -> &'static str {
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "xhtml" => "application/xhtml+xml",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "xml" | "ncx" | "opf" => "application/xml",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Every chapter of the book, in spine order.
 ///
 /// `reader` is consumed because [`rbook::Epub`] borrows it for the lifetime of
 /// the parsed book; callers pass an open file (`Library::book_file`) or a
 /// `Cursor` over bytes.
-pub fn chapters<R: std::io::Read + std::io::Seek + 'static>(
+pub fn chapters<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
     reader: R,
 ) -> Result<Vec<Chapter>, Error> {
     let book = rbook::Epub::read(reader).map_err(|error| Error::Invalid(error.to_string()))?;
@@ -794,5 +1082,93 @@ mod tests {
     fn a_paragraph_with_only_markup_is_dropped() {
         let html = "<body><p><img src=\"a.png\"/></p><p>字。</p></body>";
         assert_eq!(texts(html), ["字。"]);
+    }
+
+    #[test]
+    fn normalizes_container_paths_and_rejects_escapes() {
+        assert_eq!(
+            normalize_container_path("/OEBPS/Text/../Images/a.png").as_deref(),
+            Some("OEBPS/Images/a.png")
+        );
+        assert_eq!(
+            normalize_container_path("OEBPS/./ch1.xhtml").as_deref(),
+            Some("OEBPS/ch1.xhtml")
+        );
+        assert_eq!(normalize_container_path("../secret"), None);
+        assert_eq!(normalize_container_path("/"), None);
+    }
+
+    #[test]
+    fn book_handle_extracts_nested_toc_and_reads_chapters_and_resources_on_demand() {
+        use std::io::{Cursor, Write as _};
+        use zip::write::SimpleFileOptions;
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        writer
+            .start_file("META-INF/container.xml", options)
+            .unwrap();
+        writer
+            .write_all(br#"<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#)
+            .unwrap();
+        writer.start_file("OEBPS/content.opf", options).unwrap();
+        writer
+            .write_all(
+                br#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+                  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Test</dc:title></metadata>
+                  <manifest>
+                    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+                    <item id="c1" href="Text/c1.xhtml" media-type="application/xhtml+xml"/>
+                    <item id="img" href="Images/p.png" media-type="image/png"/>
+                  </manifest>
+                  <spine><itemref idref="c1"/></spine>
+                </package>"#,
+            )
+            .unwrap();
+        writer.start_file("OEBPS/nav.xhtml", options).unwrap();
+        writer
+            .write_all(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+                  <body><nav epub:type="toc"><ol>
+                    <li><a href="Text/c1.xhtml">第一章</a>
+                      <ol><li><a href="Text/c1.xhtml#s1">第一节</a></li></ol>
+                    </li>
+                  </ol></nav></body>
+                </html>"#
+                    .as_bytes(),
+            )
+            .unwrap();
+        writer.start_file("OEBPS/Text/c1.xhtml", options).unwrap();
+        writer
+            .write_all(b"<html><body><h1 id=\"s1\">Hello</h1><p>\xe4\xbb\x96\xe8\xb5\xb0\xe4\xba\x86\xe3\x80\x82</p></body></html>")
+            .unwrap();
+        writer.start_file("OEBPS/Images/p.png", options).unwrap();
+        writer.write_all(b"PNGDATA").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let handle = BookHandle::from_reader(Cursor::new(bytes)).unwrap();
+        assert_eq!(handle.index.spine.len(), 1);
+        assert_eq!(handle.index.spine[0].href, "OEBPS/Text/c1.xhtml");
+        assert_eq!(handle.index.spine[0].title.as_deref(), Some("第一章"));
+        assert_eq!(handle.spine_index_for_href("/OEBPS/Text/c1.xhtml"), Some(0));
+
+        assert_eq!(handle.index.toc.len(), 1);
+        assert_eq!(handle.index.toc[0].label, "第一章");
+        assert_eq!(handle.index.toc[0].chapter_index, Some(0));
+        assert_eq!(handle.index.toc[0].anchor, None);
+        assert_eq!(handle.index.toc[0].subitems.len(), 1);
+        assert_eq!(handle.index.toc[0].subitems[0].label, "第一节");
+        assert_eq!(handle.index.toc[0].subitems[0].anchor.as_deref(), Some("s1"));
+
+        let chapter = handle.read_chapter(0).unwrap();
+        assert_eq!(chapter.paragraphs.len(), 2);
+        assert_eq!(chapter.paragraphs[1].text, "他走了。");
+
+        let (img_bytes, mime) = handle
+            .read_resource("OEBPS/Images/p.png")
+            .unwrap()
+            .expect("image found");
+        assert_eq!(img_bytes, b"PNGDATA");
+        assert_eq!(mime, "image/png");
     }
 }

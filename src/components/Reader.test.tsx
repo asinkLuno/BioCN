@@ -1,110 +1,63 @@
 /**
- * Reader behavior against the new architecture: foliate as parser only, the
- * chapter document rendered into a srcdoc iframe. The parser and the asset
- * fetch are mocked at module boundaries; everything between open → chapter →
- * rendered iframe is real.
+ * Reader behavior against the `book://` custom protocol + progressive coloring
+ * + iframe postMessage bridge architecture.
  */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Reader } from "./Reader";
 import * as reading from "../lib/reading";
-import * as epub from "../lib/epub";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  isTauri: vi.fn(() => true),
+  convertFileSrc: vi.fn((_path: string, protocol = "asset") => `${protocol}://localhost/`),
+}));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("../lib/reading", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/reading")>()),
   bookOpen: vi.fn(),
-  bookChapter: vi.fn(),
-}));
-
-vi.mock("../lib/epub", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/epub")>()),
-  openColoredBook: vi.fn(),
-  fetchBookBlob: vi.fn(),
+  bookChapterColorize: vi.fn(),
+  bookChapterPrefetch: vi.fn(),
+  bookChapterCancelStream: vi.fn(),
+  bookProgressSave: vi.fn(),
+  onChapterColorPatch: vi.fn(),
 }));
 
 const openMock = vi.mocked(reading.bookOpen);
-const chapterMock = vi.mocked(reading.bookChapter);
-const openColoredBookMock = vi.mocked(epub.openColoredBook);
-const fetchBlobMock = vi.mocked(epub.fetchBookBlob);
+const colorizeMock = vi.mocked(reading.bookChapterColorize);
+const prefetchMock = vi.mocked(reading.bookChapterPrefetch);
+const cancelStreamMock = vi.mocked(reading.bookChapterCancelStream);
+const progressSaveMock = vi.mocked(reading.bookProgressSave);
+const onPatchMock = vi.mocked(reading.onChapterColorPatch);
+const openUrlMock = vi.mocked(openUrl);
 
-/** A fake parsed book: sections load lazily, one Document per call. */
-/**
- * A fake parsed book: sections serve whatever `put()` gave them (what the
- * wrapped `loadText` does), return blob: URLs (what foliate's `load()` really
- * does), and a stubbed `fetch` resolves them back to the document HTML — same
- * shape as the real loader's resource-rewritten blob.
- */
-function fakeBook(sectionDocs: (string | null)[]) {
-  const served = new Map<string, string>();
-  const created: Document[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      const doc = created.find((d) => `blob:${d.URL}` === url);
-      if (!doc) throw new Error(`no document for ${url}`);
-      return {
-        ok: true,
-        text: async () => `<!DOCTYPE html>${doc.documentElement.outerHTML}`,
-      };
-    }),
-  );
-  return {
-    created,
-    book: {
-      resources: {
-        getItemByID: (id: string) => sectionDocs
-          .map((_, i) => ({ id: `part-${i}`, href: `OPS/Text/${i}.xhtml` }))
-          .find((item) => item.id === id),
-      },
-      sections: sectionDocs.map((_, i) => ({
-        id: `OPS/Text/${i}.xhtml`,
-        linear: "yes",
-        size: 0,
-        load: async () => {
-          const src = served.get(`OPS/Text/${i}.xhtml`) ?? sectionDocs[i];
-          if (src === null) return null;
-          const doc = new DOMParser().parseFromString(
-            `<html><head><title>t</title></head><body>${src}</body></html>`,
-            "text/html",
-          );
-          created.push(doc);
-          return `blob:${doc.URL}`;
-        },
-        unload: () => {},
-      })),
-      toc: [],
-      resolveHref: () => null,
-      isExternal: () => false,
-      destroy: () => {},
-      loadText: async () => null,
-      loadBlob: async () => null,
-      getSize: () => 0,
-    },
-    put: (href: string, html: string) => served.set(href, html),
-  };
-}
+let emitPatch: (patch: reading.ChapterColorPatch) => void = () => {};
 
-const book: reading.BookView = {
+const sampleBook: reading.BookView = {
   id: "dune",
-  // The stored file must exist for the reader to even parse the book; the seam
-  // under test here is parse+render, so a path belongs in the happy fixture.
-  filePath: "dune.epub",
   title: "Dune",
+  hasModel: true,
+  initialChapter: 1,
+  progress: null,
   chapters: [
-    { index: 0, manifestId: "part-0", title: null, paragraphs: 0 },
-    { index: 1, manifestId: "part-1", title: "One", paragraphs: 2 },
-    { index: 2, manifestId: "part-2", title: "Two", paragraphs: 1 },
+    { index: 0, manifestId: "cover", href: "OEBPS/Text/cover.xhtml", title: null, colored: true },
+    { index: 1, manifestId: "part-1", href: "OEBPS/Text/ch1.xhtml", title: "One", colored: false },
+    { index: 2, manifestId: "part-2", href: "OEBPS/Text/ch2.xhtml", title: "Two", colored: false },
   ],
-};
-
-const chapter: reading.ChapterView = {
-  index: 1,
-  manifestId: "part-1",
-  title: "One",
-  // What `book_chapter` really returns: the chapter's own XHTML with the
-  // 主谓宾 spans spliced in by Rust.
-  html: '<p><span class="svo svo-subject">他</span><span class="svo svo-predicate">走</span>了。</p>',
+  toc: [
+    {
+      label: "第一章",
+      chapterIndex: 1,
+      anchor: null,
+      subitems: [{ label: "第一节", chapterIndex: 1, anchor: "s1", subitems: [] }],
+    },
+    { label: "第二章", chapterIndex: 2, anchor: null, subitems: [] },
+  ],
 };
 
 function renderReader(overrides: Partial<Parameters<typeof Reader>[0]> = {}) {
@@ -119,148 +72,246 @@ function renderReader(overrides: Partial<Parameters<typeof Reader>[0]> = {}) {
   );
 }
 
+function sendFromFrame(frame: HTMLIFrameElement, data: unknown) {
+  window.dispatchEvent(
+    new MessageEvent("message", { data, source: frame.contentWindow }),
+  );
+}
+
 describe("reader", () => {
   beforeEach(() => {
-    openMock.mockResolvedValue(book);
-    // The section documents are the *uncolored* chapter: the colored markup
-    // arriving from Rust must be what reaches the iframe, via `put()`.
-    openColoredBookMock.mockResolvedValue(fakeBook([null, "<p>他走了。</p>", "<p>再会。</p>"]));
-    fetchBlobMock.mockResolvedValue(new File(["PK"], "book.epub"));
-    chapterMock.mockResolvedValue(chapter);
-  });
-
-  it("renders the colored chapter document into the iframe", async () => {
-    renderReader();
-    const frame = await screen.findByTitle("One");
-    // jsdom does not load srcdoc documents, so the contract is checked on the
-    // attribute: React must pass the full serialized chapter through, and the
-    // spans must be the ones Rust spliced, not a repaint from offsets.
-    const srcdoc = frame.getAttribute("srcdoc");
-    expect(srcdoc).toContain("<!DOCTYPE html>");
-    // Coloring splits the sentence into spans, so the text never appears
-    // contiguous — the pieces and their spans are the contract.
-    expect(srcdoc).toContain(">他</span>");
-    expect(srcdoc).toContain(">走</span>");
-    expect(srcdoc).toContain("了。</p>");
-  });
-
-  it("opens the matching document after foliate drops a dangling spine item", async () => {
-    const parsed = fakeBook(["<p>target document</p>", "<p>wrong document</p>"]);
-    openColoredBookMock.mockResolvedValue(parsed);
-    // Original spine: dangling, part-0, part-1. Both surviving slots are valid documents.
-    openMock.mockResolvedValue({ ...book, chapters: book.chapters.slice(1) });
-    chapterMock.mockResolvedValue({ ...chapter, manifestId: "part-0", html: "<p>target document</p>" });
-    renderReader();
-    expect(await screen.findByTitle("One")).toHaveAttribute("srcdoc", expect.stringContaining("target document"));
-  });
-  it("colors subjects and predicates inside the document", async () => {
-    renderReader();
-    const frame = await screen.findByTitle("One");
-    const doc = new DOMParser().parseFromString(
-      frame.getAttribute("srcdoc")!,
-      "text/html",
-    );
-    // The parsed doc is detached from the jsdom tree, so jest-dom matchers
-    // that need a live document are out — plain textContent checks instead.
-    expect(doc.querySelector(".svo-subject")?.textContent).toBe("他");
-    expect(doc.querySelector(".svo-predicate")?.textContent).toBe("走");
-    expect(doc.querySelectorAll(".svo")).toHaveLength(2);
-  });
-
-  it("opens at the first chapter that has text", async () => {
-    renderReader();
-    await screen.findByTitle("One");
-    // Chapter 0 is a cover page with no prose, so chapter 1 is what opens.
-    expect(chapterMock).toHaveBeenCalledWith("dune", 1);
-    // The counter is the spine position: a cover page still occupies slot one.
-    expect(screen.getByText("2 / 3")).toBeInTheDocument();
-  });
-
-  it("offers settings instead of a raw error when no model is installed", async () => {
-    const onOpenSettings = vi.fn();
-    chapterMock.mockRejectedValue(
-      `${reading.MODEL_MISSING}: 尚未下载模型（设置 → 分析模型）`,
-    );
-    renderReader({ onOpenSettings });
-    const user = userEvent.setup();
-
-    const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText(/需要分析模型/)).toBeInTheDocument();
-    await user.click(within(alert).getByRole("button", { name: "打开设置" }));
-    expect(onOpenSettings).toHaveBeenCalled();
-  });
-
-  it("retries the chapter after settings closes", async () => {
-    chapterMock.mockRejectedValueOnce(
-      `${reading.MODEL_MISSING}: 尚未下载模型（设置 → 分析模型）`,
-    );
-    const { rerender } = render(
-      <Reader id="dune" onClose={() => {}} onOpenSettings={() => {}} modelsOpen={false} />,
-    );
-    await screen.findByRole("alert");
-
-    rerender(
-      <Reader id="dune" onClose={() => {}} onOpenSettings={() => {}} modelsOpen />,
-    );
-    rerender(
-      <Reader id="dune" onClose={() => {}} onOpenSettings={() => {}} modelsOpen={false} />,
-    );
-    // The model was just downloaded, so the page must come back on its own.
-    await screen.findByTitle("One");
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("does not ask the new book for the old book's chapter number", async () => {
-    const { rerender } = renderReader();
-    await screen.findByTitle("One");
-    expect(chapterMock).toHaveBeenCalledWith("dune", 1);
-
-    const second = fakeBook([null, null, null, null, null, null, null, "<p>七</p>"]);
-    openMock.mockResolvedValue({
-      id: "emma",
-      filePath: "emma.epub",
-      title: "Emma",
-      chapters: [
-        { index: 0, manifestId: "part-0", title: null, paragraphs: 0 },
-        { index: 7, manifestId: "part-7", title: "Seven", paragraphs: 1 },
-      ],
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    openMock.mockResolvedValue(sampleBook);
+    colorizeMock.mockResolvedValue({
+      index: 1,
+      totalSentences: 10,
+      cachedSentences: 10,
+      fullyColored: true,
+      missingModel: false,
     });
-    openColoredBookMock.mockResolvedValue(second);
-    chapterMock.mockResolvedValue({ ...chapter, index: 7, manifestId: "part-7", title: "Seven" });
-    chapterMock.mockClear();
-    rerender(
-      <Reader id="emma" onClose={() => {}} onOpenSettings={() => {}} modelsOpen={false} />,
-    );
-
-    await waitFor(() => expect(chapterMock).toHaveBeenCalledWith("emma", 7));
-    expect(chapterMock).not.toHaveBeenCalledWith("emma", 1);
-    expect(screen.queryByText(/无法打开这一章/)).not.toBeInTheDocument();
+    prefetchMock.mockResolvedValue(undefined);
+    cancelStreamMock.mockResolvedValue(undefined);
+    progressSaveMock.mockResolvedValue(undefined);
+    onPatchMock.mockImplementation(async (handler) => {
+      emitPatch = handler;
+      return () => {};
+    });
   });
 
-  it("lists every spine document, including ones with no text", async () => {
+  it("opens directly at initialChapter via book:// URL without frontend EPUB parsing", async () => {
+    renderReader();
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    expect(frame.getAttribute("src")).toMatch(
+      /^book:\/\/localhost\/dune\/OEBPS\/Text\/ch1\.xhtml\?theme=auto&mode=scrolled/,
+    );
+    expect(colorizeMock).toHaveBeenCalledWith("dune", 1);
+    expect(screen.getByText(/2\/3 章/)).toBeInTheDocument();
+  });
+
+  it("keeps reading open when no model is installed and offers a non-blocking settings pill", async () => {
+    const onOpenSettings = vi.fn();
+    colorizeMock.mockResolvedValue({
+      index: 1,
+      totalSentences: 10,
+      cachedSentences: 0,
+      fullyColored: false,
+      missingModel: true,
+    });
+    renderReader({ onOpenSettings });
+    const frame = await screen.findByTitle("One");
+    expect(frame.getAttribute("src")).toMatch(
+      /^book:\/\/localhost\/dune\/OEBPS\/Text\/ch1\.xhtml\?/,
+    );
+
+    const prompt = await screen.findByRole("button", { name: "下载模型以启用着色" });
+    await userEvent.click(prompt);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("buffers progressive color patches before iframe ready and flushes them on ready", async () => {
+    colorizeMock.mockResolvedValue({
+      index: 1,
+      totalSentences: 10,
+      cachedSentences: 0,
+      fullyColored: false,
+      missingModel: false,
+    });
+    renderReader();
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    const postSpy = vi.spyOn(frame.contentWindow!, "postMessage");
+
+    await waitFor(() => expect(onPatchMock).toHaveBeenCalled());
+    act(() => {
+      emitPatch({
+        book: "dune",
+        chapter: 1,
+        done: 5,
+        total: 10,
+        finished: false,
+        missingModel: false,
+        error: null,
+        patches: [{ key: "0-0", html: '<span class="svo svo-subject">他</span>' }],
+      });
+    });
+
+    expect(screen.getByRole("status", { name: "本章着色进度" })).toHaveTextContent("着色 50%");
+    expect(postSpy).not.toHaveBeenCalled();
+
+    // Once the iframe signals ready, init + queued patches are delivered.
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "biocn-host", type: "init" }),
+      "*",
+    );
+    expect(postSpy).toHaveBeenCalledWith(
+      {
+        source: "biocn-host",
+        type: "patch",
+        patches: [{ key: "0-0", html: '<span class="svo svo-subject">他</span>' }],
+      },
+      "*",
+    );
+  });
+
+  it("toggles SVO coloring and appearance preferences live via postMessage", async () => {
     const user = userEvent.setup();
     renderReader();
-    await screen.findByTitle("One");
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    const postSpy = vi.spyOn(frame.contentWindow!, "postMessage");
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+    postSpy.mockClear();
 
+    const toggleBtn = screen.getByRole("button", { name: "着色" });
+    expect(toggleBtn).toHaveAttribute("aria-pressed", "true");
+    await user.click(toggleBtn);
+    expect(toggleBtn).toHaveAttribute("aria-pressed", "false");
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "biocn-host",
+        type: "prefs",
+        prefs: expect.objectContaining({ coloringEnabled: false }),
+      }),
+      "*",
+    );
+
+    await user.click(screen.getByRole("button", { name: "阅读设置" }));
+    await user.click(screen.getByRole("button", { name: "分页" }));
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "biocn-host",
+        type: "prefs",
+        prefs: expect.objectContaining({ viewMode: "paginated" }),
+      }),
+      "*",
+    );
+    expect(screen.getByRole("button", { name: "下一页" })).toBeInTheDocument();
+  });
+
+  it("navigates via nested TOC drawer and handles internal & external links from iframe", async () => {
+    const user = userEvent.setup();
+    renderReader();
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+
+    // Open TOC drawer and jump to chapter 2.
     await user.click(screen.getByRole("button", { name: "目录" }));
     const nav = screen.getByRole("navigation", { name: "章节目录" });
-    expect(within(nav).getAllByRole("button")).toHaveLength(3);
-    expect(within(nav).getByText("无正文")).toBeInTheDocument();
-    expect(within(nav).getByRole("button", { name: /第 0 节/ })).toBeDisabled();
+    await user.click(within(nav).getByRole("button", { name: "第二章" }));
+
+    // Double-buffered swap: chapter 1 stays visible until chapter 2 paints!
+    const ch2Frame = (await screen.findByTitle("Two")) as HTMLIFrameElement;
+    expect(ch2Frame.getAttribute("src")).toMatch(
+      /^book:\/\/localhost\/dune\/OEBPS\/Text\/ch2\.xhtml\?/,
+    );
+    expect(frame).toHaveAttribute("aria-hidden", "false");
+    expect(ch2Frame).toHaveAttribute("aria-hidden", "true");
+
+    act(() => sendFromFrame(ch2Frame, { source: "biocn-reader", type: "ready" }));
+    act(() => sendFromFrame(ch2Frame, { source: "biocn-reader", type: "painted" }));
+    expect(ch2Frame).toHaveAttribute("aria-hidden", "false");
+    expect(screen.queryByTitle("One")).not.toBeInTheDocument();
+
+    // Internal relative link back to chapter 1 with anchor.
+    act(() =>
+      sendFromFrame(ch2Frame, {
+        source: "biocn-reader",
+        type: "link",
+        href: "../Text/ch1.xhtml#s1",
+      }),
+    );
+    const ch1Frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    const postSpy = vi.spyOn(ch1Frame.contentWindow!, "postMessage");
+    act(() => sendFromFrame(ch1Frame, { source: "biocn-reader", type: "ready" }));
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "biocn-host",
+        type: "init",
+        target: { anchor: "s1" },
+      }),
+      "*",
+    );
+    act(() => sendFromFrame(ch1Frame, { source: "biocn-reader", type: "painted" }));
+
+    // External link opens via plugin-opener.
+    act(() =>
+      sendFromFrame(ch1Frame, {
+        source: "biocn-reader",
+        type: "external",
+        href: "https://example.com",
+      }),
+    );
+    expect(openUrlMock).toHaveBeenCalledWith("https://example.com");
   });
 
-  it("turns pages with the arrow keys and stops at the ends", async () => {
+  it("turns chapters with arrow keys and stops at the ends", async () => {
     renderReader();
     await screen.findByTitle("One");
 
-    chapterMock.mockResolvedValue({ ...chapter, index: 2, manifestId: "part-2", title: "Two" });
     await userEvent.keyboard("{ArrowRight}");
     await screen.findByTitle("Two");
 
-    // Chapter 2 is the last one: the right arrow must not wrap or overshoot.
-    chapterMock.mockClear();
+    colorizeMock.mockClear();
     await userEvent.keyboard("{ArrowRight}");
-    await waitFor(() => expect(chapterMock).not.toHaveBeenCalled());
-    expect(screen.queryByTitle(/第/)).not.toBeInTheDocument();
+    expect(screen.getByTitle("Two")).toBeInTheDocument();
+    expect(colorizeMock).not.toHaveBeenCalled();
+  });
+
+  it("toggles top menu and bottom progress bar when tapping the center of the page", async () => {
+    renderReader();
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    const header = document.querySelector("header")!;
+    const footer = document.querySelector("footer")!;
+
+    expect(header).toHaveAttribute("aria-hidden", "false");
+    expect(footer).toHaveAttribute("aria-hidden", "false");
+
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "tap" }));
+    expect(header).toHaveAttribute("aria-hidden", "true");
+    expect(footer).toHaveAttribute("aria-hidden", "true");
+
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "tap" }));
+    expect(header).toHaveAttribute("aria-hidden", "false");
+    expect(footer).toHaveAttribute("aria-hidden", "false");
+  });
+
+  it("restores saved progress when opening a book", async () => {
+    openMock.mockResolvedValue({
+      ...sampleBook,
+      initialChapter: 2,
+      progress: { chapterIndex: 2, paragraphIndex: 7, ratio: 0.45, updatedAt: 100 },
+    });
+    renderReader();
+    const frame = (await screen.findByTitle("Two")) as HTMLIFrameElement;
+    const postSpy = vi.spyOn(frame.contentWindow!, "postMessage");
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "biocn-host",
+        type: "init",
+        target: { paragraphIndex: 7, ratio: 0.45 },
+      }),
+      "*",
+    );
   });
 });

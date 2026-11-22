@@ -113,7 +113,17 @@ pub async fn library_import<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn library_remove(library: State<'_, Library>, id: String) -> Result<Vec<Book>, String> {
+pub async fn library_remove<R: Runtime>(
+    app: AppHandle<R>,
+    library: State<'_, Library>,
+    id: String,
+) -> Result<Vec<Book>, String> {
+    if let Some(reading) = app.try_state::<crate::reading::ReadingState>() {
+        reading.evict(&id);
+    }
+    if let Some(progress) = app.try_state::<crate::progress::ProgressStore>() {
+        progress.remove(&id);
+    }
     let library = library.inner().clone();
     tauri::async_runtime::spawn_blocking(move || library.remove(&id))
         .await
