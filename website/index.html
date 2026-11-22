@@ -10,6 +10,14 @@
     <meta name="theme-color" content="#f8fafc" />
     <title>BioCN — 中文仿生阅读 EPUB 阅读器</title>
     <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%brand/favicon-32.png" />
+    <!-- 字体在 CSS 解析前就开始下载，免掉 CSS → woff2 的二次发现；font 必须带 CORS 预载。 -->
+    <link
+      rel="preload"
+      href="%BASE_URL%fonts/shs-demo.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <link rel="canonical" href="https://asinkluno.github.io/BioCN/" />
   </head>
   <body>

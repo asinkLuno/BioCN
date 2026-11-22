@@ -196,6 +196,7 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
 
   const cnRef = useRef<HTMLSpanElement>(null);
   const bioRef = useRef<HTMLSpanElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -209,6 +210,8 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
     setStage(0);
     setSwapOffsets(null);
 
+    // 滚出视野就不再排下一轮定时器：hero 每轮都会整块重排，看不见时纯烧电。
+    let visible = true;
     let timers: number[] = [];
     const clearAll = () => {
       timers.forEach(window.clearTimeout);
@@ -217,7 +220,7 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
 
     const scheduleCycle = () => {
       clearAll();
-      if (document.hidden) return;
+      if (document.hidden || !visible) return;
       timers = STAGE_SCHEDULE.map(({ stage: nextStage, atMs }) =>
         window.setTimeout(() => setStage(nextStage), atMs),
       );
@@ -225,6 +228,16 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
     };
 
     scheduleCycle();
+
+    // 回到视野时从第 0 幕重播，和标签页切回来的行为保持一致。
+    const root = rootRef.current;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting === visible) return;
+      visible = entry.isIntersecting;
+      if (visible) setRunId((n) => n + 1);
+      else clearAll();
+    });
+    if (root) observer.observe(root);
 
     const onVisibility = () => {
       if (document.hidden) {
@@ -237,6 +250,7 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
 
     return () => {
       clearAll();
+      observer.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [runId]);
@@ -266,7 +280,7 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
   const swapping = stage === 4 && swapOffsets !== null;
 
   return (
-    <div className="hero-brand-lockup max-w-xl">
+    <div ref={rootRef} className="hero-brand-lockup max-w-xl">
       <HeroHelix
         key={`helix-${runId}`}
         stage={stage}

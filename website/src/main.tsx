@@ -190,7 +190,6 @@ const MODEL_BENCHMARKS = [
     size: '64.3 MB',
     throughput: '361 句/秒',
     wholeBook: '1 分 59 秒',
-    firstPaint: '51 ms',
     peakMemory: '约 200 MB',
   },
   {
@@ -199,7 +198,6 @@ const MODEL_BENCHMARKS = [
     size: '74.6 MB',
     throughput: '111 句/秒',
     wholeBook: '6 分 26 秒',
-    firstPaint: '135 ms',
     peakMemory: '约 377 MB',
   },
 ] as const;
@@ -212,26 +210,8 @@ function BenchmarkSection() {
           性能参考
         </h2>
         <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
-          全流程本地 CPU 运行，不依赖显卡或云端接口。安装后可在应用设置中按需选择「省流」或「高精度」模型；以下为整本 107 万字《红楼梦》（137 章、42,961 唯一句）的实测数据。
+          全流程本地 CPU 运行，不依赖显卡或云端接口。安装后可在应用设置中按需选择「省流」或「高精度」模型；以下为整本 107 万字《红楼梦》（137 章、42,961 唯一句）的实测数据，实际耗时视设备 CPU 性能而定。
         </p>
-      </div>
-
-      <div className="stats stats-vertical w-full bg-base-200 shadow-sm lg:stats-horizontal">
-        <div className="stat">
-          <div className="stat-title">整本《红楼梦》（INT8）</div>
-          <div className="stat-value text-primary">1 分 59 秒</div>
-          <div className="stat-desc">361 句/秒，107 万字含本地缓存写入，零失败</div>
-        </div>
-        <div className="stat">
-          <div className="stat-title">首屏着色响应（INT8）</div>
-          <div className="stat-value">~51 ms</div>
-          <div className="stat-desc">后台全书着色满载时抢占实测（首句 29.2 ms）</div>
-        </div>
-        <div className="stat">
-          <div className="stat-title">二次阅读缓存命中</div>
-          <div className="stat-value">1.4 ms/章</div>
-          <div className="stat-desc">整本 137 章读取仅 191 ms，零模型调用</div>
-        </div>
       </div>
 
       <div className="card bg-base-100 shadow-sm ring-1 ring-base-200">
@@ -241,11 +221,10 @@ function BenchmarkSection() {
               <thead>
                 <tr>
                   <th>模型版本</th>
-                  <th>下载体积</th>
-                  <th>分析吞吐</th>
-                  <th>整本《红楼梦》</th>
-                  <th>首屏着色（8 句）</th>
-                  <th>推理峰值内存</th>
+                  <th className="text-right">下载体积</th>
+                  <th className="text-right">分析吞吐</th>
+                  <th className="text-right">整本《红楼梦》</th>
+                  <th className="text-right">推理峰值内存</th>
                 </tr>
               </thead>
               <tbody>
@@ -259,21 +238,15 @@ function BenchmarkSection() {
                         ) : null}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap">{row.size}</td>
-                    <td className="font-medium whitespace-nowrap">{row.throughput}</td>
-                    <td className="whitespace-nowrap">{row.wholeBook}</td>
-                    <td className="whitespace-nowrap">{row.firstPaint}</td>
-                    <td className="whitespace-nowrap">{row.peakMemory}</td>
+                    <td className="text-right tabular-nums">{row.size}</td>
+                    <td className="text-right font-medium tabular-nums">{row.throughput}</td>
+                    <td className="text-right tabular-nums">{row.wholeBook}</td>
+                    <td className="text-right tabular-nums">{row.peakMemory}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="text-xs leading-relaxed text-base-content/60">
-            测试口径：AMD Ryzen 7 9700X（桌面端纯 CPU · ONNX Runtime），整本《红楼梦》（137 章、1,073,984
-            字、42,961 唯一句）全量分析并写入本地 SQLite WAL 缓存实测（缓存约 43 MB）。实际耗时视设备 CPU
-            性能而定，闲置后会自动卸载模型释放内存。
-          </p>
         </div>
       </div>
     </section>
@@ -406,10 +379,11 @@ function App() {
             为什么做这个应用？
           </h2>
           <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
-            英文仿生阅读是加粗每个单词的开头；中文没有单词的边界，BioCN
-            改用句法分析，把每句的主谓宾染上颜色——为 ADHD 与容易分心的读者设计，眼睛循着颜色，长句里也抓得住主线。
+            英文世界里有一种“仿生阅读”，通过加粗每个单词的开头来帮眼睛锚定重心，对 ADHD 和容易分心的读者特别友好。
           </p>
-          <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">完全离线运行。</p>
+          <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
+            我们也想把这种体验带给中文读者，但一上手就遇到了麻烦：中文没有单词的边界，直接加粗字首根本行不通。于是我们换了个思路——用传统的自然语言处理方法，借助 HanLP 做句法分析，把每句话的主谓宾染上颜色。
+          </p>
         </section>
 
         <BenchmarkSection />

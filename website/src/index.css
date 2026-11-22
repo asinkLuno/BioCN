@@ -50,20 +50,14 @@
       height: 6rem;
     }
   }
-  html {
-    font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue",
-      Arial, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -webkit-text-size-adjust: 100%;
-  }
-  /* 全局字号放大一档（daisyUI 工具类均为 rem，随根字号整体缩放）：
-     demo 卡里的正文是“仿生阅读”的主角，优先保证可读。 */
   /* 全局字号（demo 卡里的正文是“仿生阅读”的主角，优先保证可读）。
      思源宋体（Noto Serif SC）字号天然偏大，root 回落到 1rem/1.0625rem。 */
   html {
     font-size: 1rem;
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans", "Helvetica Neue", Arial, sans-serif;
     --font-serif: 'Noto Serif SC', 'Source Han Serif SC', ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-text-size-adjust: 100%;
   }
   @media (min-width: 1024px) {
     html {
@@ -74,40 +68,23 @@
 
 @layer components {
   /*
-   * 主谓宾 demo colors. Same six hex values as the desktop app
-   * (src/index.css) and the colored-EPUB stylesheet
-   * (src-tauri/src/export.rs `STYLESHEET`). The landing page's sample
-   * sentence must show exactly what the app shows — change all three
-   * files together.
+   * 主谓宾 demo colors, taken from the --biocn-hero-* tokens above (light & dark).
+   * Must match the desktop app (src/index.css) and the colored-EPUB stylesheet
+   * (src-tauri/src/export.rs `STYLESHEET`); change all three files together.
    *
    * This is page content (the feature demo), not a hand-rolled control;
    * every control on the page is a daisyUI component.
    */
   .svo-subject {
-    color: #d95f02;
+    color: var(--biocn-hero-o);
   }
 
   .svo-predicate {
-    color: #1b9e77;
+    color: var(--biocn-hero-g);
   }
 
   .svo-object {
-    color: #7570b3;
-  }
-
-  /* A slightly deeper set in dark mode, for contrast on a dark page. */
-  @media (prefers-color-scheme: dark) {
-    .svo-subject {
-      color: #f28e4b;
-    }
-
-    .svo-predicate {
-      color: #4ec6a3;
-    }
-
-    .svo-object {
-      color: #a99cf0;
-    }
+    color: var(--biocn-hero-p);
   }
   /*
    * HeroTitle: brand-origin typography animation
