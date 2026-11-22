@@ -28,9 +28,9 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, pathlib, re
-          pkg = json.loads(pathlib.Path("package.json").read_text())["version"]
-          tauri = json.loads(pathlib.Path("src-tauri/tauri.conf.json").read_text())["version"]
-          cargo_text = pathlib.Path("src-tauri/Cargo.toml").read_text()
+          pkg = json.loads(pathlib.Path("package.json").read_text(encoding="utf-8"))["version"]
+          tauri = json.loads(pathlib.Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"]
+          cargo_text = pathlib.Path("src-tauri/Cargo.toml").read_text(encoding="utf-8")
           m = re.search(r'^version\s*=\s*"([^"]+)"', cargo_text, re.MULTILINE)
           assert m, "version not found in src-tauri/Cargo.toml"
           cargo = m.group(1)

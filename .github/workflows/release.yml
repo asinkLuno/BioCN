@@ -58,9 +58,9 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, pathlib, re
-          pkg = json.loads(pathlib.Path("package.json").read_text())["version"]
-          tauri = json.loads(pathlib.Path("src-tauri/tauri.conf.json").read_text())["version"]
-          cargo_text = pathlib.Path("src-tauri/Cargo.toml").read_text()
+          pkg = json.loads(pathlib.Path("package.json").read_text(encoding="utf-8"))["version"]
+          tauri = json.loads(pathlib.Path("src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"]
+          cargo_text = pathlib.Path("src-tauri/Cargo.toml").read_text(encoding="utf-8")
           m = re.search(r'^version\s*=\s*"([^"]+)"', cargo_text, re.MULTILINE)
           assert m, "version not found in src-tauri/Cargo.toml"
           cargo = m.group(1)
@@ -434,7 +434,7 @@ jobs:
           set -euo pipefail
           # Smoke against the published weights pinned in src-tauri/src/models.rs:
           # the reduced build must load every graph the app downloads (int8 + fp16, both Runtime style).
-          revision=$(python3 -c 'import pathlib, re; m = re.search(r"const REVISION: &str = \"([0-9a-f]{40})\";", pathlib.Path("src-tauri/src/models.rs").read_text()); assert m, "REVISION not found"; print(m.group(1))')
+          revision=$(python3 -c 'import pathlib, re; m = re.search(r"const REVISION: &str = \"([0-9a-f]{40})\";", pathlib.Path("src-tauri/src/models.rs").read_text(encoding="utf-8")); assert m, "REVISION not found"; print(m.group(1))')
           models="$RUNNER_TEMP/ort-smoke-models"
           base="https://modelscope.cn/api/v1/models/starmountain1997/biocn/repo?Revision=${revision}&FilePath="
           for file in int8/biocn_tok.ort int8/biocn_pos.ort int8/biocn_dep.ort fp16/biocn_tok.ort; do
