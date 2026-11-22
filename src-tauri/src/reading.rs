@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::analyzer::{AnalyzerState, ColoredParagraph};
+use crate::analyzer::AnalyzerState;
 use crate::library::Library;
 use crate::reader::{Chapter, Paragraph};
 
@@ -60,14 +60,16 @@ pub struct BookView {
     pub chapters: Vec<ChapterSummary>,
 }
 
-/// A chapter's paragraphs, each already split into 主谓宾-colored sentences.
+/// One chapter ready to render: the source XHTML with `<span class="svo-*">`
+/// already spliced in at the byte offsets the parser recorded, so the frontend
+/// only has to swap resource URLs and hand it to the iframe.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterView {
     pub index: usize,
     pub manifest_id: String,
     pub title: Option<String>,
-    pub paragraphs: Vec<ColoredParagraph>,
+    pub html: String,
 }
 
 /// Parsed chapters of `id`, reusing the cached book when it is the same one.
@@ -200,11 +202,13 @@ pub async fn book_chapter<R: Runtime>(
         .colored(&app, id.clone(), index, paragraphs)
         .await?;
 
+    let html = crate::export::colorize(&chapter.html, &chapter.paragraphs, &paragraphs);
+
     Ok(ChapterView {
         index: chapter.index,
         manifest_id: chapter.manifest_id,
         title: chapter.title,
-        paragraphs,
+        html,
     })
 }
 
@@ -218,6 +222,7 @@ mod tests {
             index: 3,
             manifest_id: "part-three".into(),
             title: Some("第三章".into()),
+            html: String::new(),
             paragraphs: vec![Paragraph::text_only("一。"), Paragraph::text_only("二。")],
         };
         let summary = ChapterSummary {

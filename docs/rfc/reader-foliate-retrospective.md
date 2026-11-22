@@ -68,3 +68,23 @@ splitText 包 span）技术上可行，但被黑盒渲染器的滚动/翻页问�
 教训：**集成一个渲染引擎前，先确认它的滚动/测量/事件模型在你的宿主（Tauri WebView）里
 工作**。closed shadow root 的自定义元素 = 渲染细节不可救。先跑一个"能滚动 + 能翻章"的
 最小 spike，再写功能。
+
+## 后续（2026-11）：前置条件 2 已落地，overlay 退场
+
+回退后的阅读器仍是自渲染，但着色一度由 `src/lib/overlay.ts` 承担：把 foliate 的章节
+Document 按 Rust 解析器的语义重新推导一遍段落、与 Rust 段落做全等匹配，再把 UTF-16 偏移
+包成 span。那份代码是 Rust `paragraphs()` 的 JS 镜像（384 行），每章多一次解析，任何一处
+语义对不上就整段跳过着色。
+
+现在改为 **Rust 在源 XHTML 上直接注入 span**（`src-tauri/src/export.rs` 的 `colorize`，
+导出 EPUB 一直在用同一条路径）：
+
+- `reader::Chapter` 保留解码后的 `html`，`book_chapter` 返回 `colorize()` 之后的整章
+  XHTML；前端不再收到偏移，只收到成品文档。
+- 前端为了保住 foliate 的资源重写（图片/CSS → blob:），用 foliate 的 `EPUB` 类在同一
+  个 zip 上再开一本书，把 `loadText` 包成"目标章返回着色版、其余透传"
+  （`src/lib/epub.ts` 的 `openColoredBook`）。着色和 URL 重写在同一次 `load()` 里完成。
+- `overlay.ts` 与 `overlay.test.ts` 删除；一章只解析一次，只有一个"句子在哪"的真相。
+
+于是前置条件 2 的"着色注入文档内"这条已经满足，只剩 1（滚动/翻页模型）仍是重启
+foliate 渲染器的门槛。

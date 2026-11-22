@@ -3,15 +3,13 @@
  *
  * Architecture (after the foliate-attempt rollback — see
  * docs/rfc/reader-foliate-retrospective.md): foliate-js is used ONLY as an
- * EPUB parser. Each chapter's document (with the book's images and CSS, whose
- * URLs the parser rewrites to blob:s) is colored in place by the overlay and
- * rendered into an `<iframe srcdoc>`. Scrolling, navigation and keyboard stay
- * in React — the closed-shadow-DOM black box that killed the first attempt is
- * not involved.
- *
- * Coloring spans arrive from the Rust analyzer with UTF-16 offsets and are
- * verified against the document text before painting; a paragraph that cannot
- * be matched stays uncolored rather than mis-colored.
+ * EPUB parser. The Rust analyzer returns each chapter's own XHTML with the
+ * 主谓宾 `<span>`s already spliced in at the byte offsets it parsed, and the
+ * parser serves that document while rewriting the book's images and CSS to
+ * blob:s; the result is rendered into an `<iframe srcdoc>`. One parse of the
+ * chapter, one source of truth for where a sentence sits. Scrolling,
+ * navigation and keyboard stay in React — the closed-shadow-DOM black box that
+ * killed the first attempt is not involved.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -23,7 +21,13 @@ import {
   type BookView,
   type ChapterView,
 } from "../lib/reading";
-import { fetchBookBlob, openBook, resolveTocHref, sectionForChapter } from "../lib/epub";
+import {
+  fetchBookBlob,
+  openColoredBook,
+  resolveTocHref,
+  sectionForChapter,
+  type ColoredBook,
+} from "../lib/epub";
 import { renderSection } from "../lib/section";
 
 interface Props {
@@ -36,10 +40,11 @@ interface Props {
   modelsOpen: boolean;
 }
 
-
 interface OpenedBook {
   view: BookView;
-  book: Awaited<ReturnType<typeof openBook>>;
+  book: ColoredBook["book"];
+  /** Serves the next chapter's colored document to the parser. */
+  put: ColoredBook["put"];
 }
 
 type TocItemData = NonNullable<OpenedBook["book"]["toc"]>[number];
@@ -154,7 +159,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   // asset protocol into the parser. Either may fail; both are fatal for now.
   useEffect(() => {
     let cancelled = false;
-    let parsed: OpenedBook["book"] | undefined;
+    let parsed: ColoredBook | undefined;
     setOpened(null);
     setError(null);
     setMissingModel(false);
@@ -169,12 +174,12 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         if (!view.filePath) throw new Error("book-missing: 书库缺少这本书的文件");
         const file = await fetchBookBlob(view.filePath);
         if (cancelled) return null;
-        parsed = await openBook(file);
+        parsed = await openColoredBook(file);
         if (cancelled) {
-          parsed.destroy();
+          parsed.book.destroy();
           return null;
         }
-        return { view, book: parsed };
+        return { view, book: parsed.book, put: parsed.put };
       })
       .then((value) => {
         if (cancelled || !value) return;
@@ -198,7 +203,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
       });
     return () => {
       cancelled = true;
-      parsed?.destroy();
+      parsed?.book.destroy();
     };
   }, [id, openAttempt]);
 
@@ -218,12 +223,12 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         if (cancelled) return;
         const section = sectionForChapter(opened.book, loaded.manifestId);
         if (!section) throw new Error("book-chapter: 这一章不在书文件里");
-        // `load()` returns a blob: URL of the whole serialized chapter — its
-        // resources (CSS, images) are already rewritten to blob: by the
-        // loader, which is exactly what an srcdoc render needs.
-        // `createDocument()` parses without rewriting, leaving the book's
-        // relative URLs broken. Same-origin fetch turns the URL back into a
-        // Document for the overlay.
+        // The chapter's colored document is what the loader must read, or the
+        // srcdoc would come out uncolored: `load()` serializes whatever the
+        // wrapped `loadText` hands it and rewrites the book's resources to
+        // blob: on the way. `createDocument()` skips that rewriting, leaving
+        // the book's relative URLs broken.
+        opened.put(section.id, loaded.html);
         const url = await section.load();
         if (cancelled) {
           section.unload();
@@ -239,7 +244,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         if (cancelled) return;
         const doc = new DOMParser().parseFromString(str, "text/html");
         if (!doc.documentElement) throw new Error("book-chapter: 这一章解析失败");
-        setSrcdoc(renderSection(doc, loaded.paragraphs));
+        setSrcdoc(renderSection(doc));
         setChapter(loaded);
         setLoading(false);
         // A chapter that arrived means whatever failed before no longer does;
@@ -398,7 +403,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         aria-busy={loading}
       >
         {error !== null ? (
-          <div role="alert" className="alert alert-error items-start">
+          <div role="alert" className="alert alert-error mx-auto mt-4 max-w-3xl items-start">
             <div className="min-w-0 flex-1">
               <p className="font-medium">
                 {missingModel ? "主谓宾着色需要分析模型" : index === null ? "无法打开这本书" : "无法打开这一章"}
@@ -421,7 +426,9 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             </div>
           </div>
         ) : loading || srcdoc === null ? (
-          <div className="space-y-4">
+          // Same measure as the page body (48rem including its padding), so
+          // the placeholder does not jump wide-to-narrow when text arrives.
+          <div className="mx-auto max-w-3xl space-y-4 px-6 pt-5 pb-4">
             {Array.from({ length: 8 }, (_, line) => (
               <div
                 key={line}

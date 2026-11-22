@@ -13,13 +13,13 @@ vi.mock("../lib/reading", async (importOriginal) => ({
 
 vi.mock("../lib/epub", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/epub")>()),
-  openBook: vi.fn(),
+  openColoredBook: vi.fn(),
   fetchBookBlob: vi.fn(),
 }));
 
 const openMock = vi.mocked(reading.bookOpen);
 const chapterMock = vi.mocked(reading.bookChapter);
-const openBookMock = vi.mocked(epub.openBook);
+const openColoredBookMock = vi.mocked(epub.openColoredBook);
 const fetchBlobMock = vi.mocked(epub.fetchBookBlob);
 
 function deferred<T>() {
@@ -47,7 +47,7 @@ function fixture(id: string, title: string) {
     resolveHref: () => null,
     isExternal: () => false,
     destroy: vi.fn(),
-  } as unknown as Awaited<ReturnType<typeof epub.openBook>>;
+  } as unknown as epub.ColoredBook["book"];
   const view: reading.BookView = {
     id,
     filePath: `${id}.epub`,
@@ -61,7 +61,7 @@ function fixture(id: string, title: string) {
 }
 
 function chapter(index: number, title: string): reading.ChapterView {
-  return { index, manifestId: `part-${index}`, title, paragraphs: [] };
+  return { index, manifestId: `part-${index}`, title, html: "<p>text</p>" };
 }
 
 const props = { onClose: vi.fn(), onOpenSettings: vi.fn(), modelsOpen: false };
@@ -69,7 +69,10 @@ const props = { onClose: vi.fn(), onOpenSettings: vi.fn(), modelsOpen: false };
 beforeEach(() => {
   vi.clearAllMocks();
   openMock.mockImplementation(async (id) => id === "b" ? second.view : first.view);
-  openBookMock.mockImplementation(async (file) => file instanceof File && file.name.startsWith("b") ? second.book : first.book);
+  openColoredBookMock.mockImplementation(async (file) => {
+    const chosen = file instanceof File && file.name.startsWith("b") ? second : first;
+    return { book: chosen.book, put: vi.fn() };
+  });
   fetchBlobMock.mockImplementation(async (path) => new File(["PK"], path));
   chapterMock.mockImplementation(async (_id, index) => chapter(index, `Chapter ${index}`));
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, text: async () => "<html><head></head><body><p>text</p></body></html>" })));

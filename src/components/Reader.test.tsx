@@ -10,7 +10,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Reader } from "./Reader";
 import * as reading from "../lib/reading";
 import * as epub from "../lib/epub";
-import { paintChapter } from "../lib/overlay";
 
 vi.mock("../lib/reading", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/reading")>()),
@@ -20,22 +19,24 @@ vi.mock("../lib/reading", async (importOriginal) => ({
 
 vi.mock("../lib/epub", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/epub")>()),
-  openBook: vi.fn(),
+  openColoredBook: vi.fn(),
   fetchBookBlob: vi.fn(),
 }));
 
 const openMock = vi.mocked(reading.bookOpen);
 const chapterMock = vi.mocked(reading.bookChapter);
-const openBookMock = vi.mocked(epub.openBook);
+const openColoredBookMock = vi.mocked(epub.openColoredBook);
 const fetchBlobMock = vi.mocked(epub.fetchBookBlob);
 
 /** A fake parsed book: sections load lazily, one Document per call. */
 /**
- * A fake parsed book: sections return blob: URLs (what foliate's `load()`
- * really does), and a stubbed `fetch` resolves them back to the document
- * HTML — same shape as the real loader's resource-rewritten blob.
+ * A fake parsed book: sections serve whatever `put()` gave them (what the
+ * wrapped `loadText` does), return blob: URLs (what foliate's `load()` really
+ * does), and a stubbed `fetch` resolves them back to the document HTML — same
+ * shape as the real loader's resource-rewritten blob.
  */
 function fakeBook(sectionDocs: (string | null)[]) {
+  const served = new Map<string, string>();
   const created: Document[] = [];
   vi.stubGlobal(
     "fetch",
@@ -56,11 +57,12 @@ function fakeBook(sectionDocs: (string | null)[]) {
           .map((_, i) => ({ id: `part-${i}`, href: `OPS/Text/${i}.xhtml` }))
           .find((item) => item.id === id),
       },
-      sections: sectionDocs.map((src, i) => ({
+      sections: sectionDocs.map((_, i) => ({
         id: `OPS/Text/${i}.xhtml`,
         linear: "yes",
         size: 0,
         load: async () => {
+          const src = served.get(`OPS/Text/${i}.xhtml`) ?? sectionDocs[i];
           if (src === null) return null;
           const doc = new DOMParser().parseFromString(
             `<html><head><title>t</title></head><body>${src}</body></html>`,
@@ -75,7 +77,11 @@ function fakeBook(sectionDocs: (string | null)[]) {
       resolveHref: () => null,
       isExternal: () => false,
       destroy: () => {},
+      loadText: async () => null,
+      loadBlob: async () => null,
+      getSize: () => 0,
     },
+    put: (href: string, html: string) => served.set(href, html),
   };
 }
 
@@ -96,22 +102,9 @@ const chapter: reading.ChapterView = {
   index: 1,
   manifestId: "part-1",
   title: "One",
-  paragraphs: [
-    {
-      text: "他走了。",
-      sentences: [
-        {
-          text: "他走了。",
-          start: 0,
-          segments: [
-            { text: "他", start: 0, role: "subject" },
-            { text: "走", start: 1, role: "predicate" },
-            { text: "了。", start: 2, role: "normal" },
-          ],
-        },
-      ],
-    },
-  ],
+  // What `book_chapter` really returns: the chapter's own XHTML with the
+  // 主谓宾 spans spliced in by Rust.
+  html: '<p><span class="svo svo-subject">他</span><span class="svo svo-predicate">走</span>了。</p>',
 };
 
 function renderReader(overrides: Partial<Parameters<typeof Reader>[0]> = {}) {
@@ -129,7 +122,9 @@ function renderReader(overrides: Partial<Parameters<typeof Reader>[0]> = {}) {
 describe("reader", () => {
   beforeEach(() => {
     openMock.mockResolvedValue(book);
-    openBookMock.mockResolvedValue(fakeBook([null, "<p>他走了。</p>", "<p>再会。</p>"]).book);
+    // The section documents are the *uncolored* chapter: the colored markup
+    // arriving from Rust must be what reaches the iframe, via `put()`.
+    openColoredBookMock.mockResolvedValue(fakeBook([null, "<p>他走了。</p>", "<p>再会。</p>"]));
     fetchBlobMock.mockResolvedValue(new File(["PK"], "book.epub"));
     chapterMock.mockResolvedValue(chapter);
   });
@@ -138,8 +133,8 @@ describe("reader", () => {
     renderReader();
     const frame = await screen.findByTitle("One");
     // jsdom does not load srcdoc documents, so the contract is checked on the
-    // attribute: React must pass the full serialized chapter through. What
-    // that document contains is pinned by lib/overlay.test.ts and below.
+    // attribute: React must pass the full serialized chapter through, and the
+    // spans must be the ones Rust spliced, not a repaint from offsets.
     const srcdoc = frame.getAttribute("srcdoc");
     expect(srcdoc).toContain("<!DOCTYPE html>");
     // Coloring splits the sentence into spans, so the text never appears
@@ -151,10 +146,10 @@ describe("reader", () => {
 
   it("opens the matching document after foliate drops a dangling spine item", async () => {
     const parsed = fakeBook(["<p>target document</p>", "<p>wrong document</p>"]);
-    openBookMock.mockResolvedValue(parsed.book);
+    openColoredBookMock.mockResolvedValue(parsed);
     // Original spine: dangling, part-0, part-1. Both surviving slots are valid documents.
     openMock.mockResolvedValue({ ...book, chapters: book.chapters.slice(1) });
-    chapterMock.mockResolvedValue({ ...chapter, manifestId: "part-0", paragraphs: [] });
+    chapterMock.mockResolvedValue({ ...chapter, manifestId: "part-0", html: "<p>target document</p>" });
     renderReader();
     expect(await screen.findByTitle("One")).toHaveAttribute("srcdoc", expect.stringContaining("target document"));
   });
@@ -230,7 +225,7 @@ describe("reader", () => {
         { index: 7, manifestId: "part-7", title: "Seven", paragraphs: 1 },
       ],
     });
-    openBookMock.mockResolvedValue(second.book);
+    openColoredBookMock.mockResolvedValue(second);
     chapterMock.mockResolvedValue({ ...chapter, index: 7, manifestId: "part-7", title: "Seven" });
     chapterMock.mockClear();
     rerender(
@@ -267,18 +262,5 @@ describe("reader", () => {
     await userEvent.keyboard("{ArrowRight}");
     await waitFor(() => expect(chapterMock).not.toHaveBeenCalled());
     expect(screen.queryByTitle(/第/)).not.toBeInTheDocument();
-  });
-
-  it("paints only what matches: overlay stays honest on a foreign doc", () => {
-    // A document whose text does not match the analyzer's paragraphs must be
-    // left uncolored — a missing color is fine, a wrong one is not.
-    const doc = new DOMParser().parseFromString(
-      "<html><body><p>完全无关的文本。</p></body></html>",
-      "text/html",
-    );
-    const stats = paintChapter(doc, chapter.paragraphs);
-    expect(stats.painted).toBe(0);
-    expect(doc.querySelector(".svo")).toBeNull();
-    expect(doc.querySelector("body")?.textContent).toContain("完全无关的文本。");
   });
 });

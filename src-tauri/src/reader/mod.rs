@@ -149,6 +149,13 @@ impl Placed {
 /// [`Placed::from`] of a character that is not in the document.
 pub const SYNTHETIC: u32 = u32::MAX;
 
+/// One parsed spine chapter, kept whole for as long as the book is open.
+///
+/// `html` is the decoded source document — the same string `paragraphs` was
+/// parsed from, which is what lets the reader splice colored spans into it at
+/// the byte offsets the parse recorded (the exporter's `colorize`). Storing it
+/// costs the book's text size in memory, no more than the paragraphs already
+/// do; re-reading the zip entry per page turn would cost a seek + inflate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chapter {
     /// Index in the spine, which is also the reader's page order.
@@ -156,6 +163,8 @@ pub struct Chapter {
     pub manifest_id: String,
     /// The chapter's title from the table of contents, when it has one.
     pub title: Option<String>,
+    /// Decoded source XHTML; `paragraphs` is the parse of exactly this string.
+    pub html: String,
     pub paragraphs: Vec<Paragraph>,
 }
 
@@ -206,11 +215,13 @@ pub fn chapters<R: std::io::Read + std::io::Seek + 'static>(
             reason: error.to_string(),
         })?;
         let html = decode(&bytes);
+        let paragraphs = paragraphs(&html);
         out.push(Chapter {
             index,
             manifest_id: entry.idref().to_owned(),
             title: titles.get(&index).cloned(),
-            paragraphs: paragraphs(&html),
+            html,
+            paragraphs,
         });
     }
     Ok(out)

@@ -37,8 +37,27 @@ declare module "foliate-js/view.js" {
     resolveHref(href: string): { index: number; anchor: unknown } | null;
     isExternal(uri: string): boolean;
     destroy(): void;
+    /** Zip entry reads the book was built from; reused to wrap the loader. */
+    loadText(uri: string): Promise<string | null>;
+    loadBlob(uri: string): Promise<Blob | null>;
+    getSize(uri: string): number;
   }
 
   /** Reads a zip/EPUB/other supported container into a book object. */
   export function makeBook(file: Blob | File | string): Promise<FoliateBook>;
+}
+
+/**
+ * The EPUB container reader behind `makeBook`, needed to re-open the same zip
+ * with a wrapped `loadText` (see `openColoredBook`).
+ */
+declare module "foliate-js/epub.js" {
+  export class EPUB {
+    constructor(loader: {
+      loadText(uri: string): Promise<string | null>;
+      loadBlob(uri: string): Promise<Blob | null>;
+      getSize(uri: string): number;
+    });
+    init(): Promise<import("foliate-js/view.js").FoliateBook>;
+  }
 }

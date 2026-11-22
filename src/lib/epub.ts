@@ -14,14 +14,51 @@
  * our own components.
  */
 import { makeBook } from "foliate-js/view.js";
+import { EPUB } from "foliate-js/epub.js";
 
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-export async function openBook(
-  blob: Blob,
-): Promise<import("foliate-js/view.js").FoliateBook> {
+type FoliateBook = import("foliate-js/view.js").FoliateBook;
+
+export async function openBook(blob: Blob): Promise<FoliateBook> {
   const book = await makeBook(toNamedFile(blob));
   return book;
+}
+
+/** A book whose chapter documents come from Rust already colored. */
+export interface ColoredBook {
+  book: FoliateBook;
+  /**
+   * Serves `html` for the chapter at `href` (a section `id`, i.e. the manifest
+   * href) on its next `load()`. Chapters never change content, so a section
+   * already loaded keeps its cached copy.
+   */
+  put(href: string, html: string): void;
+}
+
+/**
+ * The same book, with colored chapter documents.
+ *
+ * Coloring happens in Rust, at the byte offsets of the chapter's own XHTML, so
+ * the document reaching the iframe already carries its `<span class="svo-*">`.
+ * The catch: foliate's loader is what rewrites images and CSS to blob: URLs,
+ * and it reads the raw zip entry itself — so the colored document has to be
+ * what the loader reads. `makeBook()` keeps its loader private, but exposes the
+ * zip reads, so a second `EPUB` over the same zip with a wrapped `loadText` is
+ * a book with the parser's resource rewriting and our coloring in one pass.
+ *
+ * `put()` before each chapter's `load()`; the wrap does not touch anything else
+ * (container, OPF, TOC and stylesheets still come from the zip).
+ */
+export async function openColoredBook(blob: Blob): Promise<ColoredBook> {
+  const source = await openBook(blob);
+  const colored = new Map<string, string>();
+  const book = await new EPUB({
+    loadText: async (uri: string) => colored.get(uri) ?? source.loadText(uri),
+    loadBlob: (uri: string) => source.loadBlob(uri),
+    getSize: (uri: string) => source.getSize(uri),
+  }).init();
+  return { book, put: (href, html) => colored.set(href, html) };
 }
 
 export interface TocDestination {

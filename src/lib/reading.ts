@@ -2,33 +2,12 @@
  * Typed bridge to the Rust `settings` and `reader` modules.
  *
  * Shapes here mirror `src-tauri/src/settings.rs`, `analyzer.rs` and `reading.rs`
- * field for field; the offsets are UTF-16 because that is what a DOM `Range`
- * uses.
+ * field for field. A chapter crosses the bridge as finished XHTML: the analyzer
+ * works in UTF-16 offsets on the Rust side and splices its spans there, so no
+ * offset ever has to be re-derived in the DOM.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-
-/** `normal` spans are the sentence's punctuation and untouched words. */
-export type Role = "normal" | "subject" | "predicate" | "object";
-
-export interface Segment {
-  text: string;
-  /** UTF-16 offset of the span within its *sentence*. */
-  start: number;
-  role: Role;
-}
-
-export interface ColoredSentence {
-  text: string;
-  /** UTF-16 offset of the sentence within its paragraph. */
-  start: number;
-  segments: Segment[];
-}
-
-export interface ColoredParagraph {
-  text: string;
-  sentences: ColoredSentence[];
-}
 
 export interface ChapterSummary {
   index: number;
@@ -50,7 +29,8 @@ export interface ChapterView {
   index: number;
   manifestId: string;
   title: string | null;
-  paragraphs: ColoredParagraph[];
+  /** The chapter's XHTML with `<span class="svo svo-*">` already spliced in. */
+  html: string;
 }
 
 /**
