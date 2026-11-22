@@ -330,6 +330,9 @@ fn build_index(book: &rbook::Epub) -> BookIndex {
         let Some(manifest) = entry.manifest_entry() else {
             continue;
         };
+        if !is_html_document(manifest.media_type(), manifest.href().path().as_str()) {
+            continue;
+        }
         let raw_path = manifest.href().path();
         let decoded = raw_path.decode();
         let normalized = decoded.trim_start_matches('/').to_owned();
@@ -478,6 +481,30 @@ pub fn guess_mime(path: &str) -> &'static str {
     }
 }
 
+/// Whether a spine manifest item is an HTML/XHTML chapter document that the
+/// reader and exporter can parse and rewrite (excluding non-HTML XML such as
+/// `image/svg+xml` cover/comic spine items and raw raster images).
+pub fn is_html_document(media_type: &str, href: &str) -> bool {
+    const DOCUMENTS: [&str; 3] = [
+        "application/xhtml+xml",
+        "text/html",
+        "application/x-dtbook+xml",
+    ];
+    let mt = media_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !mt.is_empty() && mt != "application/octet-stream" {
+        return DOCUMENTS.contains(&mt.as_str());
+    }
+    let name = href.rsplit('/').next().unwrap_or(href).to_ascii_lowercase();
+    [".xhtml", ".html", ".htm"]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+}
+
 /// Every spine chapter's order index, read from the OPF alone without
 /// unzipping or parsing any chapter XHTML. Matches the exact index set that
 /// [`chapters`] and [`BookHandle::open`] yield.
@@ -486,7 +513,11 @@ pub fn spine_indices(path: &Path) -> Result<Vec<usize>, Error> {
     Ok(epub
         .spine()
         .iter()
-        .filter(|entry| entry.manifest_entry().is_some())
+        .filter(|entry| {
+            entry
+                .manifest_entry()
+                .is_some_and(|m| is_html_document(m.media_type(), m.href().path().as_str()))
+        })
         .map(|entry| entry.order())
         .collect())
 }
@@ -511,6 +542,9 @@ pub fn chapters<R: std::io::Read + std::io::Seek + Send + Sync + 'static>(
             // rather than fail the whole book, since the rest still reads.
             continue;
         };
+        if !is_html_document(manifest.media_type(), manifest.href().path().as_str()) {
+            continue;
+        }
         let bytes = manifest.read_bytes().map_err(|error| Error::Chapter {
             index,
             reason: error.to_string(),
@@ -692,6 +726,11 @@ pub fn paragraphs(html: &str) -> Vec<Paragraph> {
                 let name = local_name(start.local_name().as_ref());
                 if SKIPPED.contains(&name.as_str()) {
                     skipped += 1;
+                } else if name == "br" {
+                    // HTML-style `<br>` without self-closing slash also separates lines.
+                    if let Some(frame) = stack.last_mut() {
+                        frame.push_placed(Placed::synthetic(' '));
+                    }
                 } else if is_frame(&name) {
                     // A child block ends the text before it: `<div>见<p>字</p>后</div>`
                     // is "见", "字", "后". The parent frame stays open, so the
@@ -939,8 +978,13 @@ pub fn push_paragraph(chars: Vec<Placed>, out: &mut Vec<Paragraph>) {
 /// and prose only ever uses these. Adding one here is cheaper than the feature.
 fn html_entity(name: &str) -> Option<&'static str> {
     Some(match name {
-        // `nbsp` is deliberately absent: it is a space, and a space in a
-        // paragraph is collapsed to an ordinary one before analysis.
+        "nbsp" => "\u{00a0}",
+        "ensp" => "\u{2002}",
+        "emsp" => "\u{2003}",
+        "thinsp" => "\u{2009}",
+        "apos" => "'",
+        "laquo" => "«",
+        "raquo" => "»",
         "mdash" => "—",
         "ndash" => "–",
         "hellip" => "…",
@@ -1025,9 +1069,9 @@ mod tests {
 
     #[test]
     fn a_br_separated_div_is_read_as_one_paragraph() {
-        // The other common shape: no `<p>` at all, lines split by `<br/>`.
-        let html = "<body><div>第一行<br/>第二行</div></body>";
-        assert_eq!(texts(html), ["第一行 第二行"]);
+        // The other common shape: no `<p>` at all, lines split by `<br/>` or `<br>`.
+        let html = "<body><div>第一行<br/>第二行<br>第三行</div></body>";
+        assert_eq!(texts(html), ["第一行 第二行 第三行"]);
     }
 
     #[test]

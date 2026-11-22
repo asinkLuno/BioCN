@@ -20,11 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; frame-src 'self' book: http://book.localhost https://book.localhost blob:; img-src 'self' data: blob: book: http://book.localhost https://book.localhost; media-src blob: book: http://book.localhost https://book.localhost; font-src 'self' data: blob: book: http://book.localhost https://book.localhost; style-src 'self' 'unsafe-inline' blob: book: http://book.localhost https://book.localhost; connect-src blob: ipc: http://ipc.localhost asset: http://asset.localhost https://asset.localhost book: http://book.localhost https://book.localhost",
-      "assetProtocol": {
-        "enable": true,
-        "scope": ["$APPDATA/library/files/*.epub"]
-      }
+      "csp": "default-src 'self'; frame-src 'self' book: http://book.localhost https://book.localhost blob:; img-src 'self' data: blob: book: http://book.localhost https://book.localhost; media-src blob: book: http://book.localhost https://book.localhost; font-src 'self' data: blob: book: http://book.localhost https://book.localhost; style-src 'self' 'unsafe-inline' blob: book: http://book.localhost https://book.localhost; connect-src blob: ipc: http://ipc.localhost book: http://book.localhost https://book.localhost"
     }
   },
   "bundle": {

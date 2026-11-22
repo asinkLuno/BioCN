@@ -83,6 +83,26 @@ describe("reader iframe bridge.js", () => {
 
     expect(document.querySelector('[data-br="0-0"]')).toBeNull();
     expect(document.querySelector(".svo-subject")?.textContent).toBe("他");
+
+    // Resetting custom SVO colors removes any initial `#biocn-svo-override` style tag.
+    const override = document.createElement("style");
+    override.id = "biocn-svo-override";
+    override.textContent = "html[data-theme] { --svo-subject: #b03a2e; }";
+    document.head.appendChild(override);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          source: "biocn-host",
+          type: "prefs",
+          prefs: {
+            ...DEFAULT_READER_PREFS,
+            svoColors: { subject: null, predicate: null, object: null },
+          },
+        },
+      }),
+    );
+    expect(document.getElementById("biocn-svo-override")).toBeNull();
+    expect(document.documentElement.style.getPropertyValue("--svo-subject")).toBe("");
     expect(document.querySelector(".svo-predicate")?.textContent).toBe("走");
     expect(document.querySelector("p")?.textContent).toBe("他走了。");
 

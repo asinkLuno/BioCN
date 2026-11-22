@@ -21,6 +21,15 @@ fn is_closer(ch: char) -> bool {
     )
 }
 
+/// Common titles, honorifics, months, days, and scholarly abbreviations whose
+/// trailing `.` should not end a sentence when followed by another word.
+const ABBREVIATIONS: &[&str] = &[
+    "mr", "mrs", "ms", "dr", "st", "jr", "sr", "mt", "ft", "vs", "rev", "hon", "gen", "col",
+    "sgt", "cpt", "lt", "gov", "sen", "rep", "prof", "fig", "vol", "inc", "ltd", "co", "jan",
+    "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec", "mon", "tue", "wed",
+    "thu", "fri", "sat", "sun", "etc", "al",
+];
+
 /// `Mr.`, `U.S.` and friends: a `.` that a word character follows is part of an
 /// abbreviation, not the end of a sentence.
 ///
@@ -38,24 +47,7 @@ fn is_abbreviation_dot(chars: &[(usize, char)], at: usize, after: usize) -> bool
     if !(word.is_alphanumeric() || *word == '_') {
         return false;
     }
-    // `[A-Z][a-z]{1,2}\.` — `Mr.`, `Dr.`, `Jan.`
-    let senior = matches!(
-        (at.checked_sub(1).and_then(|i| chars.get(i)),
-         at.checked_sub(2).and_then(|i| chars.get(i)),
-         at.checked_sub(3).and_then(|i| chars.get(i))),
-        (Some((_, b)), Some((_, a)), Some((_, upper)))
-            if upper.is_ascii_uppercase() && a.is_ascii_lowercase() && b.is_ascii_lowercase()
-    );
-    // `[A-Z][a-z]\.`
-    let shorter = matches!(
-        (
-            at.checked_sub(1).and_then(|i| chars.get(i)),
-            at.checked_sub(2).and_then(|i| chars.get(i)),
-        ),
-        (Some((_, a)), Some((_, upper)))
-            if upper.is_ascii_uppercase() && a.is_ascii_lowercase()
-    );
-    // `\.[a-zA-Z]\.` — `U.S.`, `e.g.`
+    // `\.[a-zA-Z]\.` — `U.S.`, `e.g.`, `i.e.`
     let acronym = matches!(
         (
             at.checked_sub(1).and_then(|i| chars.get(i)),
@@ -63,7 +55,34 @@ fn is_abbreviation_dot(chars: &[(usize, char)], at: usize, after: usize) -> bool
         ),
         (Some((_, letter)), Some((_, dot))) if letter.is_ascii_alphabetic() && *dot == '.'
     );
-    senior || shorter || acronym
+    if acronym {
+        return true;
+    }
+
+    // Walk back across ASCII letters to extract the whole preceding word so we
+    // never match a suffix of a longer word or ordinary short words like "No."
+    // before a new sentence ("He said No. She left.").
+    let mut word_start = at;
+    while word_start > 0 && chars[word_start - 1].1.is_ascii_alphabetic() {
+        word_start -= 1;
+    }
+    let len = at - word_start;
+    if !(2..=4).contains(&len) {
+        return false;
+    }
+    if word_start > 0 && chars[word_start - 1].1.is_alphanumeric() {
+        return false;
+    }
+    let mut lower = [0u8; 4];
+    for (idx, &(_, ch)) in chars[word_start..at].iter().enumerate() {
+        lower[idx] = (ch as u8).to_ascii_lowercase();
+    }
+    let token = std::str::from_utf8(&lower[..len]).unwrap_or("");
+    if token == "no" {
+        // "No. 5" is an abbreviation; "He said No. She left." ends the sentence.
+        return word.is_ascii_digit();
+    }
+    ABBREVIATIONS.contains(&token)
 }
 
 /// A `.` is only a terminator when nothing that continues a word follows it.
@@ -88,7 +107,7 @@ pub fn corrected(text: &str) -> Vec<Range<usize>> {
 
     while i < chars.len() {
         let ch = chars[i].1;
-        if ch == '\n' {
+        if ch == '\n' || ch == '\r' {
             // A line break inside a paragraph ends a sentence that has no
             // terminator of its own (verse, a title, a heading in the middle of
             // a `<p>`), and a blank line always does.
@@ -128,7 +147,9 @@ pub fn corrected(text: &str) -> Vec<Range<usize>> {
                 .count();
             if dots < 6 && (!is_latin_period(&chars, i, end) || is_abbreviation_dot(&chars, i, end))
             {
-                i += 1;
+                // Skip the entire dot run (e.g. `...`) so its trailing `.` is
+                // not reconsidered as a standalone sentence-ending period.
+                i += dots.max(1);
                 continue;
             }
         }
@@ -205,6 +226,7 @@ mod tests {
         assert_eq!(split("......好"), ["......", "好"]);
         // Three dots are a pause (upstream agrees: `等等...好` stays whole).
         assert_eq!(split("等等...好"), ["等等...好"]);
+        assert_eq!(split("等等... 下一句。"), ["等等... 下一句。"]);
     }
 
     #[test]
@@ -222,6 +244,7 @@ mod tests {
         );
         assert_eq!(split("Dr. Wang 来了。"), ["Dr. Wang 来了。"]);
         assert_eq!(split("the U.S. Army"), ["the U.S. Army"]);
+        assert_eq!(split("He said No. She left."), ["He said No.", "She left."]);
     }
 
     #[test]

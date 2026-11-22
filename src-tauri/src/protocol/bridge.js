@@ -76,6 +76,10 @@
     root.setAttribute("data-dim-images", prefs.dimImagesInDark === false ? "off" : "on");
     var colors = prefs.svoColors || {};
     var hexRe = /^#[0-9a-fA-F]{6}$/;
+    var initialSvoStyle = document.getElementById("biocn-svo-override");
+    if (initialSvoStyle) {
+      initialSvoStyle.remove();
+    }
     var roleVars = [
       ["subject", "--svo-subject"],
       ["predicate", "--svo-predicate"],
@@ -341,9 +345,11 @@
 
   function applyPatches(patches) {
     if (!Array.isArray(patches) || !patches.length) return;
+    var keyRe = /^\d+-\d+$/;
     var tpl = document.createElement("template");
     for (var i = 0; i < patches.length; i++) {
       var item = patches[i];
+      if (!item || typeof item.key !== "string" || !keyRe.test(item.key)) continue;
       var el = document.querySelector('span[data-br="' + item.key + '"]');
       if (!el) continue;
       tpl.innerHTML = item.html;
@@ -353,6 +359,7 @@
 
   // Host → Iframe commands
   window.addEventListener("message", function (event) {
+    if (event.source && event.source !== window.parent) return;
     var data = event.data;
     if (!data || data.source !== "biocn-host") return;
     switch (data.type) {
@@ -577,7 +584,13 @@
       if (!raw) return;
       event.preventDefault();
       if (raw.charAt(0) === "#") {
-        scrollToAnchor(decodeURIComponent(raw.slice(1)));
+        var anchorId = raw.slice(1);
+        try {
+          anchorId = decodeURIComponent(anchorId);
+        } catch (_) {
+          // Malformed percent-escape in EPUB anchor: fall back to raw id.
+        }
+        scrollToAnchor(anchorId);
         return;
       }
       if (/^(https?:|mailto:|tel:)/i.test(raw)) {

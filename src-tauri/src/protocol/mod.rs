@@ -79,6 +79,9 @@ fn serve<R: Runtime>(
             let csp = format!(
                 "default-src 'self' book: http://book.localhost https://book.localhost data: blob: 'unsafe-inline'; \
                  script-src 'nonce-{nonce}'; \
+                 base-uri 'none'; \
+                 form-action 'none'; \
+                 frame-src 'none'; \
                  object-src 'none';"
             );
             Response::builder()
@@ -86,6 +89,7 @@ fn serve<R: Runtime>(
                 .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
                 .header(header::CACHE_CONTROL, "no-store")
                 .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
                 .header(
                     header::CONTENT_SECURITY_POLICY,
                     HeaderValue::from_str(&csp).unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'")),
@@ -94,17 +98,29 @@ fn serve<R: Runtime>(
                 .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "response build error"))
         }
         Ok(None) => match active.read_resource(&resource_path) {
-            Ok(Some((bytes, mime))) => Response::builder()
-                .status(StatusCode::OK)
-                .header(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_str(&mime)
-                        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
-                )
-                .header(header::CACHE_CONTROL, "public, max-age=3600")
-                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(bytes)
-                .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "response build error")),
+            Ok(Some((bytes, mime))) => {
+                let mut builder = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_str(&mime)
+                            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+                    )
+                    .header(header::CACHE_CONTROL, "public, max-age=3600")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+                // Block script execution in non-spine SVG / HTML / XML resources.
+                let lower = mime.to_ascii_lowercase();
+                if lower.contains("html") || lower.contains("svg") || lower.contains("xml") {
+                    builder = builder.header(
+                        header::CONTENT_SECURITY_POLICY,
+                        "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
+                    );
+                }
+                builder
+                    .body(bytes)
+                    .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "response build error"))
+            }
             Ok(None) => text_response(StatusCode::NOT_FOUND, "resource not found"),
             Err(msg) => text_response(StatusCode::INTERNAL_SERVER_ERROR, &msg),
         },
@@ -157,7 +173,12 @@ pub fn parse_book_uri_path(uri_path: &str) -> Option<(String, String)> {
     let trimmed = uri_path.trim_start_matches('/');
     let (raw_id, raw_rest) = trimmed.split_once('/')?;
     let book_id = percent_decode(raw_id);
-    if book_id.is_empty() || book_id.contains('/') || book_id.contains("..") {
+    if book_id.is_empty()
+        || book_id.contains('/')
+        || book_id.contains('\\')
+        || book_id.contains("..")
+        || book_id.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
         return None;
     }
     let decoded_rest = percent_decode(raw_rest);
@@ -375,10 +396,12 @@ pub fn prepare_chapter_document_with_style(
     let svo_override = if custom_svo.is_empty() {
         String::new()
     } else {
-        format!("\nhtml[data-theme] {{{custom_svo} }}")
+        // Keep custom SVO overrides in their own `<style>` element so
+        // `bridge.js` can remove it cleanly when the user resets colors live.
+        format!("\n<style id=\"biocn-svo-override\">html[data-theme] {{{custom_svo} }}</style>")
     };
     let style_tag = format!(
-        "<style id=\"biocn-style\">\n{READER_CSS}\n:root {{ --reader-font-size: {}px; --reader-line-height: {:.1}; --reader-para-spacing: {:.1}em; }}{svo_override}\n</style>",
+        "<style id=\"biocn-style\">\n{READER_CSS}\n:root {{ --reader-font-size: {}px; --reader-line-height: {:.1}; --reader-para-spacing: {:.1}em; }}\n</style>{svo_override}",
         initial.font_size, initial.line_height, initial.para_spacing
     );
     let styled = inject_stylesheet(&stamped, &style_tag);
@@ -464,8 +487,8 @@ pub fn strip_scripts(html: &str) -> String {
             continue;
         }
         let after_tag = &after_open[tag_end + 1..];
-        if let Some(close) = find_ci(after_tag, "</script>") {
-            rest = &after_tag[close + "</script>".len()..];
+        if let Some(close_end) = find_script_close_end(after_tag) {
+            rest = &after_tag[close_end..];
         } else {
             // Unclosed `<script>` block: drop to EOF.
             return out;
@@ -473,6 +496,26 @@ pub fn strip_scripts(html: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Finds the byte offset immediately after `</script...>` (allowing HTML5
+/// whitespace before `>` such as `</script >` or `</script\n>`).
+fn find_script_close_end(haystack: &str) -> Option<usize> {
+    let bytes = haystack.as_bytes();
+    let needle = b"</script";
+    let mut i = 0;
+    while i + needle.len() < bytes.len() {
+        if bytes[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+            let next = bytes[i + needle.len()];
+            if matches!(next, b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/')
+                && let Some(rel_gt) = haystack[i + needle.len()..].find('>')
+            {
+                return Some(i + needle.len() + rel_gt + 1);
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn find_script_open(haystack: &str) -> Option<usize> {
@@ -537,7 +580,7 @@ mod tests {
 
     #[test]
     fn strips_book_scripts_of_every_shape() {
-        let html = r#"<head><script src="a.js"/><SCRIPT type="text/javascript">alert(1)</script></head><body><p>ok</p></body>"#;
+        let html = r#"<head><script src="a.js"/><SCRIPT type="text/javascript">alert(1)</script ></head><body><p>ok</p></body>"#;
         assert_eq!(strip_scripts(html), "<head></head><body><p>ok</p></body>");
     }
 
@@ -580,7 +623,10 @@ mod tests {
             out.contains("--reader-font-size: 20px; --reader-line-height: 2.1; --reader-para-spacing: 1.4em;"),
             "{out}"
         );
-        assert!(out.contains("html[data-theme] { --svo-subject: #b03a2e; }"), "{out}");
+        assert!(
+            out.contains(r#"<style id="biocn-svo-override">html[data-theme] { --svo-subject: #b03a2e; }</style>"#),
+            "{out}"
+        );
     }
 
     #[test]

@@ -162,11 +162,26 @@ fn paragraph_runs(paragraph: &Paragraph) -> Vec<Range<usize>> {
     runs
 }
 
-/// Renders one run (`html[run]`) with any matching `span_edits` spliced in.
-fn render_run_with_edits(html: &str, run: &Range<usize>, edits: &[Edit]) -> String {
+/// Renders one run (`html[run]`) with any matching sorted `edits`, advancing
+/// `cursor` monotonically so walking all runs of a paragraph is O(R + E).
+fn render_run_with_edits(
+    html: &str,
+    run: &Range<usize>,
+    edits: &[Edit],
+    cursor: &mut usize,
+) -> String {
+    while *cursor < edits.len() && edits[*cursor].to <= run.start {
+        *cursor += 1;
+    }
     let mut out = String::with_capacity(run.len() + 32);
     let mut at = run.start;
-    for edit in edits {
+    let mut idx = *cursor;
+    while idx < edits.len() {
+        let edit = &edits[idx];
+        if edit.from >= run.end {
+            break;
+        }
+        idx += 1;
         if edit.from < run.start || edit.to > run.end || edit.from < at || edit.from >= edit.to {
             continue;
         }
@@ -178,6 +193,7 @@ fn render_run_with_edits(html: &str, run: &Range<usize>, edits: &[Edit]) -> Stri
         out.push_str("</span>");
         at = edit.to;
     }
+    *cursor = idx;
     out.push_str(&html[at..run.end]);
     out
 }
@@ -236,11 +252,12 @@ pub fn colorize_for_reader(
                 }
             }
         } else {
+            let mut edit_cursor = 0usize;
             for (r_index, run) in runs.iter().enumerate() {
                 if run.end > html.len() {
                     continue;
                 }
-                let inner = render_run_with_edits(html, run, &edits);
+                let inner = render_run_with_edits(html, run, &edits, &mut edit_cursor);
                 let mut replacement = String::with_capacity(inner.len() + 48);
                 if r_index == 0 {
                     replacement.push_str(&format!("<span data-bp=\"{p_index}\"></span>"));
@@ -291,11 +308,12 @@ pub fn colorize_paragraph_runs(
         return Vec::new();
     }
     let edits = span_edits(paragraph, colored);
+    let mut edit_cursor = 0usize;
     runs.iter()
         .enumerate()
         .filter(|(_, run)| run.end <= html.len())
         .map(|(r_index, run)| {
-            let inner = render_run_with_edits(html, run, &edits);
+            let inner = render_run_with_edits(html, run, &edits, &mut edit_cursor);
             (format!("{p_index}-{r_index}"), inner)
         })
         .collect()
@@ -419,25 +437,63 @@ fn sentence_range(
     (from < to).then_some(from..to)
 }
 
-/// Inserts `markup` into a chapter's `<head>`.
+/// Inserts `markup` into a chapter's `<head>` (or after `<body>` / prolog).
 ///
-/// The document is spliced, not re-serialized: a chapter carries doctypes,
-/// namespace declarations, inline styles and comments that a round trip through
-/// a parser would quietly rewrite, and the reader that opens this file next
-/// should see the book its author made.
+/// Uses `quick_xml` event byte boundaries so XML comments (`<!-- </head> -->`),
+/// CDATA, and `>` inside attribute values (`<body data-x="a>b">`) never fool
+/// the splice, while preserving the author's original bytes everywhere else.
 pub fn inject_stylesheet(html: &str, markup: &str) -> String {
-    if let Some(at) = find_ci(html, "</head>", 0) {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let mut reader = Reader::from_str(html);
+    let config = reader.config_mut();
+    config.check_end_names = false;
+    config.allow_unmatched_ends = true;
+    config.allow_dangling_amp = true;
+
+    let mut head_end: Option<usize> = None;
+    let mut body_after: Option<usize> = None;
+    let mut prolog_end: usize = 0;
+
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let Ok(event) = reader.read_event() else {
+            break;
+        };
+        let end = reader.buffer_position() as usize;
+        match event {
+            Event::Eof => break,
+            Event::Decl(_) | Event::DocType(_) | Event::PI(_) => {
+                if head_end.is_none() && body_after.is_none() && end <= html.len() {
+                    prolog_end = end;
+                }
+            }
+            Event::End(tag) => {
+                if tag.local_name().as_ref().eq_ignore_ascii_case("head") && begin <= html.len() {
+                    head_end = Some(begin);
+                    break;
+                }
+            }
+            Event::Start(tag) => {
+                if body_after.is_none()
+                    && tag.local_name().as_ref().eq_ignore_ascii_case("body")
+                    && end <= html.len()
+                {
+                    body_after = Some(end);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(at) = head_end {
         return insert_at(html, at, markup);
     }
-    // A fragment with no head: inside the body is where browser-invalid but
-    // readable markup expects a style, and it is still ahead of the text.
-    if let Some(at) = find_ci(html, "<body", 0)
-        && let Some(close) = html[at..].find('>')
-    {
-        return insert_at(html, at + close + 1, markup);
+    if let Some(at) = body_after {
+        return insert_at(html, at, markup);
     }
-    // No body at all: a style element ahead of the content still applies to it.
-    insert_at(html, 0, markup)
+    insert_at(html, prolog_end, markup)
 }
 
 fn insert_at(html: &str, at: usize, markup: &str) -> String {
@@ -470,17 +526,6 @@ pub fn relative_href(from_dir: &str, to: &str) -> String {
     let mut href = "../".repeat(from.len() - common);
     href.push_str(&target[common..].join("/"));
     href
-}
-
-/// Case-insensitive search, because XHTML in the wild is `<HEAD>` often enough.
-fn find_ci(haystack: &str, needle: &str, from: usize) -> Option<usize> {
-    let hay = haystack.as_bytes();
-    let needle = needle.as_bytes();
-    if needle.is_empty() || hay.len() < needle.len() {
-        return None;
-    }
-    (from..=hay.len() - needle.len())
-        .find(|&index| hay[index..index + needle.len()].eq_ignore_ascii_case(needle))
 }
 
 /// One chapter, read and parsed, before anything is written back.
@@ -542,22 +587,8 @@ fn read_chapters(file: &std::path::Path) -> Result<(String, Vec<SourceChapter>),
 }
 
 /// Whether a spine item is a document this module can rewrite.
-///
-/// The media type is authoritative; the extension is the fallback for a book
-/// whose manifest leaves it out (common in EPUB 2 conversions).
 fn is_document(media_type: &str, href: &str) -> bool {
-    const DOCUMENTS: [&str; 3] = [
-        "application/xhtml+xml",
-        "text/html",
-        "application/x-dtbook+xml",
-    ];
-    if !media_type.is_empty() && media_type != "application/octet-stream" {
-        return DOCUMENTS.contains(&media_type) || media_type.ends_with("+xml");
-    }
-    let name = href.rsplit('/').next().unwrap_or(href);
-    [".xhtml", ".html", ".htm", ".xml"]
-        .iter()
-        .any(|suffix| name.to_lowercase().ends_with(suffix))
+    reader::is_html_document(media_type, href)
 }
 
 /// The directory part of a container path (`/OEBPS/text/c1.xhtml` -> `/OEBPS/text`).
@@ -752,14 +783,45 @@ fn build_epub(
 }
 
 /// Writes `bytes` to `destination`.
+///
+/// Desktop filesystem paths write atomically through a sibling temp file +
+/// `sync_all()` + rename so a mid-write failure never truncates an existing
+/// file. Android `content://` URIs write directly through the fs plugin.
 fn save<R: Runtime>(app: &AppHandle<R>, destination: &str, bytes: &[u8]) -> Result<(), String> {
-    // Through the fs plugin, not `std::fs`: on Android the destination is a
-    // `content://` document the OS owns, and only the plugin can write it.
+    let target = file_path(destination);
+    if let tauri_plugin_fs::FilePath::Path(ref path) = target {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp_name = format!(
+            ".{}.{}.{}.tmp",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("export"),
+            std::process::id(),
+            unique
+        );
+        let tmp = path.with_file_name(tmp_name);
+        let write_result = (|| -> std::io::Result<()> {
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("无法写入 {destination}：{error}"));
+        }
+        return std::fs::rename(&tmp, path).map_err(|error| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("无法写入 {destination}：{error}")
+        });
+    }
+
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     let mut out = app
         .fs()
-        .open(file_path(destination), options)
+        .open(target, options)
         .map_err(|error| format!("无法写入 {destination}：{error}"))?;
     out.write_all(bytes)
         .map_err(|error| format!("无法写入 {destination}：{error}"))?;
@@ -1396,6 +1458,33 @@ mod tests {
                 ("0-1".into(), r#"<span class="svo svo-predicate">走</span>"#.into()),
                 ("0-2".into(), "了。".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn svg_spine_item_is_not_an_html_document() {
+        assert!(!is_document("image/svg+xml", "cover.svg"));
+        assert!(!is_document("", "cover.svg"));
+        assert!(is_document("application/xhtml+xml", "c1.xhtml"));
+    }
+
+    #[test]
+    fn inject_stylesheet_ignores_comments_attr_gt_and_preserves_xml_declaration() {
+        let with_comment =
+            "<html><head><!-- </head> --><title>T</title></head><body><p>a</p></body></html>";
+        let out = inject_stylesheet(with_comment, "<style/>");
+        assert!(out.contains("<title>T</title>\n<style/></head>"), "{out}");
+
+        let with_gt_attr = r#"<html><body data-x="a>b"><p>a</p></body></html>"#;
+        let out2 = inject_stylesheet(with_gt_attr, "<style/>");
+        assert!(out2.contains(r#"<body data-x="a>b">"#), "{out2}");
+        assert!(out2.contains("<style/><p>a</p>"), "{out2}");
+
+        let xml_only = r#"<?xml version="1.0" encoding="utf-8"?><div>a</div>"#;
+        let out3 = inject_stylesheet(xml_only, "<style/>");
+        assert!(
+            out3.starts_with(r#"<?xml version="1.0" encoding="utf-8"?>"#),
+            "{out3}"
         );
     }
 }
