@@ -11,7 +11,9 @@
 //! `Session::run` needs `&mut self`, so each graph sits behind a `Mutex` — the
 //! three graphs still run independently of each other.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(target_os = "android"))]
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use ort::environment::Environment;

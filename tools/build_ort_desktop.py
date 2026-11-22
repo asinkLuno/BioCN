@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
-"""Build the minimal `libonnxruntime` the desktop app ships.
+"""Build the minimal `libonnxruntime` BioCN ships on desktop and Android.
 
-Every desktop platform now loads ORT at run time (`ort` crate's
-`load-dynamic`, see `src-tauri/src/analysis/engine.rs`), same as Android. The
-library is a *minimal build* driven by the same union op config
-(`tools/models/ort_ops.config`) the Android build uses, which is what takes the
-full 34 MB / 15 MB of statically linked ExecutionProvider code down to a few MB.
+Every platform loads ORT at run time (`ort` crate's `load-dynamic`, see
+`src-tauri/src/analysis/engine.rs`). The library is a *minimal build* driven by
+the shared union op config (`tools/models/ort_ops.config`), which takes the full
+34 MB / 15 MB of statically linked ExecutionProvider code down to a few MB.
 
 Outputs:
 
-    Linux   x86_64  -> libonnxruntime.so
-    macOS   aarch64 -> libonnxruntime.dylib
-    Windows x64     -> libonnxruntime.dll
+    Linux   x86_64  -> src-tauri/ort/linux/libonnxruntime.so
+    macOS   aarch64 -> src-tauri/ort/macos/libonnxruntime.dylib
+    Windows x64     -> src-tauri/ort/windows/libonnxruntime.dll
+    Android arm64   -> src-tauri/ort/android/arm64-v8a/libonnxruntime.so
 
 The produced library must load BOTH shipped variants (int8 and fp16, both
 converted in Runtime style with saved graph optimizations).
 
 Usage:
     python3 -m tools.build_ort_desktop build --platform linux
+    python3 -m tools.build_ort_desktop build --platform android
     python3 -m tools.build_ort_desktop build --platform macos --source /path/to/onnxruntime --python /path/to/venv-python
     python3 -m tools.build_ort_desktop verify <models-dir> <lib>
 
-The build step drops its artifact at src-tauri/ort/<platform>/, which the
+The desktop build drops its artifact at src-tauri/ort/<platform>/, which the
 platform config (tauri.<os>.conf.json) bundles as res/libonnxruntime.<ext>.
+The Android build drops its artifact at src-tauri/ort/android/arm64-v8a/, which
+src-tauri/gen/android/app/build.gradle.kts includes via jniLibs.srcDir.
 
 microsoft/onnxruntime vanished from GitHub entirely (404 for everyone since
 2026-11, no rename/move; PyPI only ships wheels). The sources therefore come
@@ -49,9 +52,9 @@ CONFIG = HERE / "models" / "ort_ops.config"
 
 ORT_VERSION = "1.31.1"
 SOURCES = [
-    f"https://github.com/microsoft/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip",
     f"https://github.com/ossia/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip",
     f"https://github.com/Krozark/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip",
+    f"https://github.com/microsoft/onnxruntime/archive/refs/tags/v{ORT_VERSION}.zip",
 ]
 
 # Flags shared by every platform. `--include_ops_by_config` + reduced type
@@ -85,7 +88,12 @@ def host_default() -> str:
 
 
 def artifact_name(platform: str) -> str:
-    return {"linux": "libonnxruntime.so", "macos": "libonnxruntime.dylib", "windows": "libonnxruntime.dll"}[platform]
+    return {
+        "linux": "libonnxruntime.so",
+        "macos": "libonnxruntime.dylib",
+        "windows": "libonnxruntime.dll",
+        "android": "libonnxruntime.so",
+    }[platform]
 
 def pick_python(explicit: str | None) -> str:
     """The interpreter that drives ORT's build.py.
@@ -108,8 +116,12 @@ def build(platform: str, out: Path | None, source: Path | None, python: str | No
         raise SystemExit(f"missing {CONFIG}; run tools/convert_ort.py first")
 
     if out is None:
-        # tauri.<os>.conf.json picks the artifact up from the per-platform dir.
-        out = HERE.parent / "src-tauri" / "ort" / platform
+        # tauri.<os>.conf.json picks desktop artifacts from src-tauri/ort/<platform>/;
+        # Android Gradle jniLibs picks arm64-v8a from src-tauri/ort/android/arm64-v8a/.
+        if platform == "android":
+            out = HERE.parent / "src-tauri" / "ort" / "android" / "arm64-v8a"
+        else:
+            out = HERE.parent / "src-tauri" / "ort" / platform
 
     work = source or Path(tempfile.mkdtemp(prefix="ort-build-"))
     src = work / f"onnxruntime-{ORT_VERSION}"
@@ -126,7 +138,7 @@ def build(platform: str, out: Path | None, source: Path | None, python: str | No
             raise SystemExit("could not download onnxruntime sources")
     print(f"using sources from {src}")
 
-    build_dir = src / "build" / "Desktop"
+    build_dir = src / "build" / ("Android" if platform == "android" else "Desktop")
     build_dir.mkdir(parents=True, exist_ok=True)
 
     # ORT's build.sh invokes a bare `python3` for reduce_op_kernels (kernel
@@ -138,6 +150,24 @@ def build(platform: str, out: Path | None, source: Path | None, python: str | No
         args = ["cmd", "/c", str(src / "build.bat")]
     else:
         args = ["bash", str(src / "build.sh")]
+
+    extra_args: list[str] = []
+    if platform == "android":
+        android_sdk = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+        android_ndk = os.environ.get("ANDROID_NDK_HOME") or os.environ.get("NDK_HOME")
+        if not android_sdk or not Path(android_sdk).exists():
+            raise SystemExit("ANDROID_HOME (or ANDROID_SDK_ROOT) must point to an installed Android SDK")
+        if not android_ndk or not Path(android_ndk).exists():
+            raise SystemExit("ANDROID_NDK_HOME (or NDK_HOME) must point to an installed Android NDK")
+        extra_args = [
+            "--android",
+            f"--android_sdk_path={android_sdk}",
+            f"--android_ndk_path={android_ndk}",
+            "--android_abi=arm64-v8a",
+            "--android_api=24",
+            "--skip_tests",
+            "--cmake_extra_defines=ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
+        ]
 
     result = subprocess.run(
         args
@@ -157,6 +187,7 @@ def build(platform: str, out: Path | None, source: Path | None, python: str | No
             # submodule sync is neither possible nor needed.
             "--skip_submodule_sync",
         ]
+        + extra_args
         + COMMON_CMAKE
         + ["--update", "--build"],
         cwd=src,
@@ -175,20 +206,38 @@ def build(platform: str, out: Path | None, source: Path | None, python: str | No
 
 
 def extract(url: str, work: Path) -> bool:
+    import time
+    import urllib.error
     import urllib.request
     import zipfile
 
     archive = work / "ort.zip"
-    try:
-        with urllib.request.urlopen(url, timeout=120) as response:
-            archive.write_bytes(response.read())
-    except OSError as error:
-        print(f"  download failed: {error}")
-        return False
+    for attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, archive.open("wb") as out:
+                shutil.copyfileobj(response, out)
+            break
+        except urllib.error.HTTPError as error:
+            print(f"  download failed ({url}): {error}")
+            if error.code in (404, 410):
+                return False
+            if attempt == 3:
+                return False
+            time.sleep(2 * attempt)
+        except OSError as error:
+            print(f"  download failed ({url}, attempt {attempt}/3): {error}")
+            if attempt == 3:
+                return False
+            time.sleep(2 * attempt)
     # zipfile instead of the unzip binary: Git Bash on the Windows runner has
     # no unzip, and sources need no exec bits (build.sh runs via `bash`).
-    with zipfile.ZipFile(archive) as bundle:
-        bundle.extractall(work)
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(work)
+    except zipfile.BadZipFile as error:
+        print(f"  corrupt archive ({url}): {error}")
+        archive.unlink(missing_ok=True)
+        return False
     archive.unlink()
     expected = work / f"onnxruntime-{ORT_VERSION}"
     if not expected.exists():
@@ -205,6 +254,7 @@ def find_artifact(build_dir: Path, platform: str) -> Path:
         "linux": ["libonnxruntime.so.*", "libonnxruntime.so"],
         "macos": ["libonnxruntime.*.dylib", "libonnxruntime.dylib"],
         "windows": ["onnxruntime.dll", "libonnxruntime.dll"],
+        "android": ["libonnxruntime.so", "libonnxruntime.so.*"],
     }[platform]
     for pattern in candidates:
         hits = sorted(build_dir.rglob(pattern))
@@ -250,9 +300,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     build_cmd = sub.add_parser("build")
-    build_cmd.add_argument("--platform", choices=("linux", "macos", "windows"), default=host_default())
+    build_cmd.add_argument("--platform", choices=("linux", "macos", "windows", "android"), default=host_default())
     build_cmd.add_argument("--out", type=Path, default=None,
-                           help="output dir (default: src-tauri/ort/<platform>)")
+                           help="output dir (default: src-tauri/ort/<platform>, or android/arm64-v8a)")
     build_cmd.add_argument("--source", type=Path, default=None, help="re-use an extracted onnxruntime tree")
     build_cmd.add_argument("--python", dest="python", default=None, help="interpreter that drives ORT's build.py (needs flatbuffers)")
 

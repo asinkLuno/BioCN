@@ -31,11 +31,11 @@ env:
   ANDROID_CERT_SHA256: '1ab11299c4513c4c04eba5e2ed0dfe24378ca955be84d278ce258a16f005dc6a'
 
 jobs:
-  # 发布质量门禁：releases 只能构建 main 上已有的提交，且前端测试先过一遍。
+  # 发布质量门禁：releases 只能构建 main 上已有的提交，校验版本号一致并跑完前后端单测。
   guard:
     if: github.ref == 'refs/heads/releases'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -54,6 +54,23 @@ jobs:
             exit 1
           fi
 
+      - name: Verify version consistency
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re
+          pkg = json.loads(pathlib.Path("package.json").read_text())["version"]
+          tauri = json.loads(pathlib.Path("src-tauri/tauri.conf.json").read_text())["version"]
+          cargo_text = pathlib.Path("src-tauri/Cargo.toml").read_text()
+          m = re.search(r'^version\s*=\s*"([^"]+)"', cargo_text, re.MULTILINE)
+          assert m, "version not found in src-tauri/Cargo.toml"
+          cargo = m.group(1)
+          if not (pkg == tauri == cargo):
+              raise SystemExit(
+                  f"Version mismatch: package.json={pkg}, tauri.conf.json={tauri}, Cargo.toml={cargo}"
+              )
+          print(f"Versions aligned: {pkg}")
+          PY
+
       - name: Setup Node
         uses: actions/setup-node@v7.1.0
         with:
@@ -67,8 +84,32 @@ jobs:
       - name: Install frontend dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Run frontend tests
-        run: yarn test
+      - name: Run frontend tests and build
+        run: |
+          yarn test
+          yarn build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.99.1
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: guard-rust
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Run Rust tests
+        run: |
+          mkdir -p src-tauri/ort/linux
+          : > src-tauri/ort/linux/libonnxruntime.so
+          cargo test --manifest-path src-tauri/Cargo.toml
 
   # Android：签名 arm64 APK，签名材料只从 Secrets 读取，缺失即失败，绝不生成替代证书。
   android:
@@ -104,9 +145,21 @@ jobs:
             src-tauri/gen/android/gradle.properties
             src-tauri/Cargo.lock
 
+      - name: Cache pinned Android SDK and NDK
+        id: android-sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/platforms/android-37.0
+            ${{ env.ANDROID_HOME }}/build-tools/${{ env.ANDROID_BUILD_TOOLS_VERSION }}
+            ${{ env.ANDROID_HOME }}/ndk/${{ env.ANDROID_NDK_VERSION }}
+          key: android-sdk-37.0-${{ env.ANDROID_BUILD_TOOLS_VERSION }}-${{ env.ANDROID_NDK_VERSION }}
+
       - name: Install pinned Android SDK and NDK
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "ndk;$ANDROID_NDK_VERSION"
+          if [ "${{ steps.android-sdk-cache.outputs.cache-hit }}" != "true" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-37.0" "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "ndk;$ANDROID_NDK_VERSION"
+          fi
           echo "NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
 
@@ -146,6 +199,25 @@ jobs:
       - name: Read app version
         id: version
         run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache minimal ONNX Runtime (Android arm64)
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/ort/android/arm64-v8a
+          key: ort-android-arm64-${{ env.ANDROID_NDK_VERSION }}-${{ hashFiles('tools/models/ort_ops.config', 'tools/build_ort_desktop.py') }}
+
+      - name: Build minimal ONNX Runtime (Android arm64)
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        env:
+          PIP_BREAK_SYSTEM_PACKAGES: '1'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet flatbuffers==25.2.10 || python3 -m pip install --quiet flatbuffers
+          python3 -m tools.build_ort_desktop build --platform android
+
+      - name: Verify cached/built Android ONNX Runtime artifact
+        run: ls -lh src-tauri/ort/android/arm64-v8a/libonnxruntime.so
 
       # tauri-action 负责调用 `tauri android build`；beforeBuildCommand 会执行 `yarn build`。
       - name: Build signed arm64 APK
@@ -197,6 +269,36 @@ jobs:
             printf '%s\n' "$metadata"
             exit 1
           fi
+          if ! unzip -l "$apk" | grep -q 'lib/arm64-v8a/libonnxruntime.so'; then
+            echo "::error::APK is missing lib/arm64-v8a/libonnxruntime.so"
+            unzip -l "$apk" | grep '\.so$' || true
+            exit 1
+          fi
+          llvm_bin="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ort_verify_dir="$RUNNER_TEMP/verify-ort"
+          rm -rf "$ort_verify_dir" && mkdir -p "$ort_verify_dir"
+          unzip -q -j "$apk" 'lib/arm64-v8a/libonnxruntime.so' -d "$ort_verify_dir"
+          ort_so="$ort_verify_dir/libonnxruntime.so"
+          if ! "$llvm_bin/llvm-nm" -D --defined-only "$ort_so" | grep -q ' OrtGetApiBase'; then
+            echo "::error::libonnxruntime.so does not export OrtGetApiBase"
+            exit 1
+          fi
+          needed=$("$llvm_bin/llvm-readelf" -d "$ort_so" | grep '(NEEDED)' || true)
+          printf '%s\n' "$needed"
+          if printf '%s\n' "$needed" | grep -q 'libc++_shared.so'; then
+            echo "::error::libonnxruntime.so dynamically links libc++_shared.so (not bundled in APK)"
+            exit 1
+          fi
+          "$llvm_bin/llvm-readelf" -Wl "$ort_so" | python3 -c '
+          import sys
+          loads = [line.split() for line in sys.stdin if line.lstrip().startswith("LOAD")]
+          assert loads, "no LOAD segments found"
+          for parts in loads:
+              align = int(parts[-1], 16)
+              if align < 0x4000:
+                  raise SystemExit(f"LOAD segment alignment {hex(align)} < 16 KB (0x4000): {parts}")
+          print(f"verified {len(loads)} LOAD segments >= 16 KB aligned")
+          '
           mkdir -p artifacts/ci
           name="BioCN_${{ steps.version.outputs.version }}_arm64.apk"
           cp "$apk" "artifacts/ci/$name"
@@ -271,7 +373,9 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            tools/ortsmoke
           key: desktop-${{ matrix.label }}
 
       # tauri-action 只调 `yarn tauri build`，不会装依赖；没有这一步
@@ -304,10 +408,18 @@ jobs:
         run: rm -f "/c/Program Files/Git/usr/bin/link.exe"
 
       # The app loads ONNX Runtime at run time: compile the minimal
-      # libonnxruntime for this platform (tools/ortsmoke then proves it serves
-      # all six shipped graphs) and drop it where tauri.<os>.conf.json picks
-      # the artifact up as a bundled resource.
+      # libonnxruntime for this platform (cached by ops config + build script;
+      # tools/ortsmoke always proves it serves all six shipped graphs) and drop
+      # it where tauri.<os>.conf.json picks the artifact up as a bundled resource.
+      - name: Cache minimal ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/ort/${{ matrix.label }}
+          key: ort-desktop-${{ matrix.label }}-${{ runner.arch }}-${{ hashFiles('tools/models/ort_ops.config', 'tools/build_ort_desktop.py') }}
+
       - name: Build minimal ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
         env:
           # macOS runner 的 python3 是 Homebrew 版，系统级 pip 安装被 PEP 668
           # 拦截（ubuntu-24.04 镜像已预置同名变量，windows 无此限制，设置无害）。
@@ -316,10 +428,15 @@ jobs:
           set -euo pipefail
           python3 -m pip install --quiet flatbuffers==25.2.10 || python3 -m pip install --quiet flatbuffers
           python3 -m tools.build_ort_desktop build --platform ${{ matrix.label }}
-          # Smoke against the published weights: the reduced build must load
-          # every graph the app downloads (int8 + fp16, both Runtime style).
+
+      - name: Smoke test minimal ONNX Runtime
+        run: |
+          set -euo pipefail
+          # Smoke against the published weights pinned in src-tauri/src/models.rs:
+          # the reduced build must load every graph the app downloads (int8 + fp16, both Runtime style).
+          revision=$(python3 -c 'import pathlib, re; m = re.search(r"const REVISION: &str = \"([0-9a-f]{40})\";", pathlib.Path("src-tauri/src/models.rs").read_text()); assert m, "REVISION not found"; print(m.group(1))')
           models="$RUNNER_TEMP/ort-smoke-models"
-          base="https://modelscope.cn/api/v1/models/starmountain1997/biocn/repo?Revision=a226e0cfeee17a29ce8a2225717626dc2db0ac9c&FilePath="
+          base="https://modelscope.cn/api/v1/models/starmountain1997/biocn/repo?Revision=${revision}&FilePath="
           for file in int8/biocn_tok.ort int8/biocn_pos.ort int8/biocn_dep.ort fp16/biocn_tok.ort; do
             mkdir -p "$models/$(dirname "$file")"
             curl -fsSL --retry 3 -o "$models/$file" "$base$file"
@@ -496,7 +613,9 @@ jobs:
   # 单独发布/修复发布页（比如现有 Release 还没上过 Pages 时）。
   pages:
     needs: release
-    if: always() && (github.ref == 'refs/heads/releases' || github.ref == 'refs/heads/main')
+    if: >-
+      (github.ref == 'refs/heads/releases' && needs.release.result == 'success') ||
+      (github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -544,7 +663,7 @@ jobs:
 
   deploy:
     needs: pages
-    if: always() && (github.ref == 'refs/heads/releases' || github.ref == 'refs/heads/main')
+    if: github.ref == 'refs/heads/releases' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       pages: write

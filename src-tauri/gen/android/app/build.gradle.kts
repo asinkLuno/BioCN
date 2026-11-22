@@ -25,6 +25,13 @@ if (keystorePropertiesFile.exists()) {
 android {
     compileSdk = 37
     namespace = "io.github.asinkluno.biocn"
+    sourceSets {
+        getByName("main") {
+            // Minimal libonnxruntime.so built by tools/build_ort_desktop.py --platform android
+            // into src-tauri/ort/android/<abi>/libonnxruntime.so.
+            jniLibs.directories.add("../../../ort/android")
+        }
+    }
     signingConfigs {
         create("release") {
             keyAlias = keystoreProperties["keyAlias"] as? String

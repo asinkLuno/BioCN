@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: biocn-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Verify version consistency
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re
+          pkg = json.loads(pathlib.Path("package.json").read_text())["version"]
+          tauri = json.loads(pathlib.Path("src-tauri/tauri.conf.json").read_text())["version"]
+          cargo_text = pathlib.Path("src-tauri/Cargo.toml").read_text()
+          m = re.search(r'^version\s*=\s*"([^"]+)"', cargo_text, re.MULTILINE)
+          assert m, "version not found in src-tauri/Cargo.toml"
+          cargo = m.group(1)
+          if not (pkg == tauri == cargo):
+              raise SystemExit(
+                  f"Version mismatch: package.json={pkg}, tauri.conf.json={tauri}, Cargo.toml={cargo}"
+              )
+          print(f"Versions aligned: {pkg}")
+          PY
+
+      - name: Setup Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.22.1'
+          cache: yarn
+          cache-dependency-path: yarn.lock
+
+      - name: Pin Yarn Classic
+        run: corepack enable && corepack prepare yarn@1.22.22 --activate
+
+      - name: Install frontend dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run frontend tests
+        run: yarn test
+
+      - name: Build frontend
+        run: yarn build
+
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: clippy
+          targets: aarch64-linux-android
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ci-rust
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Prepare Tauri build placeholders
+        run: |
+          mkdir -p dist src-tauri/ort/linux
+          : > src-tauri/ort/linux/libonnxruntime.so
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Run Rust clippy (desktop)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust clippy (Android arm64)
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          if [ -z "$ndk" ] || [ ! -d "$ndk" ]; then
+            echo "::error::Preinstalled Android NDK not found on runner"
+            exit 1
+          fi
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CC_aarch64_linux_android="$bin/aarch64-linux-android24-clang" \
+          CXX_aarch64_linux_android="$bin/aarch64-linux-android24-clang++" \
+          AR_aarch64_linux_android="$bin/llvm-ar" \
+          cargo clippy --manifest-path src-tauri/Cargo.toml --lib --target aarch64-linux-android -- -D warnings
