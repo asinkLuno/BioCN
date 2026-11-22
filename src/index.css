@@ -86,7 +86,7 @@
 
   .biocn-helix-rung {
     stroke: #7570b3;
-    stroke-width: 3.6;
+    stroke-width: 3.8;
     stroke-linecap: round;
     stroke-dasharray: 100 110;
     stroke-dashoffset: 105;
@@ -99,11 +99,7 @@
   }
 
   .biocn-helix-rung-2 {
-    animation-delay: 0.2s;
-  }
-
-  .biocn-helix-rung-3 {
-    animation-delay: 0.38s;
+    animation-delay: 0.22s;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -143,30 +139,30 @@
 
 @keyframes biocn-helix-rung {
   0%,
-  11% {
+  17% {
     stroke-dashoffset: 105;
     opacity: 0;
   }
-  13% {
+  19% {
     opacity: 1;
   }
-  26% {
+  31% {
     stroke-dashoffset: 0;
     opacity: 1;
   }
-  50% {
+  52% {
     stroke-dashoffset: 0;
     opacity: 0.68;
   }
-  65% {
+  67% {
     stroke-dashoffset: 0;
     opacity: 1;
   }
-  74% {
+  76% {
     stroke-dashoffset: -105;
     opacity: 1;
   }
-  76%,
+  78%,
   100% {
     stroke-dashoffset: -105;
     opacity: 0;

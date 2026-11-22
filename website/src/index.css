@@ -265,7 +265,7 @@
 
   .biocn-helix-rung {
     stroke: #7570b3;
-    stroke-width: 3.6;
+    stroke-width: 3.8;
     stroke-linecap: round;
     stroke-dasharray: 100 110;
     stroke-dashoffset: 105;
@@ -277,15 +277,11 @@
   }
 
   .biocn-helix-rung-1 {
-    animation-delay: 0.32s, 0.36s, 1.75s;
+    animation-delay: 0.52s, 0.56s, 1.75s;
   }
 
   .biocn-helix-rung-2 {
-    animation-delay: 0.56s, 0.6s, 2.05s;
-  }
-
-  .biocn-helix-rung-3 {
-    animation-delay: 0.78s, 0.82s, 2.35s;
+    animation-delay: 0.76s, 0.8s, 2.05s;
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -188,82 +188,74 @@ export const BookTile = memo(function BookTile({
                 >
                   <defs>
                     <clipPath id={`biocn-${helixUid}-over-mid`}>
-                      <rect x="34" y="37" width="32" height="20" />
+                      <rect x="34" y="40" width="32" height="20" />
                     </clipPath>
                     <linearGradient
                       id={`biocn-${helixUid}-grad-o`}
                       gradientUnits="userSpaceOnUse"
                       x1="0"
-                      y1="89"
+                      y1="89.9"
                       x2="0"
-                      y2="11.5"
+                      y2="10.1"
                     >
                       <stop offset="0%" stopColor="#d95f02" />
-                      <stop offset="13%" stopColor="#d95f02" />
-                      <stop offset="18%" stopColor="#b84e00" />
-                      <stop offset="23%" stopColor="#d95f02" />
-                      <stop offset="85%" stopColor="#d95f02" />
-                      <stop offset="90%" stopColor="#b84e00" />
-                      <stop offset="95%" stopColor="#d95f02" />
+                      <stop offset="6.1%" stopColor="#d95f02" />
+                      <stop offset="11.1%" stopColor="#b84e00" />
+                      <stop offset="16.1%" stopColor="#d95f02" />
+                      <stop offset="83.9%" stopColor="#d95f02" />
+                      <stop offset="88.9%" stopColor="#b84e00" />
+                      <stop offset="93.9%" stopColor="#d95f02" />
                       <stop offset="100%" stopColor="#d95f02" />
                     </linearGradient>
                     <linearGradient
                       id={`biocn-${helixUid}-grad-g`}
                       gradientUnits="userSpaceOnUse"
                       x1="0"
-                      y1="89"
+                      y1="89.9"
                       x2="0"
-                      y2="11.5"
+                      y2="10.1"
                     >
                       <stop offset="0%" stopColor="#1b9e77" />
-                      <stop offset="49%" stopColor="#1b9e77" />
-                      <stop offset="54%" stopColor="#147e5e" />
-                      <stop offset="59%" stopColor="#1b9e77" />
+                      <stop offset="45%" stopColor="#1b9e77" />
+                      <stop offset="50%" stopColor="#147e5e" />
+                      <stop offset="55%" stopColor="#1b9e77" />
                       <stop offset="100%" stopColor="#1b9e77" />
                     </linearGradient>
                   </defs>
                   <line
                     className="biocn-helix-rung biocn-helix-rung-1"
                     pathLength={100}
-                    x1="72"
-                    y1="87"
-                    x2="28"
-                    y2="87"
+                    x1="28"
+                    y1="65.5"
+                    x2="72"
+                    y2="65.5"
                   />
                   <line
                     className="biocn-helix-rung biocn-helix-rung-2"
                     pathLength={100}
-                    x1="28"
-                    y1="61"
-                    x2="72"
-                    y2="61"
-                  />
-                  <line
-                    className="biocn-helix-rung biocn-helix-rung-3"
-                    pathLength={100}
                     x1="72"
-                    y1="33"
+                    y1="34.5"
                     x2="28"
-                    y2="33"
+                    y2="34.5"
                   />
                   <path
                     className="biocn-helix-strand biocn-helix-strand-o"
                     stroke={`url(#biocn-${helixUid}-grad-o)`}
                     pathLength={100}
-                    d="M 73 89 C 73 78.4 27 71.6 27 61 C 27 50.4 73 43.6 73 33 C 73 24.7 45 18.8 32.7 11.5"
+                    d="M 68.2 89.9 C 56.4 81.6 27 74.9 27 65.5 C 27 53.7 73 46.3 73 34.5 C 73 25.1 43.6 18.4 31.8 10.1"
                   />
                   <path
                     className="biocn-helix-strand biocn-helix-strand-g"
                     stroke={`url(#biocn-${helixUid}-grad-g)`}
                     pathLength={100}
-                    d="M 27 89 C 27 78.4 73 71.6 73 61 C 73 50.4 27 43.6 27 33 C 27 24.7 55 18.8 67.3 11.5"
+                    d="M 31.8 89.9 C 43.6 81.6 73 74.9 73 65.5 C 73 53.7 27 46.3 27 34.5 C 27 25.1 56.4 18.4 68.2 10.1"
                   />
                   <path
                     className="biocn-helix-strand biocn-helix-strand-o"
                     stroke={`url(#biocn-${helixUid}-grad-o)`}
                     clipPath={`url(#biocn-${helixUid}-over-mid)`}
                     pathLength={100}
-                    d="M 73 89 C 73 78.4 27 71.6 27 61 C 27 50.4 73 43.6 73 33 C 73 24.7 45 18.8 32.7 11.5"
+                    d="M 68.2 89.9 C 56.4 81.6 27 74.9 27 65.5 C 27 53.7 73 46.3 73 34.5 C 73 25.1 43.6 18.4 31.8 10.1"
                   />
                 </svg>
               </div>
