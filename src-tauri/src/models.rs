@@ -576,34 +576,24 @@ async fn install<R: Runtime>(app: AppHandle<R>, variant: String) -> Result<Statu
     let staging = root.join("staging").join(&variant);
     std::fs::create_dir_all(&staging).map_err(err)?;
     let files = fetch(&app, &staging, &variant).await?;
-    // The swap renames the directory the loaded sessions map, so the analyzer
-    // is dropped first. A first install of the *other* variant does not touch
-    // the loaded one, but telling the two cases apart costs more than dropping
-    // a hot cache once per install.
+    // The swap renames the directory the loaded sessions map, and activates the
+    // newly installed variant atomically under the install gate so no running
+    // analysis can write spans under the wrong weights fingerprint.
     let state: Option<tauri::State<AnalyzerState>> = app.try_state::<AnalyzerState>();
-    let was_active = crate::settings::active_variant(&app).as_deref() == Some(variant.as_str());
     let clone = root.clone();
     if let Some(state) = &state {
         let fresh = variant.clone();
+        let app_ref = &app;
         state
             .while_installing(async move {
-                if was_active {
-                    state.unload().await;
-                }
-                commit(&clone, &fresh, &files)
+                state.unload().await;
+                commit(&clone, &fresh, &files)?;
+                crate::settings::write_active_variant(app_ref, Some(&fresh))
             })
             .await?;
     } else {
         commit(&root, &variant, &files)?;
-    }
-    // A newly installed variant becomes the active one: the user just asked for
-    // it by name, and the download was minutes — leaving them on the old one
-    // would read as if the download had done nothing.
-    if crate::settings::active_variant(&app).is_none() || was_active {
         crate::settings::write_active_variant(&app, Some(&variant))?;
-        if let Some(state) = &state {
-            state.unload().await;
-        }
     }
     // A status refresh, not a second install step: the sizes come from the
     // network, and a flaky connection must not turn a finished install into an
@@ -618,22 +608,29 @@ pub async fn models_activate<R: Runtime>(app: AppHandle<R>, variant: String) -> 
         return Err(format!("未知的模型版本 {variant}"));
     }
     let root = root(&app)?;
-    if installed(&root.join(&variant)).is_none() {
-        return Err(format!("models-missing: {variant} 没有安装在磁盘上"));
-    }
-    // The settings write still takes the same operation lock install/remove
-    // hold, so concurrent install+activate cannot interleave: the unique temp
-    // file in settings.rs keeps the writes intact, the lock keeps the
-    // *decision* (which variant is active) in order. No long job runs inside
-    // the critical section.
-    app
-        .state::<AnalyzerState>()
-        .while_installing_model(async { crate::settings::write_active_variant(&app, Some(&variant)) })
-        .await?;
-    // Drop the sessions so the next analysis loads the variant just picked; a
-    // cache full of spans from the old one must not survive the switch.
+    let activate_inner = || -> Result<()> {
+        if installed(&root.join(&variant)).is_none() {
+            return Err(format!("models-missing: {variant} 没有安装在磁盘上"));
+        }
+        crate::settings::write_active_variant(&app, Some(&variant))
+    };
+    // Serialize with install/remove (`while_installing_model`) and with session
+    // loading (`while_installing`) so the disk check, active choice, and session
+    // unload happen atomically without racing a running inference job.
     if let Some(state) = app.try_state::<AnalyzerState>() {
-        state.unload().await;
+        state
+            .while_installing_model(async {
+                state
+                    .while_installing(async {
+                        activate_inner()?;
+                        state.unload().await;
+                        Ok::<_, String>(())
+                    })
+                    .await
+            })
+            .await?;
+    } else {
+        activate_inner()?;
     }
     Ok(status_of(&app, &root, fetch_manifest().await))
 }

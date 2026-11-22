@@ -88,15 +88,19 @@ struct Inner {
 /// it, and the manifest's sha256 is only around at install time. What that
 /// leaves is narrow — two builds with byte-identical file sizes share a cache —
 /// and [`PIPELINE`] is the deliberate escape hatch for it.
-pub fn weights<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
+pub fn weights_of_dir(dir: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
 
-    let dir = crate::models::installed_dir(app)?;
     let stamp = std::fs::read(dir.join("stamp")).map_err(err)?;
     let mut hasher = Sha256::new();
     hasher.update(&stamp);
     let digest = format!("{:x}", hasher.finalize());
     Ok(format!("v{PIPELINE}:{}", &digest[..16]))
+}
+
+pub fn weights<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
+    let dir = crate::models::installed_dir(app)?;
+    weights_of_dir(&dir)
 }
 
 impl AnalysisCache {

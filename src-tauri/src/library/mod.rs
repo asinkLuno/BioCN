@@ -118,16 +118,30 @@ pub async fn library_remove<R: Runtime>(
     library: State<'_, Library>,
     id: String,
 ) -> Result<Vec<Book>, String> {
+    if let Some(analyzer) = app.try_state::<crate::analyzer::AnalyzerState>() {
+        analyzer.cancel_for_book(&id);
+    }
     if let Some(reading) = app.try_state::<crate::reading::ReadingState>() {
         reading.evict(&id);
     }
-    if let Some(progress) = app.try_state::<crate::progress::ProgressStore>() {
-        progress.remove(&id);
-    }
+    let progress = app
+        .try_state::<crate::progress::ProgressStore>()
+        .map(|s| s.inner().clone());
+    let cache = app
+        .try_state::<crate::cache::AnalysisCache>()
+        .map(|s| s.inner().clone());
     let library = library.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || library.remove(&id))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(progress) = progress {
+            progress.remove(&id);
+        }
+        if let Some(cache) = cache {
+            let _ = cache.clear_book(&id, &[]);
+        }
+        library.remove(&id)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
