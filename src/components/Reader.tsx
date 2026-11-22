@@ -25,7 +25,6 @@ import {
   onChapterColorPatch,
   type BookView,
   type RunPatch,
-  type TocEntry,
 } from "../lib/reading";
 import { bookResourceUrl, resolveRelativeHref } from "../lib/bookProtocol";
 import {
@@ -34,21 +33,15 @@ import {
   type ChapterTarget,
 } from "../lib/readerBridge";
 import {
-  DEFAULT_SVO_COLORS,
-  DEFAULT_SVO_OVERRIDES,
-  hasCustomSvoColors,
   loadReaderPrefs,
   saveReaderPrefs,
-  type ReaderColumns,
-  type ReaderFontFamily,
-  type ReaderPageMargin,
   type ReaderPrefs,
-  type ReaderTextAlign,
   type ReaderTheme,
   type ReaderViewMode,
-  type SvoRole,
 } from "../lib/readerPrefs";
 import { loadAppTheme, onAppThemeChange, type AppTheme } from "../lib/appTheme";
+import { ReaderPrefsPopover } from "./ReaderPrefsPopover";
+import { ReaderTocDrawer } from "./ReaderTocDrawer";
 
 interface Props {
   id: string;
@@ -86,6 +79,19 @@ interface FrameSlot {
 
 type SlotIndex = 0 | 1;
 
+const INITIAL_COLOR_STATE: ChapterProgressState = {
+  done: 0,
+  total: 0,
+  active: false,
+  missingModel: false,
+  error: null,
+};
+
+/**
+ * Paper backdrop matched to `src-tauri/src/protocol/reader.css` so the host
+ * surface behind the iframe never flashes a mismatched color between chapters.
+ * Kept minimal because daisyUI has no sepia paper token.
+ */
 function readerBgClass(theme: ReaderTheme): string {
   switch (theme) {
     case "light":
@@ -97,56 +103,6 @@ function readerBgClass(theme: ReaderTheme): string {
     default:
       return "bg-base-100";
   }
-}
-
-function TocItem({
-  item,
-  currentIndex,
-  coloredSet,
-  onNavigate,
-}: {
-  item: TocEntry;
-  currentIndex: number | null;
-  coloredSet: ReadonlySet<number>;
-  onNavigate: (chapterIndex: number, anchor: string | null) => void;
-}) {
-  const isActive = item.chapterIndex !== null && item.chapterIndex === currentIndex && !item.anchor;
-  const isColored = item.chapterIndex !== null && coloredSet.has(item.chapterIndex);
-  return (
-    <li>
-      {item.chapterIndex !== null ? (
-        <button
-          type="button"
-          className={isActive ? "menu-active" : undefined}
-          onClick={() => onNavigate(item.chapterIndex!, item.anchor)}
-        >
-          <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
-          {isColored && (
-            <span
-              className="badge badge-xs badge-primary shrink-0"
-              title="已完成着色"
-              aria-label="已着色"
-            />
-          )}
-        </button>
-      ) : (
-        <span className="menu-title">{item.label}</span>
-      )}
-      {item.subitems.length > 0 && (
-        <ul>
-          {item.subitems.map((child, idx) => (
-            <TocItem
-              key={`${child.label}-${idx}`}
-              item={child}
-              currentIndex={currentIndex}
-              coloredSet={coloredSet}
-              onNavigate={onNavigate}
-            />
-          ))}
-        </ul>
-      )}
-    </li>
-  );
 }
 
 export function Reader({
@@ -178,13 +134,7 @@ export function Reader({
     [prefs, effectiveTheme],
   );
   const [reloadNonce, setReloadNonce] = useState(0);
-  const [colorState, setColorState] = useState<ChapterProgressState>({
-    done: 0,
-    total: 0,
-    active: false,
-    missingModel: false,
-    error: null,
-  });
+  const [colorState, setColorState] = useState<ChapterProgressState>(INITIAL_COLOR_STATE);
   const [viewport, setViewport] = useState<ViewportPosition>({
     mode: prefs.viewMode,
     page: 0,
@@ -199,6 +149,7 @@ export function Reader({
   // white flashes between chapters.
   const [slots, setSlots] = useState<[FrameSlot | null, FrameSlot | null]>([null, null]);
   const [activeSlot, setActiveSlot] = useState<SlotIndex>(0);
+  const slotsRef = useRef<[FrameSlot | null, FrameSlot | null]>([null, null]);
   const slotRefs = useRef<[HTMLIFrameElement | null, HTMLIFrameElement | null]>([null, null]);
   const slotReadyRef = useRef<[boolean, boolean]>([false, false]);
   const activeSlotRef = useRef<SlotIndex>(0);
@@ -207,15 +158,34 @@ export function Reader({
   const pendingPatchesRef = useRef<RunPatch[]>([]);
   const pendingTargetRef = useRef<ChapterTarget>({});
   const prefsRef = useRef(effectivePrefs);
+  // Keep latest effective prefs visible synchronously to chapterUrl and message handlers.
+  prefsRef.current = effectivePrefs;
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<{
     bookId: string;
     chapterIndex: number;
     paragraphIndex: number | null;
     ratio: number;
+    dirty: boolean;
   } | null>(null);
-  const wasModelsOpen = useRef(modelsOpen);
   const prefsMenuRef = useRef<HTMLDivElement>(null);
+
+  const flushProgress = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const pending = lastSavedRef.current;
+    if (pending && pending.dirty) {
+      pending.dirty = false;
+      void bookProgressSave(
+        pending.bookId,
+        pending.chapterIndex,
+        pending.paragraphIndex,
+        pending.ratio,
+      ).catch(() => {});
+    }
+  }, []);
 
   const getCurrentFrame = useCallback(() => {
     const slot = targetSlotRef.current;
@@ -231,7 +201,6 @@ export function Reader({
   }, [prefs]);
 
   useEffect(() => {
-    prefsRef.current = effectivePrefs;
     for (const slot of [0, 1] as const) {
       if (slotReadyRef.current[slot]) {
         postToFrame(slotRefs.current[slot], {
@@ -262,10 +231,13 @@ export function Reader({
   // Open book metadata (OPF + TOC + spine + saved progress) — milliseconds.
   useEffect(() => {
     let cancelled = false;
+    flushProgress();
+    lastSavedRef.current = null;
     setBook(null);
     setIndex(null);
     setError(null);
     setLoading(true);
+    slotsRef.current = [null, null];
     setSlots([null, null]);
     setActiveSlot(0);
     activeSlotRef.current = 0;
@@ -275,13 +247,7 @@ export function Reader({
       clearTimeout(swapFallbackRef.current);
       swapFallbackRef.current = null;
     }
-    setColorState({
-      done: 0,
-      total: 0,
-      active: false,
-      missingModel: false,
-      error: null,
-    });
+    setColorState(INITIAL_COLOR_STATE);
 
     bookOpen(id)
       .then((view) => {
@@ -313,39 +279,39 @@ export function Reader({
     return () => {
       cancelled = true;
     };
-  }, [id, openAttempt]);
+  }, [id, openAttempt, flushProgress]);
 
-  // Reload chapter & retry coloring when returning from settings after model install.
+  // Refresh chapter coloring badges & hasModel when the user installs, switches,
+  // or removes a model in Settings without losing their current chapter/position.
   useEffect(() => {
-    if (wasModelsOpen.current && !modelsOpen && colorState.missingModel) {
-      setReloadNonce((n) => n + 1);
-    }
-    wasModelsOpen.current = modelsOpen;
-  }, [modelsOpen, colorState.missingModel]);
+    if (modelRevision === 0) return;
+    let cancelled = false;
+    bookOpen(id)
+      .then((view) => {
+        if (cancelled) return;
+        setBook((prev) =>
+          prev && prev.id === id
+            ? { ...prev, hasModel: view.hasModel, chapters: view.chapters }
+            : prev,
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [id, modelRevision]);
 
-  // Flush saved progress & cancel any background reader stream on unmount.
+  // Flush unsaved progress & cancel any background reader stream on unmount.
   useEffect(() => {
     return () => {
       if (swapFallbackRef.current) {
         clearTimeout(swapFallbackRef.current);
         swapFallbackRef.current = null;
       }
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-      const pending = lastSavedRef.current;
-      if (pending) {
-        void bookProgressSave(
-          pending.bookId,
-          pending.chapterIndex,
-          pending.paragraphIndex,
-          pending.ratio,
-        ).catch(() => {});
-      }
+      flushProgress();
       void bookChapterCancelStream().catch(() => {});
     };
-  }, []);
+  }, [flushProgress]);
 
   const position = useMemo(() => {
     if (!book || book.id !== id || index === null) return null;
@@ -389,12 +355,17 @@ export function Reader({
     const other: SlotIndex = slot === 0 ? 1 : 0;
     activeSlotRef.current = slot;
     slotReadyRef.current[other] = false;
+    const prev = slotsRef.current;
+    const next: [FrameSlot | null, FrameSlot | null] =
+      slot === 0 ? [prev[0], null] : [null, prev[1]];
+    slotsRef.current = next;
     setActiveSlot(slot);
-    setSlots((prev) => (slot === 0 ? [prev[0], null] : [null, prev[1]]));
+    setSlots(next);
   }, []);
 
   // Load each new chapter into the hidden staging slot while the current
   // chapter remains visible; promote atomically once `bridge.js` emits `painted`.
+  // All ref mutations and timer scheduling happen here (never inside setSlots).
   useEffect(() => {
     if (!chapterUrl || currentChapterIndex === null) return;
     pendingPatchesRef.current = [];
@@ -405,42 +376,62 @@ export function Reader({
       index: currentChapterIndex,
     };
 
-    setSlots((prev) => {
-      const active = activeSlotRef.current;
+    const prev = slotsRef.current;
+    const active = activeSlotRef.current;
+    if (swapFallbackRef.current) {
+      clearTimeout(swapFallbackRef.current);
+      swapFallbackRef.current = null;
+    }
+
+    let next: [FrameSlot | null, FrameSlot | null];
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    if (prev[active] === null) {
       // Initial chapter of the book: mount directly into the active slot.
-      if (prev[active] === null) {
-        targetSlotRef.current = active;
-        slotReadyRef.current[active] = false;
-        return active === 0 ? [nextSlotData, null] : [null, nextSlotData];
-      }
-      if (prev[active]?.url === chapterUrl) {
-        targetSlotRef.current = active;
-        if (swapFallbackRef.current) {
-          clearTimeout(swapFallbackRef.current);
-          swapFallbackRef.current = null;
-        }
-        return active === 0 ? [prev[0], null] : [null, prev[1]];
-      }
+      targetSlotRef.current = active;
+      slotReadyRef.current[active] = false;
+      next = active === 0 ? [nextSlotData, null] : [null, nextSlotData];
+    } else if (prev[active]?.url === chapterUrl) {
+      targetSlotRef.current = active;
+      next = active === 0 ? [prev[0], null] : [null, prev[1]];
+    } else {
       // Subsequent chapter: load off-screen in the inactive slot so the current
       // page stays painted with zero white flash until the new one is ready.
       const staging: SlotIndex = active === 0 ? 1 : 0;
       targetSlotRef.current = staging;
       slotReadyRef.current[staging] = false;
-      if (swapFallbackRef.current) clearTimeout(swapFallbackRef.current);
-      swapFallbackRef.current = setTimeout(() => {
+      fallbackTimer = setTimeout(() => {
         if (targetSlotRef.current === staging) {
           promoteSlot(staging);
         }
       }, 700);
-      return staging === 0 ? [nextSlotData, prev[1]] : [prev[0], nextSlotData];
-    });
+      swapFallbackRef.current = fallbackTimer;
+      next = staging === 0 ? [nextSlotData, prev[1]] : [prev[0], nextSlotData];
+    }
+
+    slotsRef.current = next;
+    setSlots(next);
+
+    return () => {
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        if (swapFallbackRef.current === fallbackTimer) {
+          swapFallbackRef.current = null;
+        }
+      }
+    };
   }, [chapterUrl, currentTitle, currentChapterIndex, promoteSlot]);
 
   // Trigger P0 progressive coloring for the active chapter and subscribe to patches.
   useEffect(() => {
     if (index === null || !book || book.id !== id) return;
     let cancelled = false;
+    let receivedPatch = false;
     let unlisten: (() => void) | undefined;
+
+    // Reset immediately on chapter switch so the previous chapter's progress
+    // badge or error alert never lingers while the new IPC call is in flight.
+    setColorState(INITIAL_COLOR_STATE);
 
     const markChapterColored = (chapterIdx: number) => {
       setBook((prev) => {
@@ -461,6 +452,7 @@ export function Reader({
       try {
         const off = await onChapterColorPatch((event) => {
           if (cancelled || event.book !== id || event.chapter !== index) return;
+          receivedPatch = true;
           if (event.patches.length > 0) {
             const { frame, ready } = getCurrentFrame();
             if (ready && frame) {
@@ -496,13 +488,17 @@ export function Reader({
       try {
         const status = await bookChapterColorize(id, index);
         if (cancelled) return;
-        setColorState({
-          done: status.cachedSentences,
-          total: status.totalSentences,
-          active: !status.fullyColored && !status.missingModel,
-          missingModel: status.missingModel,
-          error: null,
-        });
+        // Guard against a fast `chapter://color-patch` (including `finished: true`)
+        // that arrived before this initial IPC snapshot resolved.
+        if (!receivedPatch) {
+          setColorState({
+            done: status.cachedSentences,
+            total: status.totalSentences,
+            active: !status.fullyColored && !status.missingModel,
+            missingModel: status.missingModel,
+            error: null,
+          });
+        }
         if (status.fullyColored && !status.missingModel) {
           markChapterColored(index);
         }
@@ -522,9 +518,9 @@ export function Reader({
       cancelled = true;
       unlisten?.();
     };
-  }, [id, index, book?.id, chapterRevision]);
+  }, [id, index, book?.id, chapterRevision, getCurrentFrame]);
 
-  // Quietly prefetch (P1) the next chapter once the user settles on the current chapter.
+  // Quietly prefetch (P2) the next chapter once the user settles on the current chapter.
   useEffect(() => {
     const nextChapter = position?.next;
     if (!nextChapter || nextChapter.colored || colorState.missingModel) return;
@@ -553,12 +549,29 @@ export function Reader({
     [index, getCurrentFrame],
   );
 
+  const handleTocNavigate = useCallback(
+    (chapterIndex: number, anchor: string | null) => {
+      navigateToChapter(chapterIndex, anchor ? { anchor } : { edge: "start" });
+      setTocOpen(false);
+    },
+    [navigateToChapter],
+  );
+
+  const closeToc = useCallback(() => setTocOpen(false), []);
+
   const scheduleProgressSave = useCallback(
     (chapterIndex: number, paragraphIndex: number | null, ratio: number) => {
-      lastSavedRef.current = { bookId: id, chapterIndex, paragraphIndex, ratio };
+      lastSavedRef.current = {
+        bookId: id,
+        chapterIndex,
+        paragraphIndex,
+        ratio,
+        dirty: true,
+      };
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => {
         saveTimerRef.current = null;
+        if (lastSavedRef.current) lastSavedRef.current.dirty = false;
         void bookProgressSave(id, chapterIndex, paragraphIndex, ratio).catch(() => {});
       }, 450);
     },
@@ -649,6 +662,7 @@ export function Reader({
         }
         case "key": {
           if (msg.key === "Escape") {
+            if (modelsOpen || document.querySelector("dialog[open]")) break;
             if (prefsOpen) setPrefsOpen(false);
             else if (tocOpen) setTocOpen(false);
             else onClose();
@@ -674,6 +688,7 @@ export function Reader({
     position,
     prefsOpen,
     tocOpen,
+    modelsOpen,
     onClose,
     navigateToChapter,
     scheduleProgressSave,
@@ -684,21 +699,25 @@ export function Reader({
   const onKeyDown = useCallback(
     (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      if (
-        target?.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "")
-      ) {
-        return;
-      }
-      if (document.querySelector("dialog[open]")) return;
+      if (modelsOpen || document.querySelector("dialog[open]")) return;
 
-      const { frame, ready } = getCurrentFrame();
+      const target = event.target as HTMLElement | null;
+      const inFormControl =
+        Boolean(target?.isContentEditable) ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "");
+
       if (event.key === "Escape") {
         if (prefsOpen) setPrefsOpen(false);
         else if (tocOpen) setTocOpen(false);
         else onClose();
-      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        return;
+      }
+
+      if (inFormControl) return;
+
+      const { frame, ready } = getCurrentFrame();
+      if (event.key === "ArrowRight") {
         if (prefs.viewMode === "paginated" && ready && frame) {
           postToFrame(frame, { source: "biocn-host", type: "step", direction: "next" });
         } else if (position?.next) {
@@ -721,7 +740,16 @@ export function Reader({
       }
       event.preventDefault();
     },
-    [position, prefs.viewMode, prefsOpen, tocOpen, onClose, navigateToChapter, getCurrentFrame],
+    [
+      position,
+      prefs.viewMode,
+      prefsOpen,
+      tocOpen,
+      modelsOpen,
+      onClose,
+      navigateToChapter,
+      getCurrentFrame,
+    ],
   );
 
   useEffect(() => {
@@ -738,7 +766,9 @@ export function Reader({
     if (direction === "next" && position?.next) {
       navigateToChapter(position.next.index, { edge: "start" });
     } else if (direction === "prev" && position?.previous) {
-      navigateToChapter(position.previous.index, { edge: "start" });
+      navigateToChapter(position.previous.index, {
+        edge: prefs.viewMode === "paginated" ? "end" : "start",
+      });
     }
   };
 
@@ -759,9 +789,15 @@ export function Reader({
   // Keep chrome visible while loading or showing an error so the user always
   // has access to back/retry controls.
   const showChrome = chromeVisible || loading || error !== null || tocOpen;
+  const mainThemeAttr =
+    effectiveTheme === "dark"
+      ? "dark"
+      : effectiveTheme === "light" || effectiveTheme === "sepia"
+        ? "light"
+        : undefined;
 
   return (
-    <div className="drawer drawer-end h-dvh overflow-hidden bg-base-100 text-base-content">
+    <div className="drawer drawer-end h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] overflow-hidden bg-base-100 text-base-content">
       <input
         id="reader-toc-drawer"
         type="checkbox"
@@ -770,9 +806,10 @@ export function Reader({
         onChange={(event) => setTocOpen(event.target.checked)}
       />
 
-      <div className="drawer-content relative flex h-dvh flex-col overflow-hidden">
+      <div className="drawer-content relative flex h-full flex-col overflow-hidden">
         <header
           aria-hidden={!showChrome}
+          inert={!showChrome}
           className={`absolute inset-x-0 top-0 z-20 border-b border-base-content/10 bg-base-100/95 backdrop-blur transition-all duration-200 ${
             showChrome
               ? "translate-y-0 opacity-100"
@@ -808,7 +845,7 @@ export function Reader({
                   <span
                     role="status"
                     aria-label="本章着色进度"
-                    className="badge badge-soft badge-primary badge-xs gap-1 shrink-0"
+                    className="badge badge-soft badge-primary badge-xs shrink-0 gap-1"
                   >
                     <span className="loading loading-spinner loading-xs size-2.5" />
                     着色 {colorPercent}%
@@ -817,7 +854,7 @@ export function Reader({
                 {colorState.missingModel && (
                   <button
                     type="button"
-                    className="badge badge-soft badge-warning badge-xs cursor-pointer shrink-0 hover:badge-warning"
+                    className="badge badge-soft badge-warning badge-xs shrink-0 cursor-pointer hover:badge-warning"
                     onClick={onOpenSettings}
                   >
                     下载模型以启用着色
@@ -836,7 +873,10 @@ export function Reader({
               着色
             </button>
 
-            <div ref={prefsMenuRef} className={`dropdown dropdown-end ${prefsOpen ? "dropdown-open" : ""}`}>
+            <div
+              ref={prefsMenuRef}
+              className={`dropdown dropdown-end ${prefsOpen ? "dropdown-open" : ""}`}
+            >
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -847,310 +887,11 @@ export function Reader({
                 Aa
               </button>
               {prefsOpen && (
-                <div className="dropdown-content card z-30 mt-2 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto bg-base-100 shadow-xl ring-1 ring-base-content/10">
-                  <div className="card-body gap-3 p-4 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-base-content/70">翻页方式</span>
-                      <div className="join">
-                        {(
-                          [
-                            ["scrolled", "滚动"],
-                            ["paginated", "分页"],
-                          ] as [ReaderViewMode, string][]
-                        ).map(([mode, label]) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            className={`btn btn-xs join-item ${prefs.viewMode === mode ? "btn-primary" : "btn-ghost"}`}
-                            onClick={() => updatePrefs({ viewMode: mode })}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {prefs.viewMode === "paginated" && (
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-base-content/70">栏数</span>
-                        <div className="join">
-                          {(
-                            [
-                              ["auto", "自动"],
-                              [1, "单栏"],
-                              [2, "双栏"],
-                            ] as [ReaderColumns, string][]
-                          ).map(([cols, label]) => (
-                            <button
-                              key={String(cols)}
-                              type="button"
-                              className={`btn btn-xs join-item ${prefs.columns === cols ? "btn-primary" : "btn-ghost"}`}
-                              onClick={() => updatePrefs({ columns: cols })}
-                            >
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-base-content/70">纸色</span>
-                      <div className="join">
-                        {(
-                          [
-                            ["auto", "自动"],
-                            ["light", "亮"],
-                            ["sepia", "纸"],
-                            ["dark", "暗"],
-                          ] as [ReaderTheme, string][]
-                        ).map(([theme, label]) => (
-                          <button
-                            key={theme}
-                            type="button"
-                            className={`btn btn-xs join-item ${prefs.theme === theme ? "btn-primary" : "btn-ghost"}`}
-                            onClick={() => updatePrefs({ theme })}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-base-content/70">字体</span>
-                      <div className="join">
-                        {(
-                          [
-                            ["default", "默认"],
-                            ["serif", "思源宋体"],
-                          ] as [ReaderFontFamily, string][]
-                        ).map(([fontFamily, label]) => (
-                          <button
-                            key={fontFamily}
-                            type="button"
-                            className={`btn btn-xs join-item ${prefs.fontFamily === fontFamily ? "btn-primary" : "btn-ghost"}`}
-                            onClick={() => updatePrefs({ fontFamily })}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-base-content/70">字号</span>
-                        <span className="text-xs tabular-nums text-base-content/60">
-                          {prefs.fontSize}px
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        aria-label="字号"
-                        min={13}
-                        max={28}
-                        step={1}
-                        value={prefs.fontSize}
-                        onChange={(event) =>
-                          updatePrefs({ fontSize: Number(event.target.value) })
-                        }
-                        className="range range-xs range-primary"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-base-content/70">行距</span>
-                        <span className="text-xs tabular-nums text-base-content/60">
-                          {prefs.lineHeight.toFixed(1)}
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        aria-label="行距"
-                        min={1.4}
-                        max={2.4}
-                        step={0.1}
-                        value={prefs.lineHeight}
-                        onChange={(event) =>
-                          updatePrefs({ lineHeight: Number(event.target.value) })
-                        }
-                        className="range range-xs range-primary"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-base-content/70">段间距</span>
-                        <span className="text-xs tabular-nums text-base-content/60">
-                          {prefs.paragraphSpacing.toFixed(1)}em
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        aria-label="段间距"
-                        min={0.4}
-                        max={2.0}
-                        step={0.2}
-                        value={prefs.paragraphSpacing}
-                        onChange={(event) =>
-                          updatePrefs({ paragraphSpacing: Number(event.target.value) })
-                        }
-                        className="range range-xs range-primary"
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-base-content/70">页边距</span>
-                      <div className="join">
-                        {(
-                          [
-                            ["compact", "窄"],
-                            ["normal", "适中"],
-                            ["wide", "宽"],
-                          ] as [ReaderPageMargin, string][]
-                        ).map(([pageMargin, label]) => (
-                          <button
-                            key={pageMargin}
-                            type="button"
-                            className={`btn btn-xs join-item ${prefs.pageMargin === pageMargin ? "btn-primary" : "btn-ghost"}`}
-                            onClick={() => updatePrefs({ pageMargin })}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-base-content/70">对齐</span>
-                      <div className="join">
-                        {(
-                          [
-                            ["default", "默认"],
-                            ["justify", "两端对齐"],
-                          ] as [ReaderTextAlign, string][]
-                        ).map(([textAlign, label]) => (
-                          <button
-                            key={textAlign}
-                            type="button"
-                            className={`btn btn-xs join-item ${prefs.textAlign === textAlign ? "btn-primary" : "btn-ghost"}`}
-                            onClick={() => updatePrefs({ textAlign })}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-base-content/70">翻页动画</span>
-                      <input
-                        type="checkbox"
-                        aria-label="翻页动画开关"
-                        className="toggle toggle-primary toggle-sm"
-                        checked={prefs.pageAnimation}
-                        onChange={(event) =>
-                          updatePrefs({ pageAnimation: event.target.checked })
-                        }
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-base-content/70">深色插图护眼</span>
-                      <input
-                        type="checkbox"
-                        aria-label="深色插图护眼开关"
-                        className="toggle toggle-primary toggle-sm"
-                        checked={prefs.dimImagesInDark}
-                        onChange={(event) =>
-                          updatePrefs({ dimImagesInDark: event.target.checked })
-                        }
-                      />
-                    </div>
-
-                    <div className="divider my-0" />
-
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-base-content/70">主谓宾着色</span>
-                      <input
-                        type="checkbox"
-                        aria-label="主谓宾着色开关"
-                        className="toggle toggle-primary toggle-sm"
-                        checked={prefs.coloringEnabled}
-                        onChange={(event) =>
-                          updatePrefs({ coloringEnabled: event.target.checked })
-                        }
-                      />
-                    </div>
-
-                    {prefs.coloringEnabled && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-medium text-base-content/70">颜色</span>
-                          {hasCustomSvoColors(prefs.svoColors) && (
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-xs h-6 min-h-6 px-1.5 text-base-content/60"
-                              onClick={() => updatePrefs({ svoColors: DEFAULT_SVO_OVERRIDES })}
-                            >
-                              恢复默认
-                            </button>
-                          )}
-                        </div>
-                        <div className="grid grid-cols-3 gap-1.5">
-                          {(
-                            [
-                              ["subject", "主语"],
-                              ["predicate", "谓语"],
-                              ["object", "宾语"],
-                            ] as [SvoRole, string][]
-                          ).map(([role, label]) => {
-                            const resolvedPaper: "light" | "sepia" | "dark" =
-                              effectiveTheme === "sepia"
-                                ? "sepia"
-                                : effectiveTheme === "dark" ||
-                                    (effectiveTheme === "auto" &&
-                                      typeof window !== "undefined" &&
-                                      window.matchMedia?.("(prefers-color-scheme: dark)").matches)
-                                  ? "dark"
-                                  : "light";
-                            const color =
-                              prefs.svoColors[role] ?? DEFAULT_SVO_COLORS[resolvedPaper][role];
-                            return (
-                              <label
-                                key={role}
-                                className="btn btn-xs btn-ghost relative h-7 min-h-7 justify-center gap-1.5 border border-base-content/15 font-normal"
-                              >
-                                <span
-                                  aria-hidden="true"
-                                  className="size-2.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: color }}
-                                />
-                                <span>{label}</span>
-                                <input
-                                  type="color"
-                                  aria-label={`${label}颜色`}
-                                  value={color}
-                                  onChange={(event) =>
-                                    updatePrefs({
-                                      svoColors: {
-                                        ...prefs.svoColors,
-                                        [role]: event.target.value,
-                                      },
-                                    })
-                                  }
-                                  className="sr-only"
-                                />
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <ReaderPrefsPopover
+                  prefs={prefs}
+                  effectiveTheme={effectiveTheme}
+                  onUpdate={updatePrefs}
+                />
               )}
             </div>
 
@@ -1190,6 +931,7 @@ export function Reader({
         )}
 
         <main
+          data-theme={mainThemeAttr}
           className={`relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden transition-colors duration-200 ${readerBgClass(effectiveTheme)}`}
           aria-busy={loading}
         >
@@ -1242,6 +984,7 @@ export function Reader({
 
         <footer
           aria-hidden={!showChrome}
+          inert={!showChrome}
           className={`absolute inset-x-0 bottom-0 z-20 border-t border-base-content/10 bg-base-100/95 backdrop-blur transition-all duration-200 ${
             showChrome
               ? "translate-y-0 opacity-100"
@@ -1269,7 +1012,11 @@ export function Reader({
                 onChange={(event) => {
                   const ratio = Number(event.target.value) / 100;
                   setViewport((prev) => ({ ...prev, ratio }));
-                  postToFrame(getCurrentFrame().frame, { source: "biocn-host", type: "seek", ratio });
+                  postToFrame(getCurrentFrame().frame, {
+                    source: "biocn-host",
+                    type: "seek",
+                    ratio,
+                  });
                 }}
                 className="range range-xs hidden flex-1 sm:block"
               />
@@ -1294,70 +1041,13 @@ export function Reader({
         </footer>
       </div>
 
-      <div className="drawer-side z-40">
-        <label
-          htmlFor="reader-toc-drawer"
-          aria-label="关闭目录"
-          className="drawer-overlay"
-        />
-        <nav
-          aria-label="章节目录"
-          className="flex h-full w-80 max-w-[85vw] flex-col bg-base-100 text-base-content shadow-xl"
-        >
-          <div className="flex items-center justify-between border-b border-base-content/10 px-4 py-3">
-            <h2 className="text-sm font-semibold">目录</h2>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              onClick={() => setTocOpen(false)}
-            >
-              关闭
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
-            {book && (
-              <ul className="menu w-full flex-nowrap">
-                {book.toc.length > 0
-                  ? book.toc.map((entry, idx) => (
-                      <TocItem
-                        key={`${entry.label}-${idx}`}
-                        item={entry}
-                        currentIndex={index}
-                        coloredSet={coloredSet}
-                        onNavigate={(chapterIndex, anchor) => {
-                          navigateToChapter(chapterIndex, { anchor });
-                          setTocOpen(false);
-                        }}
-                      />
-                    ))
-                  : book.chapters.map((entry) => (
-                      <li key={entry.index}>
-                        <button
-                          type="button"
-                          className={entry.index === index ? "menu-active" : undefined}
-                          onClick={() => {
-                            navigateToChapter(entry.index, { edge: "start" });
-                            setTocOpen(false);
-                          }}
-                        >
-                          <span className="min-w-0 flex-1 truncate text-left">
-                            {entry.title ?? `第 ${entry.index + 1} 节`}
-                          </span>
-                          {entry.colored && (
-                            <span
-                              className="badge badge-xs badge-primary shrink-0"
-                              title="已完成着色"
-                              aria-label="已着色"
-                            />
-                          )}
-                        </button>
-                      </li>
-                    ))}
-              </ul>
-            )}
-          </div>
-        </nav>
-      </div>
+      <ReaderTocDrawer
+        book={book}
+        currentIndex={index}
+        coloredSet={coloredSet}
+        onNavigate={handleTocNavigate}
+        onClose={closeToc}
+      />
     </div>
   );
 }

@@ -136,5 +136,63 @@ describe("Reader lifecycle", () => {
         ),
       ).toBe(true);
     });
+    // Also refreshes bookOpen metadata so TOC colored badges reflect the new model.
+    expect(openMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a late bookChapterColorize snapshot overwrite an already-finished patch event", async () => {
+    let emitPatch: ((event: reading.ChapterColorPatch) => void) | null = null;
+    onPatchMock.mockImplementation(async (cb) => {
+      emitPatch = cb;
+      return () => {};
+    });
+    const slowColorize = deferred<reading.ChapterColorState>();
+    colorizeMock.mockReturnValue(slowColorize.promise);
+
+    render(<Reader id="a" {...baseProps} />);
+    await screen.findByTitle("Book A One");
+    await waitFor(() => expect(emitPatch).not.toBeNull());
+
+    // Patch event finishes BEFORE bookChapterColorize resolves.
+    act(() => {
+      emitPatch!({
+        book: "a",
+        chapter: 1,
+        done: 10,
+        total: 10,
+        finished: true,
+        missingModel: false,
+        error: null,
+        patches: [],
+      });
+    });
+
+    // Late initial snapshot arrives saying 0/10 cached, not fully colored.
+    await act(async () => {
+      slowColorize.resolve({
+        index: 1,
+        totalSentences: 10,
+        cachedSentences: 0,
+        fullyColored: false,
+        missingModel: false,
+      });
+    });
+
+    // Spinner ("本章着色进度") must NOT reappear stuck on screen.
+    expect(screen.queryByRole("status", { name: "本章着色进度" })).toBeNull();
+  });
+
+  it("allows Escape to close the Aa popover even when an input slider has focus", async () => {
+    const user = userEvent.setup();
+    render(<Reader id="a" {...baseProps} />);
+    await screen.findByTitle("Book A One");
+
+    await user.click(screen.getByRole("button", { name: "阅读设置" }));
+    const fontSlider = screen.getByRole("slider", { name: "字号" });
+    fontSlider.focus();
+    expect(document.activeElement).toBe(fontSlider);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("slider", { name: "字号" })).toBeNull();
   });
 });
