@@ -188,19 +188,19 @@ const MODEL_BENCHMARKS = [
     name: '省流 (INT8)',
     recommended: true,
     size: '64.3 MB',
-    throughput: '331 句/秒',
-    wholeBook: '约 2 分 10 秒',
-    firstPaint: '50 ms',
-    peakMemory: '约 189 MB',
+    throughput: '361 句/秒',
+    wholeBook: '1 分 59 秒',
+    firstPaint: '51 ms',
+    peakMemory: '约 200 MB',
   },
   {
     name: '高精度 (FP16)',
     recommended: false,
     size: '74.6 MB',
-    throughput: '107 句/秒',
-    wholeBook: '约 6 分 43 秒',
-    firstPaint: '136 ms',
-    peakMemory: '约 368 MB',
+    throughput: '111 句/秒',
+    wholeBook: '6 分 26 秒',
+    firstPaint: '135 ms',
+    peakMemory: '约 377 MB',
   },
 ] as const;
 
@@ -212,25 +212,25 @@ function BenchmarkSection() {
           性能参考
         </h2>
         <p className="max-w-2xl text-lg leading-relaxed text-base-content/70">
-          全流程本地 CPU 运行，不依赖显卡或云端接口。安装后可在应用设置中按需选择「省流」或「高精度」模型；以下为实测参考数据（测试样本：107 万字《红楼梦》，137 章）。
+          全流程本地 CPU 运行，不依赖显卡或云端接口。安装后可在应用设置中按需选择「省流」或「高精度」模型；以下为整本 107 万字《红楼梦》（137 章、42,961 唯一句）的实测数据。
         </p>
       </div>
 
       <div className="stats stats-vertical w-full bg-base-200 shadow-sm lg:stats-horizontal">
         <div className="stat">
-          <div className="stat-title">首屏着色响应（INT8）</div>
-          <div className="stat-value text-primary">~50 ms</div>
-          <div className="stat-desc">后台全书着色满载时抢占实测（首句 28.6 ms）</div>
+          <div className="stat-title">整本《红楼梦》（INT8）</div>
+          <div className="stat-value text-primary">1 分 59 秒</div>
+          <div className="stat-desc">361 句/秒，107 万字含本地缓存写入，零失败</div>
         </div>
         <div className="stat">
-          <div className="stat-title">持续分析吞吐（INT8）</div>
-          <div className="stat-value">331 句/秒</div>
-          <div className="stat-desc">含本地持久化写入，整本《红楼梦》约 2 分 10 秒</div>
+          <div className="stat-title">首屏着色响应（INT8）</div>
+          <div className="stat-value">~51 ms</div>
+          <div className="stat-desc">后台全书着色满载时抢占实测（首句 29.2 ms）</div>
         </div>
         <div className="stat">
           <div className="stat-title">二次阅读缓存命中</div>
-          <div className="stat-value">~36 ms</div>
-          <div className="stat-desc">已着色章节直接读取本地 SQLite，零模型调用</div>
+          <div className="stat-value">1.4 ms/章</div>
+          <div className="stat-desc">整本 137 章读取仅 191 ms，零模型调用</div>
         </div>
       </div>
 
@@ -270,9 +270,9 @@ function BenchmarkSection() {
             </table>
           </div>
           <p className="text-xs leading-relaxed text-base-content/60">
-            测试口径：AMD Ryzen 7 9700X（桌面端纯 CPU · ONNX Runtime），跨《红楼梦》全书 137 章抽样 9,742
-            个唯一句含 SQLite WAL 落盘实测，整本耗时按全书 42,961 个唯一句折算；二次缓存命中为 9,898
-            句跨章读取耗时。实际耗时视设备 CPU 性能而定，阅读或任务闲置后会自动卸载模型释放内存。
+            测试口径：AMD Ryzen 7 9700X（桌面端纯 CPU · ONNX Runtime），整本《红楼梦》（137 章、1,073,984
+            字、42,961 唯一句）全量分析并写入本地 SQLite WAL 缓存实测（缓存约 43 MB）。实际耗时视设备 CPU
+            性能而定，闲置后会自动卸载模型释放内存。
           </p>
         </div>
       </div>

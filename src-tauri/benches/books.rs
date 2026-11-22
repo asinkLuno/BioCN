@@ -104,6 +104,7 @@ fn main() {
     let mut stages = false;
     let mut pipeline = false;
     let mut e2e = false;
+    let mut new_only = false;
     let mut positional: Vec<String> = Vec::new();
     for arg in std::env::args().skip(1) {
         if let Some(value) = arg.strip_prefix("--variant=") {
@@ -124,6 +125,8 @@ fn main() {
             pipeline = true;
         } else if arg == "--e2e" {
             e2e = true;
+        } else if arg == "--new-only" {
+            new_only = true;
         } else if arg == "--bench" {
             // `cargo bench` appends its own mode flag to the argv of a
             // `harness = false` binary; not one of ours, just drop it.
@@ -189,7 +192,7 @@ fn main() {
         return;
     }
     if e2e {
-        mode_e2e(&models, &variants, threads_first, &parsed);
+        mode_e2e(&models, &variants, threads_first, &parsed, new_only);
         return;
     }
 
@@ -743,7 +746,7 @@ fn current_rss_mib() -> Option<f64> {
 /// new persistent `PipelineScheduler`, including SQLite WAL writes, cache-hit
 /// re-reads, exact output parity, P0 preemption latency under P3 load,
 /// cancellation latency, idle auto-unload callback, and RSS memory delta.
-fn mode_e2e(models: &Path, variants: &[String], threads: &str, books: &[Book]) {
+fn mode_e2e(models: &Path, variants: &[String], threads: &str, books: &[Book], new_only: bool) {
     let book = &books[0];
     let mut seen_pool = std::collections::HashSet::new();
     let all_unique_texts: Vec<String> = book
@@ -773,67 +776,73 @@ fn mode_e2e(models: &Path, variants: &[String], threads: &str, books: &[Book]) {
             rss_loaded.unwrap_or(0.0) - rss_before.unwrap_or(0.0),
         );
 
-        // 1. Old runtime path: per-chapter misses chunked by 8 + analyze_all + SQLite save/8.
-        let old_dir = tempfile::tempdir().expect("tempdir");
-        let old_cache = AnalysisCache::open(old_dir.path()).expect("open old cache");
-        let mut old_answers: std::collections::HashMap<String, Option<Vec<Segment>>> =
-            std::collections::HashMap::with_capacity(book.unique.len());
-        let mut old_analyzed = 0usize;
-        let mut old_failed = 0usize;
-        let mut old_txs = 0usize;
-        let old_start = Instant::now();
-        for (ch_idx, chapter) in book.chapter_uniques.iter().enumerate() {
-            let sentences: Vec<String> = chapter
-                .iter()
-                .map(|&idx| book.sentences[idx].clone())
-                .collect();
-            let cached = old_cache.get(variant, &sentences).expect("cache get");
-            let misses: Vec<&str> = sentences
-                .iter()
-                .filter(|s| !cached.contains_key(*s))
-                .map(String::as_str)
-                .collect();
-            if misses.is_empty() {
-                old_cache.mark_chapter(variant, "book", ch_idx).expect("mark");
-                continue;
-            }
-            let mut ch_failed = 0usize;
-            for chunk in misses.chunks(8) {
-                let mut fresh = Vec::with_capacity(chunk.len());
-                for (s, ans) in analyze_all(&loaded.resources, &loaded.sessions, chunk) {
-                    old_analyzed += 1;
-                    match ans {
-                        Ok(segs) => {
-                            old_answers.insert(s.to_owned(), segs.clone());
-                            fresh.push((s.to_owned(), segs));
-                        }
-                        Err(_) => {
-                            old_failed += 1;
-                            ch_failed += 1;
+        // 1. Optional old runtime path: per-chapter misses chunked by 8 + analyze_all + SQLite save/8.
+        let mut old_answers: Option<std::collections::HashMap<String, Option<Vec<Segment>>>> = None;
+        let mut old_rate_opt: Option<f64> = None;
+        if !new_only {
+            let old_dir = tempfile::tempdir().expect("tempdir");
+            let old_cache = AnalysisCache::open(old_dir.path()).expect("open old cache");
+            let mut answers_map: std::collections::HashMap<String, Option<Vec<Segment>>> =
+                std::collections::HashMap::with_capacity(book.unique.len());
+            let mut old_analyzed = 0usize;
+            let mut old_failed = 0usize;
+            let mut old_txs = 0usize;
+            let old_start = Instant::now();
+            for (ch_idx, chapter) in book.chapter_uniques.iter().enumerate() {
+                let sentences: Vec<String> = chapter
+                    .iter()
+                    .map(|&idx| book.sentences[idx].clone())
+                    .collect();
+                let cached = old_cache.get(variant, &sentences).expect("cache get");
+                let misses: Vec<&str> = sentences
+                    .iter()
+                    .filter(|s| !cached.contains_key(*s))
+                    .map(String::as_str)
+                    .collect();
+                if misses.is_empty() {
+                    old_cache.mark_chapter(variant, "book", ch_idx).expect("mark");
+                    continue;
+                }
+                let mut ch_failed = 0usize;
+                for chunk in misses.chunks(8) {
+                    let mut fresh = Vec::with_capacity(chunk.len());
+                    for (s, ans) in analyze_all(&loaded.resources, &loaded.sessions, chunk) {
+                        old_analyzed += 1;
+                        match ans {
+                            Ok(segs) => {
+                                answers_map.insert(s.to_owned(), segs.clone());
+                                fresh.push((s.to_owned(), segs));
+                            }
+                            Err(_) => {
+                                old_failed += 1;
+                                ch_failed += 1;
+                            }
                         }
                     }
+                    if !fresh.is_empty() {
+                        old_cache
+                            .save_chapter(variant, "book", ch_idx, false, &fresh)
+                            .expect("save old");
+                        old_txs += 1;
+                    }
                 }
-                if !fresh.is_empty() {
-                    old_cache
-                        .save_chapter(variant, "book", ch_idx, false, &fresh)
-                        .expect("save old");
-                    old_txs += 1;
+                if ch_failed == 0 {
+                    old_cache.mark_chapter(variant, "book", ch_idx).expect("mark");
                 }
             }
-            if ch_failed == 0 {
-                old_cache.mark_chapter(variant, "book", ch_idx).expect("mark");
-            }
+            let old_wall = old_start.elapsed();
+            let old_rate = old_analyzed as f64 / old_wall.as_secs_f64().max(f64::EPSILON);
+            println!(
+                "  [旧方案 batch=8 + analyze_all + SQLite] wall={:.2}s  {:.1} 句/s  analyzed={} failed={} sqlite_txs={}",
+                old_wall.as_secs_f64(),
+                old_rate,
+                old_analyzed,
+                old_failed,
+                old_txs,
+            );
+            old_answers = Some(answers_map);
+            old_rate_opt = Some(old_rate);
         }
-        let old_wall = old_start.elapsed();
-        let old_rate = old_analyzed as f64 / old_wall.as_secs_f64().max(f64::EPSILON);
-        println!(
-            "  [旧方案 batch=8 + analyze_all + SQLite] wall={:.2}s  {:.1} 句/s  analyzed={} failed={} sqlite_txs={}",
-            old_wall.as_secs_f64(),
-            old_rate,
-            old_analyzed,
-            old_failed,
-            old_txs,
-        );
 
         // 2. New runtime path: persistent PipelineScheduler + per-chapter submit + SQLite save/32.
         let idle_hits = Arc::new(AtomicUsize::new(0));
@@ -878,7 +887,9 @@ fn mode_e2e(models: &Path, variants: &[String], threads: &str, books: &[Book]) {
                     new_analyzed += 1;
                     match ans {
                         Ok(segs) => {
-                            if old_answers.get(&s) != Some(&segs) {
+                            if let Some(ref map) = old_answers
+                                && map.get(&s) != Some(&segs)
+                            {
                                 mismatches += 1;
                             }
                             fresh.push((s, segs));
@@ -909,15 +920,16 @@ fn mode_e2e(models: &Path, variants: &[String], threads: &str, books: &[Book]) {
         });
         let new_wall = new_start.elapsed();
         let new_rate = new_analyzed as f64 / new_wall.as_secs_f64().max(f64::EPSILON);
-        let speedup = (new_rate / old_rate - 1.0) * 100.0;
         let db_mib = std::fs::metadata(new_dir.path().join("analysis.db"))
             .map(|m| m.len() as f64 / (1024.0 * 1024.0))
             .unwrap_or(0.0);
+        let delta = old_rate_opt
+            .map(|old_rate| format!(" ({:+.1}%)", (new_rate / old_rate - 1.0) * 100.0))
+            .unwrap_or_default();
         println!(
-            "  [新方案 PipelineScheduler + SQLite/32]  wall={:.2}s  {:.1} 句/s ({:+.1}%)  analyzed={} failed={} sqlite_txs={} mismatch={} db={:.2} MiB",
+            "  [新方案 PipelineScheduler + SQLite/32]  wall={:.2}s  {:.1} 句/s{delta}  analyzed={} failed={} sqlite_txs={} mismatch={} db={:.2} MiB",
             new_wall.as_secs_f64(),
             new_rate,
-            speedup,
             new_analyzed,
             new_failed,
             new_txs,
@@ -926,8 +938,6 @@ fn mode_e2e(models: &Path, variants: &[String], threads: &str, books: &[Book]) {
         );
         assert_eq!(mismatches, 0, "PipelineScheduler output drifted from analyze_all!");
         drop(old_answers);
-        drop(old_cache);
-        drop(old_dir);
 
         // 3. Cache-hit pass across all chapters (0 model calls).
         let hit_start = Instant::now();
