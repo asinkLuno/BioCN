@@ -380,13 +380,13 @@ function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (next: Theme
             ? 'bg-primary/15 font-medium text-primary'
             : 'btn-ghost text-base-content/60 hover:text-base-content'
         }`}
-        aria-label="白天模式"
+        aria-label="浅色模式"
         aria-pressed={theme === 'light'}
-        title="白天模式"
+        title="浅色模式"
         onClick={() => onChange('light')}
       >
         <Sun aria-hidden="true" className="size-3.5" />
-        <span className="hidden md:inline">白天</span>
+        <span className="hidden md:inline">浅色</span>
       </button>
       <button
         type="button"
@@ -395,13 +395,13 @@ function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (next: Theme
             ? 'bg-primary/15 font-medium text-primary'
             : 'btn-ghost text-base-content/60 hover:text-base-content'
         }`}
-        aria-label="夜晚模式"
+        aria-label="深色模式"
         aria-pressed={theme === 'dark'}
-        title="夜晚模式"
+        title="深色模式"
         onClick={() => onChange('dark')}
       >
         <Moon aria-hidden="true" className="size-3.5" />
-        <span className="hidden md:inline">夜晚</span>
+        <span className="hidden md:inline">深色</span>
       </button>
     </div>
   );
