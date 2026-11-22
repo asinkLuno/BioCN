@@ -69,8 +69,21 @@ pub fn write_active_variant<R: Runtime>(
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let temporary = target.with_extension(format!("json.{}.{}.tmp", std::process::id(), unique));
-    std::fs::write(&temporary, text).map_err(|e| e.to_string())?;
-    std::fs::rename(&temporary, &target).map_err(|e| e.to_string())
+    let write_result = (|| -> std::io::Result<()> {
+        use std::io::Write as _;
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(e.to_string());
+    }
+    std::fs::rename(&temporary, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&temporary);
+        e.to_string()
+    })
 }
 
 #[cfg(test)]

@@ -187,12 +187,7 @@ fn request_error(error: &reqwest::Error) -> String {
 #[tauri::command]
 pub async fn check_update(app: AppHandle) -> Result<UpdateStatus, String> {
     let current_version = app.package_info().version.to_string();
-    let client = crate::net::builder()
-        .timeout(Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("BioCN-Update-Check")
-        .build()
-        .map_err(|error| format!("无法发起更新检查：{error}"))?;
+    let client = crate::net::update_check_client()?;
     let body = client
         .get(RELEASES_URL)
         .header("Cache-Control", "no-cache")
@@ -207,6 +202,11 @@ pub async fn check_update(app: AppHandle) -> Result<UpdateStatus, String> {
         serde_json::from_str(&body).map_err(|error| format!("更新信息解析失败：{error}"))?;
     Ok(build_status(&current_version, &releases))
 }
+
+/// Serializes in-app installer downloads so two clicks cannot interleave the
+/// same `.part` file.
+static DOWNLOAD_LOCK: std::sync::OnceLock<tauri::async_runtime::Mutex<()>> =
+    std::sync::OnceLock::new();
 
 /// 下载目录：应用缓存内的 `updates/`，属于派生数据，系统可随时清理。
 fn download_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -232,6 +232,11 @@ pub async fn download_update(
     url: String,
     sha256: String,
 ) -> Result<DownloadResult, String> {
+    let lock = DOWNLOAD_LOCK.get_or_init(|| tauri::async_runtime::Mutex::new(()));
+    let _guard = lock
+        .try_lock()
+        .map_err(|_| "安装包正在下载中，请稍候".to_string())?;
+
     let expected = normalize_sha256(&Some(sha256))
         .ok_or_else(|| "更新信息缺少有效的 SHA-256 校验值".to_string())?;
     let file_name = asset_file_name(&url).ok_or_else(|| "下载地址不是官方发布包".to_string())?;
@@ -239,12 +244,7 @@ pub async fn download_update(
     let target = dir.join(&file_name);
     let partial = dir.join(format!("{file_name}.part"));
 
-    let client = crate::net::builder()
-        .connect_timeout(Duration::from_secs(20))
-        .read_timeout(Duration::from_secs(60))
-        .user_agent("BioCN-Update-Download")
-        .build()
-        .map_err(|error| format!("无法发起下载：{error}"))?;
+    let client = crate::net::update_download_client()?;
     let mut response = client
         .get(&url)
         .send()
@@ -282,9 +282,11 @@ pub async fn download_update(
         let _ = std::fs::remove_file(&partial);
         return Err(error);
     }
-    written
-        .flush()
-        .map_err(|error| format!("无法写入安装包：{error}"))?;
+    if let Err(error) = written.flush().and_then(|_| written.sync_all()) {
+        drop(written);
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("无法写入安装包：{error}"));
+    }
     drop(written);
 
     let actual = hex_digest(&hasher.finalize());
@@ -295,7 +297,10 @@ pub async fn download_update(
             "安装包校验失败：SHA-256 不匹配（期望 {expected}，实际 {actual}），请重新下载"
         ));
     }
-    std::fs::rename(&partial, &target).map_err(|error| format!("无法保存安装包：{error}"))?;
+    if let Err(error) = std::fs::rename(&partial, &target) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("无法保存安装包：{error}"));
+    }
     let _ = app.emit(
         UPDATE_PROGRESS_EVENT,
         DownloadProgress { received, total: total.max(received) },
@@ -304,30 +309,41 @@ pub async fn download_update(
 }
 
 /// 在文件管理器里显示下载完成的安装包。路径必须是本模块刚下载的文件：
-/// `updates/` 之外的路径一律拒绝，这个命令才不会变成"打开任意文件"。
+/// `updates/` 之外的路径（以及 `updates/` 目录本身）一律拒绝。
 #[tauri::command]
-pub fn reveal_update(app: AppHandle, path: String) -> Result<(), String> {
+pub async fn reveal_update(app: AppHandle, path: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let dir = download_dir(&app)?;
-    let dir = dir.canonicalize().map_err(|error| format!("无法定位下载目录：{error}"))?;
-    let canonical =
-        Path::new(&path).canonicalize().map_err(|error| format!("无法定位安装包：{error}"))?;
-    if !canonical.starts_with(&dir) {
-        return Err("只能显示应用下载的安装包".to_string());
-    }
-    app.opener()
-        .reveal_item_in_dir(&canonical)
-        .map_err(|error| format!("无法打开文件管理器：{error}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = download_dir(&app)?;
+        let dir = dir
+            .canonicalize()
+            .map_err(|error| format!("无法定位下载目录：{error}"))?;
+        let canonical = Path::new(&path)
+            .canonicalize()
+            .map_err(|error| format!("无法定位安装包：{error}"))?;
+        if !canonical.is_file() || canonical.parent() != Some(dir.as_path()) {
+            return Err("只能显示应用下载的安装包".to_string());
+        }
+        app.opener()
+            .reveal_item_in_dir(&canonical)
+            .map_err(|error| format!("无法打开文件管理器：{error}"))
+    })
+    .await
+    .map_err(|error| format!("无法打开文件管理器：{error}"))?
 }
 
 /// 在浏览器打开 GitHub Releases 页：本平台没有应用内下载（Android）或
 /// 检查失败时的兜底。
 #[tauri::command]
-pub fn open_release_page(app: AppHandle) -> Result<(), String> {
+pub async fn open_release_page(app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_url(RELEASES_PAGE, None::<String>)
-        .map_err(|error| format!("无法打开浏览器：{error}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        app.opener()
+            .open_url(RELEASES_PAGE, None::<String>)
+            .map_err(|error| format!("无法打开浏览器：{error}"))
+    })
+    .await
+    .map_err(|error| format!("无法打开浏览器：{error}"))?
 }
 
 #[cfg(test)]

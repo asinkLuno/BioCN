@@ -59,14 +59,14 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct File {
     path: String,
     bytes: u64,
     sha256: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Variant {
     label: String,
     description: String,
@@ -74,7 +74,7 @@ pub struct Variant {
     files: Vec<File>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     /// `1` for the layout below; a bump means the app must not read it.
     schema: u32,
@@ -217,19 +217,25 @@ fn dir_bytes(dir: &Path) -> u64 {
 }
 
 /// The HTTP client every ModelScope call shares.
-fn client() -> Result<reqwest::Client> {
-    crate::net::builder()
-        .user_agent(concat!("biocn/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(std::time::Duration::from_secs(20))
-        // A CDN that accepts the connection and then stops sending would
-        // otherwise hold a download open forever, with the sheet's buttons
-        // disabled and no way to cancel.
-        .read_timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(err)
+fn client() -> Result<&'static reqwest::Client> {
+    crate::net::model_client()
+}
+
+/// Verified immutable manifest cached for the lifetime of the process: because
+/// `MANIFEST_SHA256` is pinned in the binary, once verified it never changes.
+static CACHED_MANIFEST: std::sync::OnceLock<Manifest> = std::sync::OnceLock::new();
+
+fn cached_manifest() -> Result<Manifest> {
+    CACHED_MANIFEST
+        .get()
+        .cloned()
+        .ok_or_else(|| "模型清单尚未加载".to_string())
 }
 
 async fn fetch_manifest() -> Result<Manifest> {
+    if let Some(manifest) = CACHED_MANIFEST.get() {
+        return Ok(manifest.clone());
+    }
     let body = client()?
         .get(file_url("manifest.json"))
         .timeout(std::time::Duration::from_secs(30))
@@ -241,7 +247,9 @@ async fn fetch_manifest() -> Result<Manifest> {
         .text()
         .await
         .map_err(|e| format!("模型清单：{e}"))?;
-    parse_manifest(&body)
+    let manifest = parse_manifest(&body)?;
+    let _ = CACHED_MANIFEST.set(manifest.clone());
+    Ok(manifest)
 }
 
 /// A manifest this app will act on.
@@ -331,7 +339,14 @@ async fn download(
         .map_err(|e| format!("{url}: {e}"))?
         .error_for_status()
         .map_err(|e| format!("{url}: {e}"))?;
-    let resumed = response.status() == reqwest::StatusCode::PARTIAL_CONTENT && have > 0;
+    let expected_range_prefix = format!("bytes {have}-");
+    let content_range_ok = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with(&expected_range_prefix));
+    let resumed =
+        response.status() == reqwest::StatusCode::PARTIAL_CONTENT && have > 0 && content_range_ok;
     let mut file = if resumed {
         std::fs::OpenOptions::new()
             .append(true)
@@ -478,13 +493,27 @@ fn with_suffix(dir: &Path, suffix: &str) -> PathBuf {
 /// a torn write would leave `installed()` reading a prefix of the real list —
 /// hence temp file plus rename.
 fn write_stamp(dir: &Path, variant: &str, files: &[(String, u64)]) -> Result<()> {
+    use std::io::Write as _;
+
     let mut text = variant.to_string();
     for (name, len) in files {
         text.push_str(&format!("\n{name} {len}"));
     }
-    let temp = dir.join("stamp.tmp");
-    std::fs::write(&temp, text).map_err(err)?;
-    std::fs::rename(&temp, dir.join("stamp")).map_err(err)
+    let temp = dir.join(format!("stamp.{}.tmp", std::process::id()));
+    let write_res = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_res {
+        let _ = std::fs::remove_file(&temp);
+        return Err(err(e));
+    }
+    std::fs::rename(&temp, dir.join("stamp")).map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        err(e)
+    })
 }
 
 #[tauri::command]
@@ -632,7 +661,7 @@ pub async fn models_activate<R: Runtime>(app: AppHandle<R>, variant: String) -> 
     } else {
         activate_inner()?;
     }
-    Ok(status_of(&app, &root, fetch_manifest().await))
+    Ok(status_of(&app, &root, cached_manifest()))
 }
 
 /// Download (or copy, in a debug build) every file of `variant` into `staging`,
@@ -673,18 +702,28 @@ async fn fetch<R: Runtime>(
     for (name, file) in names.iter().zip(files.iter()) {
         let name = name.to_string();
         let dest = dir.join(&name);
-        if let Ok(meta) = std::fs::metadata(&dest)
-            && meta.len() == file.bytes
-            && sha256(&dest).is_ok_and(|got| got == file.sha256)
-        {
+        let expected_bytes = file.bytes;
+        let expected_sha = file.sha256.clone();
+        let already_ok = {
+            let dest = dest.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                std::fs::metadata(&dest).is_ok_and(|meta| {
+                    meta.len() == expected_bytes
+                        && sha256(&dest).is_ok_and(|got| got == expected_sha)
+                })
+            })
+            .await
+            .unwrap_or(false)
+        };
+        if already_ok {
             // already here, right size, right digest: skip the transfer, keep
             // the stamp honest
-            written.push((name.clone(), meta.len()));
-            done += meta.len();
+            written.push((name.clone(), expected_bytes));
+            done += expected_bytes;
             continue;
         }
         let base = done;
-        download(&client, &file_url(&file.path), &dest, file.bytes, |bytes| {
+        download(client, &file_url(&file.path), &dest, file.bytes, |bytes| {
             let _ = app.emit(
                 MODELS_PROGRESS_EVENT,
                 Progress {
@@ -696,7 +735,13 @@ async fn fetch<R: Runtime>(
             );
         })
         .await?;
-        verify(&dest, file)?;
+        {
+            let dest = dest.clone();
+            let file_spec: File = (*file).clone();
+            tauri::async_runtime::spawn_blocking(move || verify(&dest, &file_spec))
+                .await
+                .map_err(err)??;
+        }
         written.push((name.clone(), file.bytes));
         done += file.bytes;
     }
@@ -709,12 +754,10 @@ async fn fetch<R: Runtime>(
 /// file a live session holds open fails outright, and on Linux the unlink
 /// succeeds while the old inode stays mapped until the process drops it.
 ///
-/// Order matters more than it looks. The staged tree is renamed into place as a
-/// whole (`<variant>.new` -> `<variant>`) and the old tree is only deleted after
-/// the new one is in and stamped, so a failure part-way leaves the previous
-/// installation intact instead of a half-filled directory with no stamp. A
-/// re-download is minutes; throwing away working weights is not acceptable for
-/// an error the user cannot act on.
+/// Order matters more than it looks. The staged tree is hard-linked (or copied)
+/// into `<variant>.new` so `staging/` stays intact if swapping fails; `<variant>.new`
+/// is then swapped into place as a whole and the old tree is only deleted after
+/// the new one is in and stamped.
 fn commit(root: &Path, variant: &str, files: &[(String, u64)]) -> Result<()> {
     let staging = root.join("staging").join(variant);
     let dir = root.join(variant);
@@ -726,12 +769,10 @@ fn commit(root: &Path, variant: &str, files: &[(String, u64)]) -> Result<()> {
     for (name, _) in files {
         let from = staging.join(name);
         let to = incoming.join(name);
-        std::fs::rename(&from, &to)
-            .or_else(|_| {
-                // A cross-device rename (staging on another mount) is not a
-                // failure we care about; copy then.
-                std::fs::copy(&from, &to).map(|_| ())
-            })
+        // Hard-link first (O(1), keeps staging intact on rollback), falling
+        // back to copy across filesystems.
+        std::fs::hard_link(&from, &to)
+            .or_else(|_| std::fs::copy(&from, &to).map(|_| ()))
             .map_err(|e| format!("{}: {e}", from.display()))?;
     }
     // The stamp is written after the rename, so it always describes the tree
@@ -809,7 +850,7 @@ async fn remove<R: Runtime>(app: AppHandle<R>, variant: String) -> Result<Status
     // The stamp is gone, so `installed()` now reports nothing even if Windows
     // kept a mapped file alive: the app is consistent with what the user asked
     // for, and the leftover is reclaimed by the next install's rename.
-    let mut status = status_of(&app, &root, fetch_manifest().await);
+    let mut status = status_of(&app, &root, cached_manifest());
     // Say so when the weights are still on disk. The stamp is deleted, so the
     // app behaves as uninstalled either way — but "removed" while 200 MB of
     // weights remain is not something to be quiet about.

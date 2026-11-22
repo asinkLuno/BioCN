@@ -61,12 +61,16 @@ const CREATE: &str = "
         PRIMARY KEY (weights, sentence)
     ) WITHOUT ROWID;
 
+    CREATE INDEX IF NOT EXISTS idx_sentences_sentence ON sentences(sentence);
+
     CREATE TABLE IF NOT EXISTS chapters (
         weights TEXT    NOT NULL,
         book    TEXT    NOT NULL,
         chapter INTEGER NOT NULL,
         PRIMARY KEY (weights, book, chapter)
     ) WITHOUT ROWID;
+
+    CREATE INDEX IF NOT EXISTS idx_chapters_book ON chapters(book);
 ";
 
 #[derive(Clone)]
@@ -75,10 +79,10 @@ pub struct AnalysisCache {
 }
 
 struct Inner {
-    /// One connection, shared: `Connection` is not `Sync`, and the whole-book
-    /// job and the reader both write. A chapter is one transaction, so the
-    /// reader waits at most for a single chapter.
-    db: Mutex<Connection>,
+    /// Separate read-only and write connections so WAL mode actually lets
+    /// `book://` chapter reads run concurrently with whole-book writes.
+    reader: Mutex<Connection>,
+    writer: Mutex<Connection>,
 }
 
 /// The key the current weights' rows live under.
@@ -154,9 +158,17 @@ impl AnalysisCache {
         tx.pragma_update(None, "user_version", SCHEMA)?;
         tx.commit()?;
 
+        let reader = Connection::open_with_flags(
+            file,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        reader.busy_timeout(busy_timeout)?;
+
         Ok(Self {
             inner: Arc::new(Inner {
-                db: Mutex::new(conn),
+                reader: Mutex::new(reader),
+                writer: Mutex::new(conn),
             }),
         })
     }
@@ -174,7 +186,7 @@ impl AnalysisCache {
         if sentences.is_empty() {
             return Ok(HashMap::new());
         }
-        let conn = self.lock()?;
+        let conn = self.read_lock()?;
         let mut found = HashMap::with_capacity(sentences.len());
         for chunk in sentences.chunks(CHUNK) {
             let placeholders = vec!["?"; chunk.len()].join(", ");
@@ -259,19 +271,22 @@ impl AnalysisCache {
     /// chapter costs a read and no write transaction at all — this is the path
     /// every page turn of an already-colored book takes.
     pub fn mark_chapter(&self, weights: &str, book: &str, chapter: usize) -> Result<()> {
-        let conn = self.lock()?;
-        let known: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM chapters WHERE weights = ?1 AND book = ?2 AND chapter = ?3)",
-                params![weights, book, chapter as i64],
-                |row| row.get(0),
-            )
-            .map_err(err)?;
-        if known {
-            return Ok(());
+        {
+            let conn = self.read_lock()?;
+            let known: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM chapters WHERE weights = ?1 AND book = ?2 AND chapter = ?3)",
+                    params![weights, book, chapter as i64],
+                    |row| row.get(0),
+                )
+                .map_err(err)?;
+            if known {
+                return Ok(());
+            }
         }
         // `IGNORE` for the same reason: another window may have written it
         // between the check and this line.
+        let conn = self.lock()?;
         conn.execute(
             "INSERT OR IGNORE INTO chapters (weights, book, chapter) VALUES (?1, ?2, ?3)",
             params![weights, book, chapter as i64],
@@ -282,7 +297,7 @@ impl AnalysisCache {
 
     /// Chapters of `book` already colored by these weights.
     pub fn colored_chapters(&self, weights: &str, book: &str) -> Result<HashSet<usize>> {
-        let conn = self.lock()?;
+        let conn = self.read_lock()?;
         let mut statement = conn
             .prepare("SELECT chapter FROM chapters WHERE weights = ?1 AND book = ?2")
             .map_err(err)?;
@@ -299,7 +314,7 @@ impl AnalysisCache {
     /// menu the answer feeds. The sentence table is global and cannot name its
     /// book without parsing it, so the markers are the whole truth here.
     pub fn has_coloring(&self, book: &str) -> Result<bool> {
-        let conn = self.lock()?;
+        let conn = self.read_lock()?;
         conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM chapters WHERE book = ?1)",
             params![book],
@@ -312,7 +327,7 @@ impl AnalysisCache {
     /// the exporter reads, and the only one that makes an export worth asking
     /// for.
     pub fn has_coloring_under(&self, weights: &str, book: &str) -> Result<bool> {
-        let conn = self.lock()?;
+        let conn = self.read_lock()?;
         conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM chapters WHERE weights = ?1 AND book = ?2)",
             params![weights, book],
@@ -350,12 +365,20 @@ impl AnalysisCache {
         tx.commit().map_err(err)
     }
 
+    fn read_lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+        Ok(self
+            .inner
+            .reader
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()))
+    }
+
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
         // A panic while holding the connection must not make the cache
         // permanently unusable: the data is either committed or not.
         Ok(self
             .inner
-            .db
+            .writer
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()))
     }

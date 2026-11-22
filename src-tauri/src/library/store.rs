@@ -154,25 +154,38 @@ impl Library {
     ///
     /// A corrupt index is reported rather than silently shown as an empty shelf.
     pub fn list(&self) -> Result<Vec<Book>, String> {
+        let _guard = self.lock();
         Ok(sorted(self.load()?.books))
     }
 
     /// Copies `source` into the library and indexes it.
     ///
-    /// `source` is an already-opened stream so callers can resolve platform
-    /// paths themselves (see `mod.rs`), and so a failed read never leaves a
-    /// half-copied file behind.
+    /// Staging (up to 512 MB copy + SHA-256) and EPUB metadata parsing run
+    /// outside the index mutex using a per-call scratch file; the mutex is held
+    /// only for the brief `load -> rename -> save` commit critical section.
     pub fn import<R: std::io::Read>(
         &self,
         display_name: &str,
         source: R,
     ) -> Result<(Book, Vec<Book>), String> {
-        let _guard = self.lock();
         fs::create_dir_all(self.files_dir()).map_err(|e| e.to_string())?;
         fs::create_dir_all(self.covers_dir()).map_err(|e| e.to_string())?;
 
         let (size, id, staged) = self.stage(source)?;
-        let result = self.index_staged(display_name, &staged, &id, size);
+        let metadata = match fs::File::open(&staged)
+            .map_err(|e| e.to_string())
+            .and_then(|file| epub::read_metadata(file).map_err(|error| error.to_string()))
+        {
+            Ok(meta) => meta,
+            Err(error) => {
+                let _ = fs::remove_file(&staged);
+                return Err(error);
+            }
+        };
+        let result = {
+            let _guard = self.lock();
+            self.index_staged(display_name, &staged, &id, size, metadata)
+        };
         // The staged file was either renamed into place or is no longer needed.
         let _ = fs::remove_file(&staged);
         result
@@ -225,10 +238,8 @@ impl Library {
         staged: &Path,
         id: &str,
         size: u64,
+        metadata: epub::Metadata,
     ) -> Result<(Book, Vec<Book>), String> {
-        let metadata = epub::read_metadata(fs::File::open(staged).map_err(|e| e.to_string())?)
-            .map_err(|error| error.to_string())?;
-
         let mut index = self.load()?;
         index.version = INDEX_VERSION;
 

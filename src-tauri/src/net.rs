@@ -13,6 +13,9 @@
 //! with each app release. Desktop keeps the platform verifier: corporate
 //! proxies and user-installed CAs keep working there.
 
+use std::sync::OnceLock;
+use std::time::Duration;
+
 /// A client builder whose TLS backend works on every platform. The caller
 /// layers its own user agent, timeouts and redirect policy on top.
 pub(crate) fn builder() -> reqwest::ClientBuilder {
@@ -20,6 +23,53 @@ pub(crate) fn builder() -> reqwest::ClientBuilder {
     #[cfg(target_os = "android")]
     let builder = builder.tls_backend_preconfigured(android_tls_config());
     builder
+}
+
+/// Shared pooled HTTP client for ModelScope manifest and weight transfers.
+pub(crate) fn model_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(c) = CLIENT.get() {
+        return Ok(c);
+    }
+    let built = builder()
+        .user_agent(concat!("biocn/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(20))
+        // A CDN that accepts the connection and then stops sending would
+        // otherwise hold a download open forever.
+        .read_timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(CLIENT.get_or_init(|| built))
+}
+
+/// Shared pooled HTTP client for GitHub Pages update metadata (no redirects).
+pub(crate) fn update_check_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(c) = CLIENT.get() {
+        return Ok(c);
+    }
+    let built = builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("BioCN-Update-Check")
+        .build()
+        .map_err(|e| format!("无法发起更新检查：{e}"))?;
+    Ok(CLIENT.get_or_init(|| built))
+}
+
+/// Shared pooled HTTP client for streaming installer downloads.
+pub(crate) fn update_download_client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(c) = CLIENT.get() {
+        return Ok(c);
+    }
+    let built = builder()
+        .connect_timeout(Duration::from_secs(20))
+        .read_timeout(Duration::from_secs(60))
+        .user_agent("BioCN-Update-Download")
+        .build()
+        .map_err(|e| format!("无法发起下载：{e}"))?;
+    Ok(CLIENT.get_or_init(|| built))
 }
 
 /// Bundled-roots rustls config for Android, handed to reqwest as a

@@ -475,13 +475,12 @@ pub fn inject_stylesheet(html: &str, markup: &str) -> String {
                     break;
                 }
             }
-            Event::Start(tag) => {
+            Event::Start(tag)
                 if body_after.is_none()
                     && tag.local_name().as_ref().eq_ignore_ascii_case("body")
-                    && end <= html.len()
-                {
-                    body_after = Some(end);
-                }
+                    && end <= html.len() =>
+            {
+                body_after = Some(end);
             }
             _ => {}
         }
