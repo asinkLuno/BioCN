@@ -346,7 +346,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
 
       <main
         ref={content}
-        className="mx-auto w-full max-w-3xl flex-1 overflow-y-auto overscroll-contain px-5 py-6 sm:px-8 sm:py-10"
+        className="w-full flex-1 overflow-y-auto overscroll-contain pb-[45vh]"
         aria-busy={loading}
       >
         {error !== null ? (
