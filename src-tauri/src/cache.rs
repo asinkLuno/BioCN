@@ -102,46 +102,53 @@ pub fn weights<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
 impl AnalysisCache {
     /// Opens (or creates) `<dir>/analysis.db`.
     pub fn open(dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(dir).map_err(err)?;
-        let file = dir.join("analysis.db");
-        Self::connect(&file).or_else(|first| {
-            // Unreadable (or not SQLite at all): throw it away and start over.
-            // Losing a cache costs a recompute; refusing to open a book does
-            // not compare.
-            for suffix in ["", "-wal", "-shm"] {
-                let _ = std::fs::remove_file(sibling(&file, suffix));
-            }
-            Self::connect(&file).map_err(|second| format!("{first}; {second}"))
-        })
+        Self::open_with_timeout(dir, std::time::Duration::from_secs(5))
     }
 
-    fn connect(file: &Path) -> Result<Self> {
-        let conn = Connection::open(file).map_err(err)?;
+    fn open_with_timeout(dir: &Path, busy_timeout: std::time::Duration) -> Result<Self> {
+        std::fs::create_dir_all(dir).map_err(err)?;
+        let file = dir.join("analysis.db");
+        match Self::connect(&file, busy_timeout) {
+            Ok(cache) => Ok(cache),
+            Err(first) if is_corruption_error(&first) => {
+                // Corrupt or not a SQLite file: throw it away and start over.
+                // Transient lock/IO errors are NOT deleted so hours of analysis
+                // cache survive contention from another process.
+                for suffix in ["", "-wal", "-shm"] {
+                    let _ = std::fs::remove_file(sibling(&file, suffix));
+                }
+                Self::connect(&file, busy_timeout)
+                    .map_err(|second| format!("{first}; {second}"))
+            }
+            Err(first) => Err(err(first)),
+        }
+    }
+
+    fn connect(
+        file: &Path,
+        busy_timeout: std::time::Duration,
+    ) -> std::result::Result<Self, rusqlite::Error> {
+        let mut conn = Connection::open(file)?;
+        // Set busy_timeout first so WAL pragma and schema checks wait politely
+        // if another process briefly holds a lock.
+        conn.busy_timeout(busy_timeout)?;
         // WAL: a reader asking for a chapter must not wait behind the whole-book
         // job writing one. `NORMAL` because a write lost to a crash costs a
         // recompute, not correctness.
         conn.query_row("PRAGMA journal_mode = WAL", [], |row| {
             row.get::<_, String>(0)
-        })
-        .map_err(err)?;
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .map_err(err)?;
-        // Another process (a DB browser, a second window's leftover) may hold
-        // the write lock for a moment; wait rather than fail the chapter.
-        conn.busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(err)?;
+        })?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
 
-        let version: i64 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(err)?;
+        let tx = conn.transaction()?;
+        let version: i64 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version != SCHEMA {
-            conn.execute_batch("DROP TABLE IF EXISTS sentences; DROP TABLE IF EXISTS chapters;")
-                .map_err(err)?;
+            tx.execute_batch("DROP TABLE IF EXISTS sentences; DROP TABLE IF EXISTS chapters;")?;
         }
         // `IF NOT EXISTS` so the fresh-file case and a schema bump share a path.
-        conn.execute_batch(CREATE).map_err(err)?;
-        conn.pragma_update(None, "user_version", SCHEMA)
-            .map_err(err)?;
+        tx.execute_batch(CREATE)?;
+        tx.pragma_update(None, "user_version", SCHEMA)?;
+        tx.commit()?;
 
         Ok(Self {
             inner: Arc::new(Inner {
@@ -353,6 +360,17 @@ impl AnalysisCache {
 /// `analysis.db` + `-wal` / `-shm`, which SQLite names by appending.
 fn sibling(file: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(format!("{}{suffix}", file.display()))
+}
+
+fn is_corruption_error(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(err, _)
+            if matches!(
+                err.code,
+                rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+            )
+    )
 }
 
 #[cfg(test)]
@@ -654,5 +672,34 @@ mod tests {
         let left = cache.get("w1", &keys).unwrap();
         assert!(left.is_empty(), "{}/{} rows survived the clear", left.len(), keys.len());
         assert!(cache.get("w1", &["艾玛的话。".into()]).unwrap().contains_key("艾玛的话。"));
+    }
+
+    #[test]
+    fn open_does_not_delete_database_on_non_corruption_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = AnalysisCache::open(dir.path()).unwrap();
+        cache
+            .save_chapter("w1", "dune", 0, true, &[("保住缓存。".into(), None)])
+            .unwrap();
+        drop(cache);
+
+        // Hold an exclusive lock on analysis.db from another connection while
+        // trying to open with a 1ms busy timeout (simulated via helper).
+        let file = dir.path().join("analysis.db");
+        let blocker = Connection::open(&file).unwrap();
+        blocker.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+
+        let result = AnalysisCache::open_with_timeout(dir.path(), std::time::Duration::from_millis(10));
+        assert!(result.is_err(), "busy database must return error instead of recreating");
+
+        blocker.execute_batch("ROLLBACK;").unwrap();
+        drop(blocker);
+
+        // Data must still be intact after the transient lock clears.
+        let reopened = AnalysisCache::open(dir.path()).unwrap();
+        assert!(
+            reopened.has_coloring("dune").unwrap(),
+            "transient lock error must not wipe existing analysis cache"
+        );
     }
 }

@@ -11,7 +11,7 @@
 //! `Session::run` needs `&mut self`, so each graph sits behind a `Mutex` — the
 //! three graphs still run independently of each other.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use ort::environment::Environment;
@@ -19,6 +19,16 @@ use ort::session::Session;
 use ort::value::Tensor;
 
 use crate::analysis::resources::{Error, Result};
+
+/// Path to the bundled `libonnxruntime` resolved during Tauri setup, stored
+/// safely without mutating the process environment across threads.
+#[cfg(not(target_os = "android"))]
+static BUNDLED_ORT_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+#[cfg(not(target_os = "android"))]
+pub fn set_bundled_ort_path(path: PathBuf) {
+    let _ = BUNDLED_ORT_PATH.set(path);
+}
 
 pub struct Sessions {
     tok: Mutex<Session>,
@@ -77,11 +87,13 @@ fn builder() -> Result<ort::environment::EnvironmentBuilder> {
 #[cfg(not(target_os = "android"))]
 fn builder() -> Result<ort::environment::EnvironmentBuilder> {
     // Desktop also loads ORT at run time: the app ships a minimal-build
-    // `libonnxruntime(.so/.dylib/.dll)` next to the executable (a few MB instead
-    // of the 15 MB of ExecutionProviders statically linked by `download-binaries`).
-    // `ORT_DYLIB_PATH` overrides it for debugging; bare SONAME covers system
-    // installs. Same file works for any variant of the shipped models.
+    // `libonnxruntime(.so/.dylib/.dll)` in bundled resources (or next to the
+    // executable in dev/Windows layouts). `ORT_DYLIB_PATH` overrides it for
+    // debugging; bare platform SONAME covers system installs.
     if let Ok(path) = std::env::var("ORT_DYLIB_PATH") {
+        return ort::init_from(path).map_err(oerr);
+    }
+    if let Some(path) = BUNDLED_ORT_PATH.get() {
         return ort::init_from(path).map_err(oerr);
     }
     if let Some(ort) = std::env::current_exe().ok().and_then(|exe| {
@@ -94,7 +106,14 @@ fn builder() -> Result<ort::environment::EnvironmentBuilder> {
     }) {
         return ort::init_from(ort.path()).map_err(oerr);
     }
-    ort::init_from("libonnxruntime.so").map_err(oerr)
+    let fallback = if cfg!(target_os = "macos") {
+        "libonnxruntime.dylib"
+    } else if cfg!(windows) {
+        "libonnxruntime.dll"
+    } else {
+        "libonnxruntime.so"
+    };
+    ort::init_from(fallback).map_err(oerr)
 }
 
 /// Enough threads to matter, few enough not to fight the UI thread.

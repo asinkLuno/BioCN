@@ -64,7 +64,7 @@ impl ProgressStore {
 
     pub fn save(&self, book_id: &str, mut progress: ReadingProgress) -> Result<(), String> {
         let _lock = self.lock();
-        progress.ratio = progress.ratio.clamp(0.0, 1.0);
+        progress.ratio = sanitize_ratio(progress.ratio);
         if progress.updated_at == 0 {
             progress.updated_at = now_ms();
         }
@@ -82,13 +82,28 @@ impl ProgressStore {
     }
 
     fn load(&self) -> ProgressFile {
-        fs::read_to_string(&self.path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+        let Ok(text) = fs::read_to_string(&self.path) else {
+            return ProgressFile::default();
+        };
+        let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return ProgressFile::default();
+        };
+        let Some(entries) = root.get("books").and_then(|v| v.as_object()) else {
+            return ProgressFile::default();
+        };
+        let mut books = HashMap::with_capacity(entries.len());
+        for (id, value) in entries {
+            if let Ok(mut progress) = serde_json::from_value::<ReadingProgress>(value.clone()) {
+                progress.ratio = sanitize_ratio(progress.ratio);
+                books.insert(id.clone(), progress);
+            }
+        }
+        ProgressFile { books }
     }
 
     fn write(&self, data: &ProgressFile) -> Result<(), String> {
+        use std::io::Write as _;
+
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -98,7 +113,16 @@ impl ProgressStore {
         let tmp = self
             .path
             .with_extension(format!("json.{}.{}.tmp", std::process::id(), unique));
-        fs::write(&tmp, text).map_err(|e| e.to_string())?;
+        let write_result = (|| -> std::io::Result<()> {
+            let mut file = fs::File::create(&tmp)?;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = write_result {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.to_string());
+        }
         fs::rename(&tmp, &self.path).map_err(|e| {
             let _ = fs::remove_file(&tmp);
             e.to_string()
@@ -109,6 +133,14 @@ impl ProgressStore {
         self.guard
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+fn sanitize_ratio(ratio: f64) -> f64 {
+    if ratio.is_finite() {
+        ratio.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -188,5 +220,53 @@ mod tests {
         fs::write(&file, "{broken").unwrap();
         let store = ProgressStore::new(file);
         assert!(store.get("dune").is_none());
+    }
+
+    #[test]
+    fn nan_ratio_is_sanitized_and_preserves_other_books() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProgressStore::new(dir.path().join("progress.json"));
+        store
+            .save(
+                "dune",
+                ReadingProgress {
+                    chapter_index: 2,
+                    paragraph_index: Some(5),
+                    ratio: 0.4,
+                    updated_at: 100,
+                },
+            )
+            .unwrap();
+        store
+            .save(
+                "emma",
+                ReadingProgress {
+                    chapter_index: 1,
+                    paragraph_index: None,
+                    ratio: f64::NAN,
+                    updated_at: 200,
+                },
+            )
+            .unwrap();
+
+        let dune = store.get("dune").expect("dune must survive NaN write");
+        assert_eq!(dune.chapter_index, 2);
+        let emma = store.get("emma").expect("emma saved cleanly");
+        assert_eq!(emma.ratio, 0.0);
+    }
+
+    #[test]
+    fn one_corrupt_entry_does_not_wipe_other_books() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("progress.json");
+        fs::write(
+            &file,
+            r#"{"books":{"dune":{"chapterIndex":3,"ratio":0.5,"updatedAt":1},"bad":{"chapterIndex":0,"ratio":null,"updatedAt":2}}}"#,
+        )
+        .unwrap();
+        let store = ProgressStore::new(file);
+        let dune = store.get("dune").expect("valid book survives corrupt sibling");
+        assert_eq!(dune.chapter_index, 3);
+        assert!(store.get("bad").is_none());
     }
 }

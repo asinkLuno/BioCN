@@ -590,8 +590,13 @@ pub(crate) fn decode(bytes: &[u8]) -> String {
 /// Rewrites the `encoding` of an XML declaration to `utf-8`, if there is one.
 fn declare_utf8(html: &str) -> String {
     // The declaration is ASCII and at the very start, so it is found by simple
-    // search over the head of the document.
-    let head = &html[..html.len().min(256)];
+    // search over the head of the document. Walk back to a char boundary so
+    // multi-byte UTF-8 text straddling byte 256 never panics.
+    let mut limit = html.len().min(256);
+    while !html.is_char_boundary(limit) {
+        limit -= 1;
+    }
+    let head = &html[..limit];
     let Some(start) = head.find("<?xml") else {
         return html.to_owned();
     };
@@ -1067,6 +1072,20 @@ mod tests {
             html.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#),
             "{html}"
         );
+    }
+
+    #[test]
+    fn declare_utf8_does_not_panic_on_multibyte_boundary_at_256() {
+        // Place a 3-byte UTF-8 character straddling byte index 256.
+        let mut text = String::from(r#"<?xml version="1.0" encoding="gbk"?><p>"#);
+        while text.len() < 255 {
+            text.push('a');
+        }
+        text.push_str("中文内容</p>");
+        assert!(!text.is_char_boundary(256));
+        let rewritten = declare_utf8(&text);
+        assert!(rewritten.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#));
+        assert!(rewritten.ends_with("中文内容</p>"));
     }
 
     #[test]

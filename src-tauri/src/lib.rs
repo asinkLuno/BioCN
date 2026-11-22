@@ -53,10 +53,7 @@ pub fn run() {
                     .ok()
                     .filter(|p| p.is_file());
                 if let Some(ort) = ort {
-                    unsafe {
-                        // Single-threaded launch; read only by builder().
-                        std::env::set_var("ORT_DYLIB_PATH", ort);
-                    }
+                    analysis::engine::set_bundled_ort_path(ort);
                 }
             }
             app.manage(library::init(app.handle())?);
