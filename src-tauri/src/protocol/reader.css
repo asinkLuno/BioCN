@@ -202,6 +202,35 @@ html[data-mode="paginated"] body {
   overscroll-behavior-x: contain;
 }
 
+/* Invisible trailing columns appended in paginated mode so `body.scrollWidth`
+   always reaches at least `totalPages * spreadWidth`. Without this, WebKit and
+   Blink omit trailing `padding-right` (and the empty right half of an odd
+   2-column spread) from `scrollWidth`, clamping the last page's `scrollLeft`
+   short and crushing text against the right edge with no outer margin. */
+#biocn-page-tail {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.biocn-page-tail-col {
+  display: block !important;
+  break-before: column !important;
+  -webkit-column-break-before: always !important;
+  height: max(1px, calc(100vh - 2 * var(--page-pad-y) - 2px)) !important;
+  width: 1px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  font-size: 1px !important;
+  line-height: 1px !important;
+  overflow: hidden !important;
+}
+
 html[data-mode="paginated"] img,
 html[data-mode="paginated"] svg,
 html[data-mode="paginated"] video,
@@ -227,10 +256,11 @@ span[data-bp] {
   line-height: 0;
 }
 
-/* 主谓宾 SVO coloring — highest specificity so theme overrides never flatten it */
-.svo.svo-subject { color: var(--svo-subject) !important; }
-.svo.svo-predicate { color: var(--svo-predicate) !important; }
-.svo.svo-object { color: var(--svo-object) !important; }
+/* 主谓宾 SVO coloring — only applied while coloring is enabled; off-state rule
+   also neutralizes any pre-styled .svo classes from exported BioCN EPUBs. */
+html:not([data-biocn="off"]) .svo.svo-subject { color: var(--svo-subject) !important; }
+html:not([data-biocn="off"]) .svo.svo-predicate { color: var(--svo-predicate) !important; }
+html:not([data-biocn="off"]) .svo.svo-object { color: var(--svo-object) !important; }
 
 html[data-biocn="off"] .svo {
   color: inherit !important;

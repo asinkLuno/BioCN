@@ -1,23 +1,19 @@
 import { useEffect, useRef, useState } from "react";
+import { type AppTheme, applyAppTheme, loadAppTheme, saveAppTheme } from "../lib/appTheme";
 import {
   formatBytes,
+  type ModelProgress,
+  type ModelStatus,
   modelsActivate,
   modelsInstall,
   modelsRemove,
   modelsStatus,
   onModelProgress,
-  type ModelProgress,
-  type ModelStatus,
   type VariantId,
 } from "../lib/models";
 import { message } from "../lib/reading";
-import {
-  applyAppTheme,
-  loadAppTheme,
-  saveAppTheme,
-  type AppTheme,
-} from "../lib/appTheme";
-import { useDialog, ModalBackdrop } from "./dialog";
+import { useHistoryOverlay } from "../lib/router";
+import { ModalBackdrop, useDialog } from "./dialog";
 import { UpdateSection } from "./UpdateSection";
 
 const THEME_OPTIONS: readonly [AppTheme, string][] = [
@@ -59,6 +55,8 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
 
   const isBusy = op !== null || updateBusy;
+
+  useHistoryOverlay(open, onClose, !isBusy);
 
   const selectTheme = (next: AppTheme) => {
     setTheme(next);
@@ -175,8 +173,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
               应用界面主题（阅读器纸色可在阅读页单独调整）
             </p>
           </div>
-          <div
-            role="group"
+          <fieldset
             aria-label="外观模式"
             className="join rounded-field border border-base-content/10 bg-base-200/70 p-0.5"
           >
@@ -195,7 +192,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                 {label}
               </button>
             ))}
-          </div>
+          </fieldset>
         </section>
 
         {/* 分析模型紧随外观之后；版本与更新（UpdateSection）跟在最后。 */}
@@ -214,8 +211,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
           {status?.manifestError && (
             <div role="alert" className="alert alert-warning mt-4 text-sm">
               <span>
-                无法读取下载大小（{status.manifestError}）。你仍可安装模型，只是无法提前知道
-                大小。
+                无法读取下载大小（{status.manifestError}）。你仍可安装模型，只是无法提前知道 大小。
               </span>
             </div>
           )}
@@ -251,9 +247,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                   isDownloading && progress?.variant === variant.id && totalBytes > 0
                     ? Math.min(1, progress.done / totalBytes)
                     : 0;
-                const displaySize = isInstalled
-                  ? variant.size || variant.bytes
-                  : variant.bytes;
+                const displaySize = isInstalled ? variant.size || variant.bytes : variant.bytes;
                 return (
                   <li key={variant.id}>
                     <div

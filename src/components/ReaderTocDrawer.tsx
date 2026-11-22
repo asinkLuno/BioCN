@@ -1,6 +1,16 @@
 import { memo } from "react";
 import type { BookView, TocEntry } from "../lib/reading";
 
+function keyedTocItems(entries: readonly TocEntry[]): { key: string; entry: TocEntry }[] {
+  const counts = new Map<string, number>();
+  return entries.map((entry) => {
+    const base = `${entry.chapterIndex ?? "x"}:${entry.anchor ?? ""}:${entry.label}`;
+    const count = counts.get(base) ?? 0;
+    counts.set(base, count + 1);
+    return { key: count === 0 ? base : `${base}#${count}`, entry };
+  });
+}
+
 const TocItem = memo(function TocItem({
   item,
   currentIndex,
@@ -12,19 +22,21 @@ const TocItem = memo(function TocItem({
   coloredSet: ReadonlySet<number>;
   onNavigate: (chapterIndex: number, anchor: string | null) => void;
 }) {
-  const isActive = item.chapterIndex !== null && item.chapterIndex === currentIndex && !item.anchor;
-  const isColored = item.chapterIndex !== null && coloredSet.has(item.chapterIndex);
+  const { chapterIndex } = item;
+  const isActive = chapterIndex !== null && chapterIndex === currentIndex && !item.anchor;
+  const isColored = chapterIndex !== null && coloredSet.has(chapterIndex);
   return (
     <li>
-      {item.chapterIndex !== null ? (
+      {chapterIndex !== null ? (
         <button
           type="button"
           className={isActive ? "menu-active" : undefined}
-          onClick={() => onNavigate(item.chapterIndex!, item.anchor)}
+          onClick={() => onNavigate(chapterIndex, item.anchor)}
         >
           <span className="min-w-0 flex-1 truncate text-left">{item.label}</span>
           {isColored && (
             <span
+              role="img"
               className="badge badge-xs badge-primary shrink-0"
               title="已完成着色"
               aria-label="已着色"
@@ -36,10 +48,10 @@ const TocItem = memo(function TocItem({
       )}
       {item.subitems.length > 0 && (
         <ul>
-          {item.subitems.map((child, idx) => (
+          {keyedTocItems(item.subitems).map(({ key, entry }) => (
             <TocItem
-              key={`${child.label}-${idx}`}
-              item={child}
+              key={key}
+              item={entry}
               currentIndex={currentIndex}
               coloredSet={coloredSet}
               onNavigate={onNavigate}
@@ -83,9 +95,9 @@ export const ReaderTocDrawer = memo(function ReaderTocDrawer({
           {book && (
             <ul className="menu w-full flex-nowrap">
               {book.toc.length > 0
-                ? book.toc.map((entry, idx) => (
+                ? keyedTocItems(book.toc).map(({ key, entry }) => (
                     <TocItem
-                      key={`${entry.label}-${idx}`}
+                      key={key}
                       item={entry}
                       currentIndex={currentIndex}
                       coloredSet={coloredSet}
@@ -104,6 +116,7 @@ export const ReaderTocDrawer = memo(function ReaderTocDrawer({
                         </span>
                         {entry.colored && (
                           <span
+                            role="img"
                             className="badge badge-xs badge-primary shrink-0"
                             title="已完成着色"
                             aria-label="已着色"

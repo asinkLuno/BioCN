@@ -37,9 +37,9 @@ describe("fileNameOf", () => {
   });
 
   it("decodes the document path Android hands back", () => {
-    expect(fileNameOf("content://com.android.providers.downloads/primary%3ABooks%2FDune.epub")).toBe(
-      "Dune.epub",
-    );
+    expect(
+      fileNameOf("content://com.android.providers.downloads/primary%3ABooks%2FDune.epub"),
+    ).toBe("Dune.epub");
   });
 
   it("keeps a name that is not valid escaping", () => {

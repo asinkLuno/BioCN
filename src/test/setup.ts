@@ -1,9 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
+import { resetRouterForTest } from "../lib/router";
 
 afterEach(() => {
   cleanup();
+  resetRouterForTest();
   vi.clearAllMocks();
 });
 

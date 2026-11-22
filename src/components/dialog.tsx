@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from "react";
+import { type RefObject, useEffect } from "react";
 
 /**
  * The one line every React-driven `<dialog>` needs: open it an effect after
@@ -29,12 +29,5 @@ export function useDialog(ref: RefObject<HTMLDialogElement | null> | null, open:
  * (the model sheet refuses to close while an operation runs).
  */
 export function ModalBackdrop({ onClose }: { onClose: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-label="关闭"
-      className="modal-backdrop"
-      onClick={onClose}
-    />
-  );
+  return <button type="button" aria-label="关闭" className="modal-backdrop" onClick={onClose} />;
 }

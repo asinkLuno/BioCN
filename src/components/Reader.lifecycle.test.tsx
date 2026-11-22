@@ -1,8 +1,8 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Reader } from "./Reader";
 import * as reading from "../lib/reading";
+import { Reader } from "./Reader";
 
 vi.mock("@tauri-apps/api/core", () => ({
   isTauri: vi.fn(() => true),

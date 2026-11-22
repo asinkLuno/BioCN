@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { ColoringOverlay } from "./ColoringOverlay";
 import type { ColoringProgress } from "../lib/reading";
+import { ColoringOverlay } from "./ColoringOverlay";
 
 function makeProgress(overrides: Partial<ColoringProgress> = {}): ColoringProgress {
   return {

@@ -74,10 +74,7 @@ export interface ResolvedBookLink {
  * Resolves a relative link inside an EPUB chapter (e.g. `../Text/ch2.xhtml#fn1`)
  * against the current chapter's container path (`OEBPS/Text/ch1.xhtml`).
  */
-export function resolveRelativeHref(
-  currentHref: string,
-  rawHref: string,
-): ResolvedBookLink | null {
+export function resolveRelativeHref(currentHref: string, rawHref: string): ResolvedBookLink | null {
   const trimmed = rawHref.trim();
   if (!trimmed) return null;
   const hashIndex = trimmed.indexOf("#");

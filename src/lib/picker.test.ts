@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import { open } from "@tauri-apps/plugin-dialog";
+import { describe, expect, it, vi } from "vitest";
 import { epubFilter, isMobile } from "./picker";
 
 const openMock = vi.mocked(open);

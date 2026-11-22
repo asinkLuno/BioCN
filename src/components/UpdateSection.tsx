@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { message } from "../lib/reading";
 import {
   checkUpdate,
   compareVersions,
@@ -11,7 +12,6 @@ import {
   type UpdateProgress,
   type UpdateStatus,
 } from "../lib/update";
-import { message } from "../lib/reading";
 
 /** Update metadata survives remounts (shelf ⇄ reader): one check per app run. */
 let cachedStatus: UpdateStatus | null = null;
@@ -194,11 +194,7 @@ export function UpdateSection({
                 {downloading ? "下载中…" : "下载"}
               </button>
             ) : (
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => void openReleases()}
-              >
+              <button type="button" className="btn btn-sm" onClick={() => void openReleases()}>
                 到发布页下载
               </button>
             )}
@@ -243,9 +239,8 @@ export function UpdateSection({
             <details className="mt-2">
               <summary className="cursor-pointer text-xs text-base-content/60">更新内容</summary>
               <ul className="mt-1 space-y-0.5 text-xs leading-relaxed text-base-content/65">
-                {notes.map((line, index) => (
-                  // The same line can occur twice, so index the key.
-                  <li key={`${index}:${line}`}>{line}</li>
+                {keyedLines(notes).map(({ key, text }) => (
+                  <li key={key}>{text}</li>
                 ))}
               </ul>
             </details>
@@ -262,4 +257,14 @@ export function UpdateSection({
       )}
     </section>
   );
+}
+
+function keyedLines(lines: readonly string[]): { key: string; text: string }[] {
+  // The same line can occur twice, so disambiguate duplicates by occurrence.
+  const counts = new Map<string, number>();
+  return lines.map((text) => {
+    const count = counts.get(text) ?? 0;
+    counts.set(text, count + 1);
+    return { key: count === 0 ? text : `${text}#${count}`, text };
+  });
 }

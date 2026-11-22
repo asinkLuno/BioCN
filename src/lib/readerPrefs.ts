@@ -105,20 +105,15 @@ function normalizePrefs(raw: unknown): ReaderPrefs {
     return DEFAULT_READER_PREFS;
   }
   const input = raw as Partial<ReaderPrefs>;
-  const viewMode: ReaderViewMode =
-    input.viewMode === "paginated" ? "paginated" : "scrolled";
+  const viewMode: ReaderViewMode = input.viewMode === "paginated" ? "paginated" : "scrolled";
   const theme: ReaderTheme =
     input.theme === "light" || input.theme === "sepia" || input.theme === "dark"
       ? input.theme
       : "auto";
-  const fontFamily: ReaderFontFamily =
-    input.fontFamily === "serif" ? "serif" : "default";
+  const fontFamily: ReaderFontFamily = input.fontFamily === "serif" ? "serif" : "default";
   const pageMargin: ReaderPageMargin =
-    input.pageMargin === "compact" || input.pageMargin === "wide"
-      ? input.pageMargin
-      : "normal";
-  const textAlign: ReaderTextAlign =
-    input.textAlign === "justify" ? "justify" : "default";
+    input.pageMargin === "compact" || input.pageMargin === "wide" ? input.pageMargin : "normal";
+  const textAlign: ReaderTextAlign = input.textAlign === "justify" ? "justify" : "default";
   const pageAnimation =
     typeof input.pageAnimation === "boolean"
       ? input.pageAnimation
@@ -128,9 +123,7 @@ function normalizePrefs(raw: unknown): ReaderPrefs {
       ? input.dimImagesInDark
       : DEFAULT_READER_PREFS.dimImagesInDark;
   const rawColors =
-    typeof input.svoColors === "object" && input.svoColors !== null
-      ? input.svoColors
-      : undefined;
+    typeof input.svoColors === "object" && input.svoColors !== null ? input.svoColors : undefined;
   const svoColors: SvoColors = {
     subject: normalizeHexColor(rawColors?.subject),
     predicate: normalizeHexColor(rawColors?.predicate),

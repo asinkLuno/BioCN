@@ -13,9 +13,27 @@
  *   scrolled reading and CSS multi-column paginated reading (1 or 2 columns),
  *   plus live theme / typography / SVO coloring toggles and saved progress.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type AppTheme, loadAppTheme, onAppThemeChange } from "../lib/appTheme";
+import { bookResourceUrl, resolveRelativeHref } from "../lib/bookProtocol";
 import {
+  collectTocAnchors,
+  hasVisibleFootnoteContent,
+  looksLikeFootnoteHref,
+  parseFootnoteHtml,
+} from "../lib/footnote";
+import { type ChapterTarget, isFrameMessage, postToFrame } from "../lib/readerBridge";
+import {
+  loadReaderPrefs,
+  type ReaderPrefs,
+  type ReaderTheme,
+  type ReaderViewMode,
+  saveReaderPrefs,
+} from "../lib/readerPrefs";
+import {
+  type BookView,
   bookChapterCancelStream,
   bookChapterColorize,
   bookChapterPrefetch,
@@ -23,23 +41,10 @@ import {
   bookProgressSave,
   message,
   onChapterColorPatch,
-  type BookView,
   type RunPatch,
 } from "../lib/reading";
-import { bookResourceUrl, resolveRelativeHref } from "../lib/bookProtocol";
-import {
-  isFrameMessage,
-  postToFrame,
-  type ChapterTarget,
-} from "../lib/readerBridge";
-import {
-  loadReaderPrefs,
-  saveReaderPrefs,
-  type ReaderPrefs,
-  type ReaderTheme,
-  type ReaderViewMode,
-} from "../lib/readerPrefs";
-import { loadAppTheme, onAppThemeChange, type AppTheme } from "../lib/appTheme";
+import { useHistoryOverlay } from "../lib/router";
+import { type FootnoteView, ReaderFootnoteDialog } from "./ReaderFootnoteDialog";
 import { ReaderPrefsPopover } from "./ReaderPrefsPopover";
 import { ReaderTocDrawer } from "./ReaderTocDrawer";
 
@@ -87,6 +92,17 @@ const INITIAL_COLOR_STATE: ChapterProgressState = {
   error: null,
 };
 
+const SKELETON_LINE_WIDTHS = [
+  { id: "l1", width: 100 },
+  { id: "l2", width: 96 },
+  { id: "l3", width: 99 },
+  { id: "l4", width: 88 },
+  { id: "l5", width: 100 },
+  { id: "l6", width: 94 },
+  { id: "l7", width: 72 },
+  { id: "l8", width: 100 },
+] as const;
+
 /**
  * Paper backdrop matched to `src-tauri/src/protocol/reader.css` so the host
  * surface behind the iframe never flashes a mismatched color between chapters.
@@ -105,13 +121,7 @@ function readerBgClass(theme: ReaderTheme): string {
   }
 }
 
-export function Reader({
-  id,
-  onClose,
-  onOpenSettings,
-  modelsOpen,
-  modelRevision = 0,
-}: Props) {
+export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision = 0 }: Props) {
   const [book, setBook] = useState<BookView | null>(null);
   const [index, setIndex] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,6 +129,7 @@ export function Reader({
   const [openAttempt, setOpenAttempt] = useState(0);
   const [tocOpen, setTocOpen] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  const [footnote, setFootnote] = useState<FootnoteView | null>(null);
   const [chromeVisible, setChromeVisible] = useState(true);
   const [prefs, setPrefs] = useState<ReaderPrefs>(() => loadReaderPrefs());
   const [appTheme, setAppTheme] = useState<AppTheme>(() => loadAppTheme());
@@ -157,9 +168,22 @@ export function Reader({
   const swapFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPatchesRef = useRef<RunPatch[]>([]);
   const pendingTargetRef = useRef<ChapterTarget>({});
+  const footnoteReqSeqRef = useRef(0);
+  const footnoteRequestRef = useRef<{
+    id: number;
+    timer: ReturnType<typeof setTimeout>;
+    fallback: () => void;
+    targetChapterIndex: number | null;
+    baseHref: string;
+  } | null>(null);
   const prefsRef = useRef(effectivePrefs);
   // Keep latest effective prefs visible synchronously to chapterUrl and message handlers.
   prefsRef.current = effectivePrefs;
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  const colorActiveRef = useRef(false);
+  colorActiveRef.current = colorState.active;
+  const needsReloadOnColorOnRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<{
     bookId: string;
@@ -169,6 +193,40 @@ export function Reader({
     dirty: boolean;
   } | null>(null);
   const prefsMenuRef = useRef<HTMLDivElement>(null);
+
+  const clearPendingFootnoteRequest = useCallback(() => {
+    if (footnoteRequestRef.current) {
+      clearTimeout(footnoteRequestRef.current.timer);
+      footnoteRequestRef.current = null;
+    }
+  }, []);
+
+  const openFootnotePopup = useCallback(
+    (params: {
+      label: string;
+      html: string;
+      baseHref: string;
+      targetChapterIndex: number | null;
+      targetAnchor: string;
+      sameChapter: boolean;
+    }): boolean => {
+      const nodes = parseFootnoteHtml(params.html, {
+        bookId: id,
+        baseHref: params.baseHref,
+      });
+      if (!hasVisibleFootnoteContent(nodes)) return false;
+      setPrefsOpen(false);
+      setFootnote({
+        label: params.label,
+        nodes,
+        targetChapterIndex: params.targetChapterIndex,
+        targetAnchor: params.targetAnchor,
+        sameChapter: params.sameChapter,
+      });
+      return true;
+    },
+    [id],
+  );
 
   const flushProgress = useCallback(() => {
     if (saveTimerRef.current) {
@@ -230,8 +288,12 @@ export function Reader({
 
   // Open book metadata (OPF + TOC + spine + saved progress) — milliseconds.
   useEffect(() => {
+    void openAttempt;
     let cancelled = false;
     flushProgress();
+    clearPendingFootnoteRequest();
+    setFootnote(null);
+    needsReloadOnColorOnRef.current = false;
     lastSavedRef.current = null;
     setBook(null);
     setIndex(null);
@@ -279,7 +341,7 @@ export function Reader({
     return () => {
       cancelled = true;
     };
-  }, [id, openAttempt, flushProgress]);
+  }, [id, openAttempt, flushProgress, clearPendingFootnoteRequest]);
 
   // Refresh chapter coloring badges & hasModel when the user installs, switches,
   // or removes a model in Settings without losing their current chapter/position.
@@ -308,10 +370,11 @@ export function Reader({
         clearTimeout(swapFallbackRef.current);
         swapFallbackRef.current = null;
       }
+      clearPendingFootnoteRequest();
       flushProgress();
       void bookChapterCancelStream().catch(() => {});
     };
-  }, [flushProgress]);
+  }, [flushProgress, clearPendingFootnoteRequest]);
 
   const position = useMemo(() => {
     if (!book || book.id !== id || index === null) return null;
@@ -335,6 +398,11 @@ export function Reader({
     }
     return set;
   }, [book]);
+
+  const tocAnchors = useMemo(
+    () => (book ? collectTocAnchors(book.toc, book.chapters) : new Set<string>()),
+    [book],
+  );
 
   const chapterRevision = modelRevision * 1000 + reloadNonce;
   const currentHref = position?.current.href ?? null;
@@ -422,9 +490,31 @@ export function Reader({
     };
   }, [chapterUrl, currentTitle, currentChapterIndex, promoteSlot]);
 
+  const loadedBookId = book?.id ?? null;
+
   // Trigger P0 progressive coloring for the active chapter and subscribe to patches.
+  // Respect `prefs.coloringEnabled`: when turned off, cancel any running stream
+  // and skip analysis/prefetch instead of continuing to color in the background.
   useEffect(() => {
-    if (index === null || !book || book.id !== id) return;
+    void chapterRevision;
+    if (index === null || loadedBookId !== id) return;
+    if (!prefs.coloringEnabled) {
+      if (colorActiveRef.current) {
+        needsReloadOnColorOnRef.current = true;
+      }
+      setColorState(INITIAL_COLOR_STATE);
+      void bookChapterCancelStream().catch(() => {});
+      return;
+    }
+    if (needsReloadOnColorOnRef.current) {
+      needsReloadOnColorOnRef.current = false;
+      pendingTargetRef.current = {
+        paragraphIndex: viewportRef.current.paragraphIndex,
+        ratio: viewportRef.current.ratio,
+      };
+      setReloadNonce((n) => n + 1);
+      return;
+    }
     let cancelled = false;
     let receivedPatch = false;
     let unlisten: (() => void) | undefined;
@@ -518,17 +608,19 @@ export function Reader({
       cancelled = true;
       unlisten?.();
     };
-  }, [id, index, book?.id, chapterRevision, getCurrentFrame]);
+  }, [id, index, loadedBookId, chapterRevision, prefs.coloringEnabled, getCurrentFrame]);
 
   // Quietly prefetch (P2) the next chapter once the user settles on the current chapter.
   useEffect(() => {
     const nextChapter = position?.next;
-    if (!nextChapter || nextChapter.colored || colorState.missingModel) return;
+    if (!prefs.coloringEnabled || !nextChapter || nextChapter.colored || colorState.missingModel) {
+      return;
+    }
     const timer = setTimeout(() => {
       void bookChapterPrefetch(id, nextChapter.index).catch(() => {});
     }, 1200);
     return () => clearTimeout(timer);
-  }, [id, position?.next, colorState.missingModel]);
+  }, [id, position?.next, colorState.missingModel, prefs.coloringEnabled]);
 
   const navigateToChapter = useCallback(
     (targetIndex: number, target: ChapterTarget = {}) => {
@@ -543,10 +635,13 @@ export function Reader({
         }
         return;
       }
+      clearPendingFootnoteRequest();
+      setFootnote(null);
+      needsReloadOnColorOnRef.current = false;
       pendingTargetRef.current = target;
       setIndex(targetIndex);
     },
-    [index, getCurrentFrame],
+    [index, getCurrentFrame, clearPendingFootnoteRequest],
   );
 
   const handleTocNavigate = useCallback(
@@ -558,6 +653,45 @@ export function Reader({
   );
 
   const closeToc = useCallback(() => setTocOpen(false), []);
+  const closePrefs = useCallback(() => setPrefsOpen(false), []);
+  const closeFootnote = useCallback(() => setFootnote(null), []);
+
+  // Register reader overlays with browser history so Android/browser Back
+  // closes them cleanly before leaving the book.
+  useHistoryOverlay(tocOpen, closeToc);
+  useHistoryOverlay(prefsOpen, closePrefs);
+  useHistoryOverlay(footnote !== null, closeFootnote);
+
+  const handleFootnoteJump = useCallback(() => {
+    if (!footnote) return;
+    const target = footnote;
+    setFootnote(null);
+    if (target.sameChapter) {
+      postToFrame(getCurrentFrame().frame, {
+        source: "biocn-host",
+        type: "jump",
+        anchor: target.targetAnchor,
+      });
+    } else if (target.targetChapterIndex !== null) {
+      navigateToChapter(target.targetChapterIndex, { anchor: target.targetAnchor });
+    }
+  }, [footnote, getCurrentFrame, navigateToChapter]);
+
+  const handleFootnoteNavigateInternal = useCallback(
+    (path: string, anchor: string | null) => {
+      if (!book) return;
+      setFootnote(null);
+      const targetChapter = book.chapters.find((ch) => ch.href === path);
+      if (targetChapter) {
+        navigateToChapter(targetChapter.index, { anchor });
+      }
+    },
+    [book, navigateToChapter],
+  );
+
+  const handleFootnoteOpenExternal = useCallback((href: string) => {
+    void openUrl(href).catch(() => {});
+  }, []);
 
   const scheduleProgressSave = useCallback(
     (chapterIndex: number, paragraphIndex: number | null, ratio: number) => {
@@ -646,14 +780,95 @@ export function Reader({
           }
           break;
         }
+        case "footnote": {
+          if (!isCurrentTarget || !position || !book) break;
+          clearPendingFootnoteRequest();
+          const resolved = resolveRelativeHref(position.current.href, msg.href);
+          const baseHref = resolved?.path ?? position.current.href;
+          const targetChapter = resolved
+            ? book.chapters.find((ch) => ch.href === resolved.path)
+            : position.current;
+          const opened = openFootnotePopup({
+            label: msg.label,
+            html: msg.html,
+            baseHref,
+            targetChapterIndex: targetChapter ? targetChapter.index : null,
+            targetAnchor: msg.anchor,
+            sameChapter: msg.sameChapter,
+          });
+          if (!opened) {
+            if (msg.sameChapter) {
+              postToFrame(senderFrame, {
+                source: "biocn-host",
+                type: "jump",
+                anchor: msg.anchor,
+              });
+            } else if (targetChapter) {
+              navigateToChapter(targetChapter.index, { anchor: msg.anchor });
+            }
+          }
+          break;
+        }
+        case "footnote-result": {
+          if (!isCurrentTarget) break;
+          const pending = footnoteRequestRef.current;
+          if (!pending || pending.id !== msg.requestId) break;
+          clearPendingFootnoteRequest();
+          if (msg.found && msg.html) {
+            const opened = openFootnotePopup({
+              label: msg.label ?? "注释",
+              html: msg.html,
+              baseHref: pending.baseHref,
+              targetChapterIndex: pending.targetChapterIndex,
+              targetAnchor: msg.anchor,
+              sameChapter: false,
+            });
+            if (opened) break;
+          }
+          pending.fallback();
+          break;
+        }
         case "link": {
           if (!isCurrentTarget || !position || !book) break;
           const resolved = resolveRelativeHref(position.current.href, msg.href);
           if (!resolved) break;
           const targetChapter = book.chapters.find((ch) => ch.href === resolved.path);
-          if (targetChapter) {
-            navigateToChapter(targetChapter.index, { anchor: resolved.anchor });
+          const fallback = () => {
+            if (targetChapter) {
+              navigateToChapter(targetChapter.index, { anchor: resolved.anchor });
+            }
+          };
+          if (
+            resolved.anchor &&
+            !tocAnchors.has(`${resolved.path}#${resolved.anchor}`) &&
+            looksLikeFootnoteHref(resolved.path, resolved.anchor) &&
+            slotReadyRef.current[senderSlot]
+          ) {
+            clearPendingFootnoteRequest();
+            const requestId = ++footnoteReqSeqRef.current;
+            const timer = setTimeout(() => {
+              if (footnoteRequestRef.current?.id === requestId) {
+                footnoteRequestRef.current = null;
+                fallback();
+              }
+            }, 450);
+            footnoteRequestRef.current = {
+              id: requestId,
+              timer,
+              fallback,
+              targetChapterIndex: targetChapter ? targetChapter.index : null,
+              baseHref: resolved.path,
+            };
+            postToFrame(senderFrame, {
+              source: "biocn-host",
+              type: "resolve-footnote",
+              requestId,
+              href: msg.href,
+              anchor: resolved.anchor,
+            });
+            break;
           }
+          fallback();
           break;
         }
         case "external": {
@@ -662,6 +877,10 @@ export function Reader({
         }
         case "key": {
           if (msg.key === "Escape") {
+            if (footnote) {
+              setFootnote(null);
+              break;
+            }
             if (modelsOpen || document.querySelector("dialog[open]")) break;
             if (prefsOpen) setPrefsOpen(false);
             else if (tocOpen) setTocOpen(false);
@@ -686,6 +905,8 @@ export function Reader({
     book,
     index,
     position,
+    tocAnchors,
+    footnote,
     prefsOpen,
     tocOpen,
     modelsOpen,
@@ -693,6 +914,8 @@ export function Reader({
     navigateToChapter,
     scheduleProgressSave,
     promoteSlot,
+    clearPendingFootnoteRequest,
+    openFootnotePopup,
   ]);
 
   // Host keyboard shortcuts (when focus is outside the iframe).
@@ -781,9 +1004,10 @@ export function Reader({
       ? viewport.page < viewport.totalPages - 1 || Boolean(position?.next)
       : Boolean(position?.next);
 
+  const visibleColorState = prefs.coloringEnabled ? colorState : INITIAL_COLOR_STATE;
   const colorPercent =
-    colorState.total > 0
-      ? Math.min(100, Math.round((colorState.done / colorState.total) * 100))
+    visibleColorState.total > 0
+      ? Math.min(100, Math.round((visibleColorState.done / visibleColorState.total) * 100))
       : 0;
 
   // Keep chrome visible while loading or showing an error so the user always
@@ -841,7 +1065,7 @@ export function Reader({
                 {position?.current.title && (
                   <span className="truncate">{position.current.title}</span>
                 )}
-                {colorState.active && (
+                {visibleColorState.active && (
                   <span
                     role="status"
                     aria-label="本章着色进度"
@@ -851,7 +1075,7 @@ export function Reader({
                     着色 {colorPercent}%
                   </span>
                 )}
-                {colorState.missingModel && (
+                {visibleColorState.missingModel && (
                   <button
                     type="button"
                     className="badge badge-soft badge-warning badge-xs shrink-0 cursor-pointer hover:badge-warning"
@@ -868,7 +1092,12 @@ export function Reader({
               className={`btn btn-sm ${prefs.coloringEnabled ? "btn-soft btn-primary" : "btn-ghost"}`}
               aria-pressed={prefs.coloringEnabled}
               title={prefs.coloringEnabled ? "关闭主谓宾着色" : "开启主谓宾着色"}
-              onClick={() => updatePrefs({ coloringEnabled: !prefs.coloringEnabled })}
+              onClick={(event) => {
+                // Release pointer/touch focus so Android WebView doesn't keep a
+                // sticky highlight on the ghost button after toggling off.
+                if (event.detail > 0) event.currentTarget.blur();
+                updatePrefs({ coloringEnabled: !prefs.coloringEnabled });
+              }}
             >
               着色
             </button>
@@ -904,20 +1133,20 @@ export function Reader({
               目录
             </button>
           </div>
-          {colorState.active && (
+          {visibleColorState.active && (
             <progress
               className="progress progress-primary block h-0.5 w-full rounded-none"
-              value={colorState.done}
-              max={Math.max(colorState.total, 1)}
+              value={visibleColorState.done}
+              max={Math.max(visibleColorState.total, 1)}
             />
           )}
         </header>
 
-        {colorState.error && (
+        {visibleColorState.error && (
           <div className="absolute inset-x-0 top-14 z-10 mx-auto w-full max-w-3xl px-4">
             <div role="alert" className="alert alert-warning alert-soft py-2 text-xs shadow">
               <span className="flex-1 break-words">
-                本章着色暂时失败（仍可阅读原文）：{colorState.error}
+                本章着色暂时失败（仍可阅读原文）：{visibleColorState.error}
               </span>
               <button
                 type="button"
@@ -951,11 +1180,11 @@ export function Reader({
             </div>
           ) : loading || chapterUrl === null ? (
             <div className="mx-auto w-full max-w-3xl space-y-4 px-6 pt-20">
-              {Array.from({ length: 8 }, (_, line) => (
+              {SKELETON_LINE_WIDTHS.map((line) => (
                 <div
-                  key={line}
+                  key={line.id}
                   className="skeleton h-4 rounded"
-                  style={{ width: `${[100, 96, 99, 88, 100, 94, 72, 100][line]}%` }}
+                  style={{ width: `${line.width}%` }}
                 />
               ))}
             </div>
@@ -966,7 +1195,7 @@ export function Reader({
               const isActive = activeSlot === slot;
               return (
                 <iframe
-                  key={slot}
+                  key={`${slot}:${item.url}`}
                   ref={(el) => {
                     slotRefs.current[slot] = el;
                   }}
@@ -1048,6 +1277,18 @@ export function Reader({
         onNavigate={handleTocNavigate}
         onClose={closeToc}
       />
+
+      {footnote && (
+        <ReaderFootnoteDialog
+          footnote={footnote}
+          prefs={effectivePrefs}
+          effectiveTheme={effectiveTheme}
+          onClose={closeFootnote}
+          onJumpToTarget={handleFootnoteJump}
+          onNavigateInternal={handleFootnoteNavigateInternal}
+          onOpenExternal={handleFootnoteOpenExternal}
+        />
+      )}
     </div>
   );
 }

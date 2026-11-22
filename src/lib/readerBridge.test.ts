@@ -15,12 +15,46 @@ describe("isFrameMessage boundary validation", () => {
     expect(
       isFrameMessage({ source: "biocn-reader", type: "external", href: "file:///etc/passwd" }),
     ).toBe(false);
-    expect(
-      isFrameMessage({ source: "biocn-reader", type: "progress", ratio: Number.NaN }),
-    ).toBe(false);
+    expect(isFrameMessage({ source: "biocn-reader", type: "progress", ratio: Number.NaN })).toBe(
+      false,
+    );
     expect(isFrameMessage({ source: "biocn-reader", type: "turn", direction: "sideways" })).toBe(
       false,
     );
+    expect(
+      isFrameMessage({
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "[1]",
+        html: "<p>注释</p>",
+        sameChapter: true,
+      }),
+    ).toBe(true);
+    expect(
+      isFrameMessage({
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "[1]",
+        html: "",
+        sameChapter: true,
+      }),
+    ).toBe(false);
+    expect(
+      isFrameMessage({
+        source: "biocn-reader",
+        type: "footnote-result",
+        requestId: 1,
+        href: "notes.xhtml#fn1",
+        anchor: "fn1",
+        found: true,
+        label: "注释",
+        html: "<p>尾注内容</p>",
+      }),
+    ).toBe(true);
   });
 });
 
@@ -158,9 +192,9 @@ describe("reader iframe bridge.js", () => {
     // Clicking the center of prose emits `tap` to toggle reader chrome.
     posted = [];
     Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true });
-    document.querySelector("p")!.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, button: 0, clientX: 500 }),
-    );
+    document
+      .querySelector("p")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, clientX: 500 }));
     expect(posted).toContainEqual({ source: "biocn-reader", type: "tap" });
   });
 
@@ -214,9 +248,9 @@ describe("reader iframe bridge.js", () => {
 
     // Stray click immediately after swipe is suppressed (no bogus `tap`).
     posted = [];
-    document.querySelector("p")!.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, button: 0, clientX: 200 }),
-    );
+    document
+      .querySelector("p")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, clientX: 200 }));
     expect(posted).not.toContainEqual({ source: "biocn-reader", type: "tap" });
 
     // Swiping left again on the last page asks host to turn to the next chapter.
@@ -263,5 +297,189 @@ describe("reader iframe bridge.js", () => {
       type: "turn",
       direction: "next",
     });
+  });
+
+  it("extracts same-chapter EPUB 3 and EPUB 2 footnotes as popup messages without jumping", () => {
+    document.body.innerHTML = `
+      <p>正文句子<a id="ref1" epub:type="noteref" href="#fn1">1</a>和另一个脚注<sup><a id="ref2" href="#fn2">[2]</a></sup>。</p>
+      <p><a id="sec-link" href="#sec-title">跳到标题</a></p>
+      <h2 id="sec-title">第一节</h2>
+      <aside id="fn1" epub:type="footnote"><p>第一条注释内容。<a epub:type="backlink" href="#ref1">↩</a></p></aside>
+      <div class="footnotes">
+        <p><a id="fn2" href="#ref2">[2]</a> 第二条注释内容。</p>
+      </div>
+    `;
+
+    // EPUB 3 noteref -> aside footnote (backlink stripped)
+    posted = [];
+    document.getElementById("ref1")!.click();
+    expect(posted).toContainEqual(
+      expect.objectContaining({
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "1",
+        sameChapter: true,
+      }),
+    );
+    const fn1Msg = posted.find((m) => (m as { type?: string }).type === "footnote") as {
+      html: string;
+    };
+    expect(fn1Msg.html).toContain("第一条注释内容。");
+    expect(fn1Msg.html).not.toContain("↩");
+
+    // EPUB 2 sup link -> inline anchor inside <p> (backlink stripped)
+    posted = [];
+    document.getElementById("ref2")!.click();
+    expect(posted).toContainEqual(
+      expect.objectContaining({
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn2",
+        anchor: "fn2",
+        label: "[2]",
+        sameChapter: true,
+      }),
+    );
+    const fn2Msg = posted.find((m) => (m as { type?: string }).type === "footnote") as {
+      html: string;
+    };
+    expect(fn2Msg.html).toContain("第二条注释内容。");
+    expect(fn2Msg.html).not.toContain("#ref2");
+
+    // Clicking a backlink inside a footnote must NOT pop up the body paragraph
+    posted = [];
+    document.querySelector<HTMLAnchorElement>('a[href="#ref1"]')!.click();
+    expect(posted.some((m) => (m as { type?: string }).type === "footnote")).toBe(false);
+
+    // Clicking a link to a section heading must NOT pop up a footnote
+    posted = [];
+    document.getElementById("sec-link")!.click();
+    expect(posted.some((m) => (m as { type?: string }).type === "footnote")).toBe(false);
+  });
+
+  it("fetches cross-chapter footnotes same-origin and falls back to link navigation on miss", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () =>
+        `<html><body><ol><li id="n1"><p>跨章尾注说明。<a href="#ref-n1">返回</a></p></li></ol></body></html>`,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      document.body.innerHTML = `
+        <p>正文<sup><a id="ref-n1" href="notes.xhtml#n1">①</a></sup>与缺失脚注<sup><a id="ref-miss" href="notes.xhtml#missing">②</a></sup></p>
+      `;
+
+      posted = [];
+      document.getElementById("ref-n1")!.click();
+      await vi.waitFor(() => {
+        expect(posted).toContainEqual(
+          expect.objectContaining({
+            source: "biocn-reader",
+            type: "footnote",
+            href: "notes.xhtml#n1",
+            anchor: "n1",
+            label: "①",
+            sameChapter: false,
+          }),
+        );
+      });
+      const remoteMsg = posted.find((m) => (m as { type?: string }).type === "footnote") as {
+        html: string;
+      };
+      expect(remoteMsg.html).toContain("跨章尾注说明。");
+      expect(remoteMsg.html).not.toContain("返回");
+      const callsAfterFirst = fetchMock.mock.calls.length;
+      expect(callsAfterFirst).toBeGreaterThanOrEqual(1);
+
+      // Second lookup against the same document reuses the parsed cache and falls back cleanly on missing anchor.
+      posted = [];
+      document.getElementById("ref-miss")!.click();
+      await vi.waitFor(() => {
+        expect(posted).toContainEqual({
+          source: "biocn-reader",
+          type: "link",
+          href: "notes.xhtml#missing",
+        });
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(callsAfterFirst);
+
+      // Host `resolve-footnote` command resolves remote note & reports found/not-found.
+      posted = [];
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: {
+            source: "biocn-host",
+            type: "resolve-footnote",
+            requestId: 7,
+            href: "notes.xhtml#n1",
+            anchor: "n1",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(posted).toContainEqual(
+          expect.objectContaining({
+            source: "biocn-reader",
+            type: "footnote-result",
+            requestId: 7,
+            found: true,
+          }),
+        );
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("appends invisible trailing columns on multi-page chapters and cleans up in scrolled mode", () => {
+    // 2-column desktop spread (1100px wide, 3 columns -> scrollWidth 1622 < 2 * 1100)
+    Object.defineProperty(window, "innerWidth", { value: 1100, configurable: true });
+    Object.defineProperty(document.body, "scrollWidth", {
+      value: 1622,
+      configurable: true,
+    });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          source: "biocn-host",
+          type: "init",
+          prefs: { ...DEFAULT_READER_PREFS, viewMode: "paginated", columns: 2 },
+          target: {},
+        },
+      }),
+    );
+
+    const tail = document.getElementById("biocn-page-tail");
+    expect(tail).not.toBeNull();
+    expect(tail!.style.display).toBe("block");
+    expect(tail!.querySelectorAll(".biocn-page-tail-col")).toHaveLength(2);
+
+    // Switching to 1-column mode adjusts the spacer to 1 trailing column.
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          source: "biocn-host",
+          type: "prefs",
+          prefs: { ...DEFAULT_READER_PREFS, viewMode: "paginated", columns: 1 },
+        },
+      }),
+    );
+    expect(document.querySelectorAll("#biocn-page-tail .biocn-page-tail-col")).toHaveLength(1);
+
+    // Switching back to scrolled mode removes the spacer completely.
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          source: "biocn-host",
+          type: "prefs",
+          prefs: { ...DEFAULT_READER_PREFS, viewMode: "scrolled" },
+        },
+      }),
+    );
+    expect(document.getElementById("biocn-page-tail")).toBeNull();
   });
 });

@@ -83,8 +83,7 @@ export const bookChapterColorize = (id: string, index: number) =>
 export const bookChapterPrefetch = (id: string, index: number) =>
   invoke<void>("book_chapter_prefetch", { id, index });
 
-export const bookChapterCancelStream = () =>
-  invoke<void>("book_chapter_cancel_stream");
+export const bookChapterCancelStream = () => invoke<void>("book_chapter_cancel_stream");
 
 export const bookProgressSave = (
   id: string,
@@ -101,12 +100,8 @@ export const bookProgressSave = (
 
 export const CHAPTER_PATCH_EVENT = "chapter://color-patch";
 
-export async function onChapterColorPatch(
-  handler: (patch: ChapterColorPatch) => void,
-) {
-  return listen<ChapterColorPatch>(CHAPTER_PATCH_EVENT, (event) =>
-    handler(event.payload),
-  );
+export async function onChapterColorPatch(handler: (patch: ChapterColorPatch) => void) {
+  return listen<ChapterColorPatch>(CHAPTER_PATCH_EVENT, (event) => handler(event.payload));
 }
 
 /**
@@ -128,8 +123,7 @@ export const COLORING_EVENT = "coloring://progress";
 
 export const colorizeBook = (id: string) => invoke<void>("colorize_book", { id });
 
-export const coloringProgress = () =>
-  invoke<ColoringProgress | null>("coloring_progress");
+export const coloringProgress = () => invoke<ColoringProgress | null>("coloring_progress");
 
 export const cancelColorizeBook = () => invoke<void>("colorize_book_cancel");
 
@@ -152,8 +146,6 @@ export interface BookColoringStatus {
 export const bookColoringStatus = (id: string) =>
   invoke<BookColoringStatus>("book_coloring_status", { id });
 
-export async function onColoringProgress(
-  handler: (progress: ColoringProgress) => void,
-) {
+export async function onColoringProgress(handler: (progress: ColoringProgress) => void) {
   return listen<ColoringProgress>(COLORING_EVENT, (event) => handler(event.payload));
 }

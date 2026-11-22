@@ -1,13 +1,10 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Book } from "../lib/library";
-import {
-  bookColoringStatus,
-  type BookColoringStatus,
-  type ColoringProgress,
-} from "../lib/reading";
+import { type BookColoringStatus, bookColoringStatus, type ColoringProgress } from "../lib/reading";
+import { useHistoryOverlay } from "../lib/router";
 import { ColoringOverlay } from "./ColoringOverlay";
+import { ModalBackdrop, useDialog } from "./dialog";
 import { ExportDialog } from "./ExportDialog";
-import { useDialog, ModalBackdrop } from "./dialog";
 
 interface Props {
   book: Book;
@@ -165,27 +162,23 @@ export const BookTile = memo(function BookTile({
   // A running job holds this book: exporting, clearing or removing it would
   // race the analysis, so they are all refused while `progress` is set.
   const coloring = progress !== null;
-  const [coverBroken, setCoverBroken] = useState(false);
+  const [brokenCover, setBrokenCover] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   /** Book's coloring coverage + model readiness, queried fresh each menu-open. */
   const [status, setStatus] = useState<StatusState>({ kind: "loading" });
   const [confirming, setConfirming] = useState<Confirming>(null);
   const [exporting, setExporting] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
-  const menuList = useRef<HTMLUListElement>(null);
+  const menuList = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
 
-  useEffect(() => {
-    setCoverBroken(false);
-  }, [cover]);
-
-  const closeMenu = (restoreFocus = true) => {
+  const closeMenu = useCallback((restoreFocus = true) => {
     setMenuOpen(false);
     // Closing via Escape or toggle must not drop focus to <body>; outside
     // pointer clicks should let the newly clicked target keep focus.
     if (restoreFocus) trigger.current?.focus();
-  };
+  }, []);
 
   // The menu is only rendered while open, so it must close like a real popover.
   useEffect(() => {
@@ -211,7 +204,7 @@ export const BookTile = memo(function BookTile({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [menuOpen]);
+  }, [menuOpen, closeMenu]);
 
   // Query coloring coverage & model availability whenever the menu opens (or a
   // running job on this book finishes while the menu is open). Re-asking on
@@ -238,7 +231,7 @@ export const BookTile = memo(function BookTile({
   useDialog(dialog, confirming !== null);
 
   /** Arrow keys walk the enabled menu items, as a `role="menu"` is expected to. */
-  const moveMenuFocus = (event: React.KeyboardEvent<HTMLUListElement>) => {
+  const moveMenuFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
     if (step === 0) return;
     event.preventDefault();
@@ -258,7 +251,9 @@ export const BookTile = memo(function BookTile({
     trigger.current?.focus();
   };
 
-  const showCover = cover !== undefined && !coverBroken;
+  useHistoryOverlay(confirming !== null, dismissConfirm);
+
+  const showCover = cover !== undefined && brokenCover !== cover;
   const {
     colorizeDisabled,
     colorizeTitle,
@@ -278,7 +273,10 @@ export const BookTile = memo(function BookTile({
             the unclipped dropdown menu so the 192px menu is never cut off on
             narrow multi-column shelves. */}
         <div className="relative aspect-[2/3] w-full">
-          <div className="h-full w-full overflow-hidden rounded-xl bg-base-200 ring-1 ring-base-content/10 transition ring-offset-2 ring-offset-base-100 hover:ring-primary/40 focus-within:ring-primary/60">
+          {/* `relative isolate` establishes the containing block & compositing
+              clip so `ColoringOverlay`'s `absolute inset-0 backdrop-blur-md`
+              is cleanly clipped by `rounded-xl` on both desktop and Android. */}
+          <div className="relative isolate h-full w-full overflow-hidden rounded-xl bg-base-200 ring-1 ring-base-content/10 transition ring-offset-2 ring-offset-base-100 hover:ring-primary/40 focus-within:ring-primary/60">
             {/* The cover is the button: on a shelf, the book itself is the target.
                 It sits under the menu, which needs its own taps. */}
             <button
@@ -292,7 +290,7 @@ export const BookTile = memo(function BookTile({
                   src={cover}
                   alt=""
                   loading="lazy"
-                  onError={() => setCoverBroken(true)}
+                  onError={() => setBrokenCover(cover)}
                   className="h-full w-full object-cover transition group-hover:brightness-95"
                 />
               ) : (
@@ -339,80 +337,82 @@ export const BookTile = memo(function BookTile({
               </svg>
             </button>
             {menuOpen && (
-              <ul
+              <div
                 ref={menuList}
                 role="menu"
                 tabIndex={-1}
-                className="dropdown-content menu z-30 mt-1 w-48 rounded-box bg-base-100 p-2 shadow-lg ring-1 ring-base-content/10 focus:outline-none"
+                className="dropdown-content z-30 mt-1 w-48 rounded-box bg-base-100 p-2 shadow-lg ring-1 ring-base-content/10 focus:outline-none"
                 onKeyDown={moveMenuFocus}
               >
-                {menuNote !== null && (
-                  <li
-                    role="none"
-                    className="menu-title px-3 py-1 text-xs font-normal text-base-content/55"
-                  >
-                    {menuNote}
+                <ul role="none" className="menu w-full p-0">
+                  {menuNote !== null && (
+                    <li
+                      role="none"
+                      className="menu-title px-3 py-1 text-xs font-normal text-base-content/55"
+                    >
+                      {menuNote}
+                    </li>
+                  )}
+                  <li role="none" title={colorizeTitle}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={colorizeDisabled}
+                      title={colorizeTitle}
+                      onClick={() => {
+                        closeMenu(true);
+                        if (coloring) onCancel();
+                        else onColorize(book.id);
+                      }}
+                    >
+                      {coloring ? "取消着色全书" : "着色全书"}
+                    </button>
                   </li>
-                )}
-                <li role="none" title={colorizeTitle}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={colorizeDisabled}
-                    title={colorizeTitle}
-                    onClick={() => {
-                      closeMenu(true);
-                      if (coloring) onCancel();
-                      else onColorize(book.id);
-                    }}
-                  >
-                    {coloring ? "取消着色全书" : "着色全书"}
-                  </button>
-                </li>
-                <li role="none" title={exportTitle}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={exportDisabled}
-                    title={exportTitle}
-                    onClick={() => {
-                      closeMenu(true);
-                      setExporting(true);
-                    }}
-                  >
-                    导出着色后的图书
-                  </button>
-                </li>
-                <li role="none" title={clearTitle}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={clearDisabled}
-                    title={clearTitle}
-                    onClick={() => {
-                      closeMenu(true);
-                      setConfirming("clear-cache");
-                    }}
-                  >
-                    清除着色缓存
-                  </button>
-                </li>
-                <li role="none" title={removeTitle}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="text-error"
-                    disabled={removeDisabled}
-                    title={removeTitle}
-                    onClick={() => {
-                      closeMenu(true);
-                      setConfirming("remove");
-                    }}
-                  >
-                    从书架移除
-                  </button>
-                </li>
-              </ul>
+                  <li role="none" title={exportTitle}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={exportDisabled}
+                      title={exportTitle}
+                      onClick={() => {
+                        closeMenu(true);
+                        setExporting(true);
+                      }}
+                    >
+                      导出着色后的图书
+                    </button>
+                  </li>
+                  <li role="none" title={clearTitle}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={clearDisabled}
+                      title={clearTitle}
+                      onClick={() => {
+                        closeMenu(true);
+                        setConfirming("clear-cache");
+                      }}
+                    >
+                      清除着色缓存
+                    </button>
+                  </li>
+                  <li role="none" title={removeTitle}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="text-error"
+                      disabled={removeDisabled}
+                      title={removeTitle}
+                      onClick={() => {
+                        closeMenu(true);
+                        setConfirming("remove");
+                      }}
+                    >
+                      从书架移除
+                    </button>
+                  </li>
+                </ul>
+              </div>
             )}
           </div>
         </div>
@@ -436,11 +436,7 @@ export const BookTile = memo(function BookTile({
       </article>
 
       {exporting && (
-        <ExportDialog
-          id={book.id}
-          title={book.title}
-          onClose={() => setExporting(false)}
-        />
+        <ExportDialog id={book.id} title={book.title} onClose={() => setExporting(false)} />
       )}
 
       {/* daisyUI modal: both actions delete work the user paid for, so ask

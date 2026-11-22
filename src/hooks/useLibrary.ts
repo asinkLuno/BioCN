@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  type Book,
+  type ImportError,
   libraryCover,
   libraryImport,
   libraryList,
   libraryRemove,
-  type Book,
-  type ImportError,
 } from "../lib/library";
-import { clearBookCache, message } from "../lib/reading";
 import { pickEpubFiles } from "../lib/picker";
+import { clearBookCache, message } from "../lib/reading";
 
 interface State {
   books: Book[];
@@ -47,16 +47,16 @@ export function useLibrary() {
   const booksRef = useRef<Book[]>([]);
   booksRef.current = state.books;
 
-  const exclusive = <T,>(job: () => Promise<T>): Promise<T> => {
+  const exclusive = useCallback(<T>(job: () => Promise<T>): Promise<T> => {
     const run = queue.current.then(job, job);
     queue.current = run.catch(() => undefined);
     return run;
-  };
+  }, []);
 
-  const applySnapshot = (books: Book[]) => {
+  const applySnapshot = useCallback((books: Book[]) => {
     const visible = books.filter((book) => !hidden.current.has(book.id));
     setState((s) => ({ ...s, books: visible }));
-  };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,7 +75,7 @@ export function useLibrary() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applySnapshot, exclusive]);
 
   // Covers load lazily, once per book, and are dropped when a book leaves.
   useEffect(() => {
@@ -87,9 +87,7 @@ export function useLibrary() {
         : Object.fromEntries(Object.entries(current).filter(([id]) => present.has(id))),
     );
 
-    const missing = state.books.filter(
-      (book) => book.hasCover && !requested.current.has(book.id),
-    );
+    const missing = state.books.filter((book) => book.hasCover && !requested.current.has(book.id));
     if (missing.length === 0) return;
 
     for (const book of missing) {
@@ -150,53 +148,56 @@ export function useLibrary() {
         setState((s) => ({ ...s, pending: Math.max(0, s.pending - paths.length) }));
       }
     });
-  }, []);
+  }, [applySnapshot, exclusive]);
 
-  const removeBook = useCallback(async (id: string) => {
-    // Hidden right away so the tile responds to the tap. The flag also keeps a
-    // queued import from flashing the tile back before the removal runs.
-    hidden.current.add(id);
-    const removedBook = booksRef.current.find((book) => book.id === id) ?? null;
-    setState((s) => ({ ...s, books: s.books.filter((book) => book.id !== id) }));
-    await exclusive(async () => {
-      try {
-        const result = await libraryRemove(id).then(
-          (books) => ({ books }),
-          (error: unknown) => ({ error }),
-        );
-        // The removal has been decided, so the shelf owns the answer again.
-        hidden.current.delete(id);
+  const removeBook = useCallback(
+    async (id: string) => {
+      // Hidden right away so the tile responds to the tap. The flag also keeps a
+      // queued import from flashing the tile back before the removal runs.
+      hidden.current.add(id);
+      const removedBook = booksRef.current.find((book) => book.id === id) ?? null;
+      setState((s) => ({ ...s, books: s.books.filter((book) => book.id !== id) }));
+      await exclusive(async () => {
+        try {
+          const result = await libraryRemove(id).then(
+            (books) => ({ books }),
+            (error: unknown) => ({ error }),
+          );
+          // The removal has been decided, so the shelf owns the answer again.
+          hidden.current.delete(id);
 
-        if ("error" in result) {
-          const reloaded = await libraryList().catch(() => null);
-          setState((s) => ({ ...s, problem: message(result.error) }));
-          // The removal failed, so the book is still on disk: show it again
-          // without wiping out any books imported while removal was queued.
-          if (reloaded !== null) {
-            applySnapshot(reloaded);
-          } else if (removedBook !== null) {
-            setState((s) =>
-              s.books.some((b) => b.id === removedBook.id)
-                ? s
-                : { ...s, books: [removedBook, ...s.books] },
-            );
+          if ("error" in result) {
+            const reloaded = await libraryList().catch(() => null);
+            setState((s) => ({ ...s, problem: message(result.error) }));
+            // The removal failed, so the book is still on disk: show it again
+            // without wiping out any books imported while removal was queued.
+            if (reloaded !== null) {
+              applySnapshot(reloaded);
+            } else if (removedBook !== null) {
+              setState((s) =>
+                s.books.some((b) => b.id === removedBook.id)
+                  ? s
+                  : { ...s, books: [removedBook, ...s.books] },
+              );
+            }
+            return;
           }
-          return;
-        }
 
-        applySnapshot(result.books);
-        setCovers((current) => {
-          const next = { ...current };
-          delete next[id];
-          return next;
-        });
-        requested.current.delete(id);
-      } finally {
-        // A failed job must never leave the book hidden from later snapshots.
-        hidden.current.delete(id);
-      }
-    });
-  }, []);
+          applySnapshot(result.books);
+          setCovers((current) => {
+            const next = { ...current };
+            delete next[id];
+            return next;
+          });
+          requested.current.delete(id);
+        } finally {
+          // A failed job must never leave the book hidden from later snapshots.
+          hidden.current.delete(id);
+        }
+      });
+    },
+    [applySnapshot, exclusive],
+  );
 
   const dismissErrors = useCallback(() => {
     setState((s) => ({ ...s, errors: [], problem: null }));
@@ -216,4 +217,3 @@ export function useLibrary() {
 
   return { ...state, covers, addBooks, removeBook, clearCache, dismissErrors };
 }
-

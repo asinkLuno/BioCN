@@ -81,5 +81,7 @@ export function formatBytes(bytes: number): string {
     value /= 1024;
     unit += 1;
   }
-  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
+  return unit === 0
+    ? `${value} ${units[unit]}`
+    : `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
 }

@@ -34,8 +34,7 @@ export interface CoverImage {
 
 export const libraryList = () => invoke<Book[]>("library_list");
 
-export const libraryImport = (paths: string[]) =>
-  invoke<ImportReport>("library_import", { paths });
+export const libraryImport = (paths: string[]) => invoke<ImportReport>("library_import", { paths });
 
 export const libraryRemove = (id: string) => invoke<Book[]>("library_remove", { id });
 

@@ -2,12 +2,13 @@
  * Reader behavior against the `book://` custom protocol + progressive coloring
  * + iframe postMessage bridge architecture.
  */
+
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Reader } from "./Reader";
 import * as reading from "../lib/reading";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { Reader } from "./Reader";
 
 vi.mock("@tauri-apps/api/core", () => ({
   isTauri: vi.fn(() => true),
@@ -73,9 +74,7 @@ function renderReader(overrides: Partial<Parameters<typeof Reader>[0]> = {}) {
 }
 
 function sendFromFrame(frame: HTMLIFrameElement, data: unknown) {
-  window.dispatchEvent(
-    new MessageEvent("message", { data, source: frame.contentWindow }),
-  );
+  window.dispatchEvent(new MessageEvent("message", { data, source: frame.contentWindow }));
 }
 
 describe("reader", () => {
@@ -313,5 +312,172 @@ describe("reader", () => {
       }),
       "*",
     );
+  });
+
+  it("opens a footnote popup without jumping, supports jumping on demand, and closes cleanly", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderReader({ onClose });
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    const postSpy = vi.spyOn(frame.contentWindow!, "postMessage");
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+    postSpy.mockClear();
+
+    // Same-chapter footnote message pops up in host dialog without changing chapters.
+    act(() =>
+      sendFromFrame(frame, {
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "[1]",
+        html: '<p>这是一条<span class="svo svo-subject">脚注</span>说明。<script>window.__bad = 1</script><a href="https://example.org/note">来源</a></p>',
+        sameChapter: true,
+      }),
+    );
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText("[1]")).toBeInTheDocument();
+    expect(within(dialog).getByText(/说明。/)).toBeInTheDocument();
+    expect(within(dialog).getByText("脚注")).toBeInTheDocument();
+    expect(dialog.querySelector("script")).toBeNull();
+
+    // External link inside footnote opens via opener without leaving the chapter.
+    await user.click(within(dialog).getByRole("link", { name: "来源" }));
+    expect(openUrlMock).toHaveBeenCalledWith("https://example.org/note");
+
+    // Clicking "跳转到注释处" closes dialog and sends jump command to iframe.
+    await user.click(within(dialog).getByRole("button", { name: "跳转到注释处" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(postSpy).toHaveBeenCalledWith(
+      { source: "biocn-host", type: "jump", anchor: "fn1" },
+      "*",
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Cross-chapter plain footnote href (`ch2.xhtml#fn2`) probes iframe first.
+    postSpy.mockClear();
+    act(() =>
+      sendFromFrame(frame, {
+        source: "biocn-reader",
+        type: "link",
+        href: "../Text/ch2.xhtml#fn2",
+      }),
+    );
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "biocn-host",
+        type: "resolve-footnote",
+        href: "../Text/ch2.xhtml#fn2",
+        anchor: "fn2",
+      }),
+      "*",
+    );
+    const resolveCall = postSpy.mock.calls.find(
+      ([payload]) => (payload as { type?: string }).type === "resolve-footnote",
+    );
+    const requestId = (resolveCall![0] as { requestId: number }).requestId;
+
+    // When iframe resolves the cross-chapter note, open popup instead of switching chapters.
+    act(() =>
+      sendFromFrame(frame, {
+        source: "biocn-reader",
+        type: "footnote-result",
+        requestId,
+        href: "../Text/ch2.xhtml#fn2",
+        anchor: "fn2",
+        found: true,
+        label: "注释",
+        html: "<p>跨章尾注正文</p>",
+      }),
+    );
+    const remoteDialog = screen.getByRole("dialog");
+    expect(within(remoteDialog).getByText("跨章尾注正文")).toBeInTheDocument();
+    expect(screen.queryByTitle("Two")).not.toBeInTheDocument();
+
+    // Clicking "关闭注释" dismisses popup without closing the reader.
+    await user.click(within(remoteDialog).getByRole("button", { name: "关闭注释" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("cancels active coloring and skips coloring future chapters when the 着色 button is off", async () => {
+    const user = userEvent.setup();
+    colorizeMock.mockResolvedValue({
+      index: 1,
+      totalSentences: 10,
+      cachedSentences: 2,
+      fullyColored: false,
+      missingModel: false,
+    });
+    renderReader();
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+
+    // Active coloring indicator is visible while enabled.
+    expect(await screen.findByRole("status", { name: "本章着色进度" })).toHaveTextContent(
+      "着色 20%",
+    );
+
+    const toggleBtn = screen.getByRole("button", { name: "着色" });
+    await user.click(toggleBtn);
+    expect(toggleBtn).toHaveAttribute("aria-pressed", "false");
+    expect(document.activeElement).not.toBe(toggleBtn);
+    expect(cancelStreamMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status", { name: "本章着色进度" })).not.toBeInTheDocument();
+
+    // Navigating to chapter 2 while coloring is off must NOT trigger coloring.
+    colorizeMock.mockClear();
+    await user.click(screen.getByRole("button", { name: "下一章" }));
+    const ch2Frame = (await screen.findByTitle("Two")) as HTMLIFrameElement;
+    expect(ch2Frame.getAttribute("src")).toContain("biocn=off");
+    expect(colorizeMock).not.toHaveBeenCalled();
+
+    // Turning coloring back on starts coloring for chapter 2 immediately.
+    await user.click(toggleBtn);
+    expect(toggleBtn).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(colorizeMock).toHaveBeenCalledWith("dune", 2));
+  });
+
+  it("dismisses TOC drawer and footnote popup via browser back without closing the reader", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderReader({ onClose });
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+
+    await user.click(screen.getByRole("button", { name: "目录" }));
+    expect(screen.getByRole("button", { name: "目录" })).toHaveAttribute("aria-expanded", "true");
+
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "目录" })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      ),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    act(() =>
+      sendFromFrame(frame, {
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "[1]",
+        html: "<p>注释正文</p>",
+        sameChapter: true,
+      }),
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

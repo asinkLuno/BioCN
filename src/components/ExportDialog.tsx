@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
+import { useEffect, useRef, useState } from "react";
 import {
+  type ExportReport,
   exportBook,
   fileName,
   fileNameOf,
-  type ExportReport,
   type Stylesheet,
 } from "../lib/exporting";
-import { message } from "../lib/reading";
 import { epubFilter } from "../lib/picker";
-import { useDialog, ModalBackdrop } from "./dialog";
+import { message } from "../lib/reading";
+import { useHistoryOverlay } from "../lib/router";
+import { ModalBackdrop, useDialog } from "./dialog";
 
 interface Props {
   /** The book to export, and the title used for the default file name. */
@@ -102,6 +103,8 @@ export function ExportDialog({ id, title, onClose }: Props) {
     onClose();
   };
 
+  useHistoryOverlay(true, close, !busy);
+
   return (
     <dialog
       ref={dialog}
@@ -178,12 +181,7 @@ export function ExportDialog({ id, title, onClose }: Props) {
             </button>
           ) : (
             <>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={busy}
-                onClick={close}
-              >
+              <button type="button" className="btn btn-ghost" disabled={busy} onClick={close}>
                 取消
               </button>
               <button

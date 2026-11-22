@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useLibrary } from "./hooks/useLibrary";
-import { useColoring } from "./hooks/useColoring";
 import { BookTile } from "./components/BookTile";
-import { Reader } from "./components/Reader";
 import { ModelSheet } from "./components/ModelSheet";
+import { Reader } from "./components/Reader";
+import { useColoring } from "./hooks/useColoring";
+import { useLibrary } from "./hooks/useLibrary";
 import type { ImportError } from "./lib/library";
+import { useRouter } from "./lib/router";
 
 export default function App() {
   const {
@@ -20,7 +21,8 @@ export default function App() {
     dismissErrors,
   } = useLibrary();
   const coloring = useColoring();
-  const [reading, setReading] = useState<string | null>(null);
+  const { route, openBook, closeBook } = useRouter();
+  const reading = route.kind === "reader" ? route.bookId : null;
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelRevision, setModelRevision] = useState(0);
 
@@ -38,13 +40,13 @@ export default function App() {
   );
 
   // The reader owns the whole window while it is open: a shelf behind a book is
-  // a distraction, and the reader's own back button returns here.
+  // a distraction, and the reader's own back button (or system Back) returns here.
   if (reading !== null) {
     return (
       <>
         <Reader
           id={reading}
-          onClose={() => setReading(null)}
+          onClose={closeBook}
           onOpenSettings={() => setModelsOpen(true)}
           modelsOpen={modelsOpen}
           modelRevision={modelRevision}
@@ -61,11 +63,7 @@ export default function App() {
           <div className="min-w-0 flex-1">
             <h1 className="text-lg leading-tight font-semibold tracking-tight">书架</h1>
             <p className="text-xs text-base-content/55">
-              {loading
-                ? "正在加载书架…"
-                : books.length === 0
-                  ? "还没有书"
-                  : `${books.length} 本书`}
+              {loading ? "正在加载书架…" : books.length === 0 ? "还没有书" : `${books.length} 本书`}
             </p>
           </div>
           <button
@@ -110,18 +108,22 @@ export default function App() {
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-5 sm:px-6 sm:py-8">
         {(problem !== null || errors.length > 0) && (
-          <div role="alert" className="alert alert-error mb-5 flex-col items-start gap-2 sm:flex-row sm:items-center">
+          <div
+            role="alert"
+            className="alert alert-error mb-5 flex-col items-start gap-2 sm:flex-row sm:items-center"
+          >
             <div className="min-w-0">
               <p className="font-medium">
                 {problem !== null ? "出了点问题" : errorHeading(errors)}
               </p>
               <ul className="mt-1 list-inside list-disc text-sm opacity-80">
-                {(problem !== null ? [problem] : errorDetails(errors)).map((line, index) => (
-                  // The same message can occur for two files, so index the key.
-                  <li key={`${index}:${line}`} className="break-words">
-                    {line}
-                  </li>
-                ))}
+                {keyedLines(problem !== null ? [problem] : errorDetails(errors)).map(
+                  ({ key, text }) => (
+                    <li key={key} className="break-words">
+                      {text}
+                    </li>
+                  ),
+                )}
               </ul>
             </div>
             <button
@@ -145,15 +147,15 @@ export default function App() {
                 cover={covers[book.id]}
                 progress={job !== null && job.book === book.id ? job : null}
                 anyJob={job !== null}
-                onOpen={setReading}
+                onOpen={openBook}
                 onColorize={coloring.start}
                 onCancel={coloring.cancel}
                 onClearCache={clearCache}
                 onRemove={removeBook}
               />
             ))}
-            {Array.from({ length: pending }, (_, index) => (
-              <li key={`pending-${index}`} aria-hidden="true">
+            {Array.from({ length: pending }, (_, slot) => `pending-${slot}`).map((slotKey) => (
+              <li key={slotKey} aria-hidden="true">
                 <div className="skeleton aspect-[2/3] w-full rounded-xl" />
                 <div className="skeleton mt-3 h-3.5 w-4/5 rounded" />
                 <div className="skeleton mt-2 h-3 w-2/5 rounded" />
@@ -198,13 +200,21 @@ export default function App() {
 }
 
 function errorHeading(errors: ImportError[]) {
-  return errors.length === 1
-    ? `无法添加 ${errors[0].name}`
-    : `${errors.length} 个文件未能添加`;
+  return errors.length === 1 ? `无法添加 ${errors[0].name}` : `${errors.length} 个文件未能添加`;
 }
 
 function errorDetails(errors: ImportError[]) {
   return errors.map((error) => `${error.name}: ${error.message}`);
+}
+
+function keyedLines(lines: readonly string[]): { key: string; text: string }[] {
+  // The same message can occur for two files, so disambiguate duplicates by occurrence.
+  const counts = new Map<string, number>();
+  return lines.map((text) => {
+    const count = counts.get(text) ?? 0;
+    counts.set(text, count + 1);
+    return { key: count === 0 ? text : `${text}#${count}`, text };
+  });
 }
 
 function EmptyState({ onAdd }: { onAdd: () => void }) {

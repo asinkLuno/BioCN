@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  DEFAULT_READER_PREFS,
-  loadReaderPrefs,
-  saveReaderPrefs,
-} from "./readerPrefs";
+import { DEFAULT_READER_PREFS, loadReaderPrefs, saveReaderPrefs } from "./readerPrefs";
 
 describe("readerPrefs", () => {
   beforeEach(() => {

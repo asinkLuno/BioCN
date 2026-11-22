@@ -7,6 +7,7 @@
   var state = {
     mode: "scrolled",
     columns: "auto",
+    activeCols: 1,
     margin: "normal",
     pageAnimation: true,
     page: 0,
@@ -150,12 +151,44 @@
     root.style.setProperty("--col-width", colWidth + "px");
     root.style.setProperty("--col-gap", gap + "px");
 
+    state.activeCols = cols;
     state.spreadWidth = spread;
     recountPages();
   }
 
+  function removePageTail() {
+    var tail = document.getElementById("biocn-page-tail");
+    if (tail && tail.parentNode) {
+      tail.parentNode.removeChild(tail);
+    }
+  }
+
+  function ensurePageTail(count) {
+    if (!document.body) return null;
+    var tail = document.getElementById("biocn-page-tail");
+    if (!tail) {
+      tail = document.createElement("div");
+      tail.id = "biocn-page-tail";
+      tail.setAttribute("aria-hidden", "true");
+      document.body.appendChild(tail);
+    } else if (tail !== document.body.lastElementChild) {
+      document.body.appendChild(tail);
+    }
+    while (tail.children.length < count) {
+      var col = document.createElement("div");
+      col.className = "biocn-page-tail-col";
+      col.textContent = "\u00a0";
+      tail.appendChild(col);
+    }
+    while (tail.children.length > count) {
+      tail.removeChild(tail.lastChild);
+    }
+    return tail;
+  }
+
   function clearPaginated() {
     cancelSlide();
+    removePageTail();
     if (document.body) {
       document.body.scrollLeft = 0;
     }
@@ -165,14 +198,33 @@
 
   function recountPages() {
     if (state.mode !== "paginated" || !document.body) return;
+    var savedScrollLeft = document.body.scrollLeft;
+    var existingTail = document.getElementById("biocn-page-tail");
+    if (existingTail) {
+      existingTail.style.display = "none";
+    }
     var sw = document.body.scrollWidth || state.spreadWidth;
     var stride = state.spreadWidth || window.innerWidth || 1;
     // Small epsilon avoids phantom trailing blank page from 1px subpixel rounding.
     state.totalPages = Math.max(1, Math.ceil((sw - 2) / stride));
+
+    // Append invisible trailing columns when paginated spans >1 page so the
+    // last page can always scroll to `(totalPages - 1) * stride` without the
+    // browser clamping short of `padding-right` or an odd 2-column spread.
+    if (state.totalPages > 1) {
+      var tail = ensurePageTail(state.activeCols || 1);
+      if (tail) tail.style.display = "block";
+    } else if (existingTail) {
+      existingTail.style.display = "none";
+    }
+
+    var maxPageScroll = Math.max(0, (state.totalPages - 1) * stride);
     if (state.page >= state.totalPages) {
       state.page = state.totalPages - 1;
       cancelSlide();
       document.body.scrollLeft = state.page * stride;
+    } else if (document.body.scrollLeft !== savedScrollLeft) {
+      document.body.scrollLeft = Math.min(savedScrollLeft, maxPageScroll);
     }
   }
 
@@ -405,6 +457,11 @@
           scrollToParagraph(data.paragraphIndex);
         }
         break;
+      case "resolve-footnote":
+        if (typeof data.requestId === "number" && data.href && data.anchor) {
+          resolveRemoteFootnoteRequest(data.requestId, data.href, data.anchor);
+        }
+        break;
     }
   });
 
@@ -571,6 +628,538 @@
     { passive: true }
   );
 
+  // Footnote detection, extraction, and same-origin cross-chapter resolution
+  var footnoteDocCache = Object.create(null);
+  var footnoteDocOrder = [];
+  var NOTE_MARKER_RE =
+    /^(\[?\d{1,3}\]?|\(\d{1,3}\)|（\d{1,3}）|【\d{1,3}】|〔\d{1,3}〕|［\d{1,3}］|\{\d{1,3}\}|[①-⑳㉑-㊿⑴-⒇⒈-⒛]+|[*†‡§※]+|(?:注|译注|原注|编者注)\s*[\[（(【〔]?\d*[①-⑳㉑-㊿]?[\]）)】〕]?|(?:注释|脚注|见注)\s*[\[（(【〔]?(?:\d+|[①-⑳㉑-㊿])[\]）)】〕]?)$/;
+  var NOTE_ID_RE =
+    /^(fn|ftn|footnote|endnote|rearnote|note|en|ref|n|zhushi|zhu|comment)[-_:.]?\d/i;
+  var NOTE_CLASS_RE =
+    /(?:^|[\s_-])(noteref|footnote|endnote|rearnote|fnref|duokan-footnote)(?:$|[\s_-])/i;
+  var NOTE_CONTAINER_CLASS_RE =
+    /(?:^|[\s_-])(footnote|endnote|rearnote|duokan-footnote-item|duokan-footnote-content)(?:$|[\s_-])/i;
+  var BACKLINK_TEXT_RE =
+    /^(↩|↩︎|↩️|↵|↑|▲|△|⬆|⇧|⏎|«|‹|返回|回到正文|back|\[back\])$/i;
+
+  function safeDecode(value) {
+    try {
+      return decodeURIComponent(value);
+    } catch (_) {
+      return value;
+    }
+  }
+
+  function getEpubType(el) {
+    if (!el || !el.getAttribute) return "";
+    var val = el.getAttribute("epub:type");
+    if (val) return val;
+    if (el.getAttributeNS) {
+      try {
+        val = el.getAttributeNS("http://www.idpf.org/2007/ops", "type");
+        if (val) return val;
+      } catch (_) {
+        // Ignore namespace errors
+      }
+    }
+    return "";
+  }
+
+  function hasToken(str, tokens) {
+    if (!str) return false;
+    var parts = String(str).toLowerCase().trim().split(/\s+/);
+    for (var i = 0; i < parts.length; i++) {
+      for (var j = 0; j < tokens.length; j++) {
+        if (parts[i] === tokens[j]) return true;
+      }
+    }
+    return false;
+  }
+
+  function isFootnoteContainer(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.tagName === "ASIDE") return true;
+    if (
+      hasToken(getEpubType(el), [
+        "footnote",
+        "endnote",
+        "rearnote",
+        "note",
+        "glossary",
+        "biblioentry",
+      ])
+    ) {
+      return true;
+    }
+    if (
+      hasToken(el.getAttribute("role"), [
+        "doc-footnote",
+        "doc-endnote",
+        "doc-rearnote",
+        "doc-biblioentry",
+      ])
+    ) {
+      return true;
+    }
+    var cls = typeof el.className === "string" ? el.className : "";
+    return Boolean(cls && NOTE_CONTAINER_CLASS_RE.test(cls));
+  }
+
+  function isBacklink(anchor) {
+    if (!anchor) return false;
+    if (
+      hasToken(getEpubType(anchor), ["backlink"]) ||
+      hasToken(anchor.getAttribute("role"), ["doc-backlink"])
+    ) {
+      return true;
+    }
+    if (
+      hasToken(getEpubType(anchor), ["noteref", "biblioref", "glossref", "annoref"]) ||
+      hasToken(anchor.getAttribute("role"), ["doc-noteref", "doc-biblioref", "doc-glossref"])
+    ) {
+      return false;
+    }
+    var cur = anchor.parentElement;
+    while (cur && cur !== document.body && cur !== document.documentElement) {
+      if (isFootnoteContainer(cur)) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+
+  function isNoterefLink(anchor, anchorId) {
+    if (!anchor || isBacklink(anchor)) return false;
+    if (
+      hasToken(getEpubType(anchor), ["noteref", "biblioref", "glossref", "annoref"]) ||
+      hasToken(anchor.getAttribute("role"), ["doc-noteref", "doc-biblioref", "doc-glossref"])
+    ) {
+      return true;
+    }
+    if (
+      (anchor.closest && anchor.closest("sup")) ||
+      (anchor.querySelector && anchor.querySelector("sup"))
+    ) {
+      return true;
+    }
+    var cls = typeof anchor.className === "string" ? anchor.className : "";
+    if (cls && NOTE_CLASS_RE.test(cls)) return true;
+    var parentCls =
+      anchor.parentElement && typeof anchor.parentElement.className === "string"
+        ? anchor.parentElement.className
+        : "";
+    if (parentCls && NOTE_CLASS_RE.test(parentCls)) return true;
+
+    var text = (anchor.textContent || "").trim();
+    if (text.length > 0 && text.length <= 12 && NOTE_MARKER_RE.test(text)) {
+      return true;
+    }
+    if (
+      text.length === 0 &&
+      anchor.querySelector &&
+      anchor.querySelector("img") &&
+      anchorId &&
+      NOTE_ID_RE.test(anchorId)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function getFootnoteLabel(anchor) {
+    var text = anchor ? (anchor.textContent || "").trim().replace(/\s+/g, " ") : "";
+    if (!text && anchor && anchor.querySelector) {
+      var img = anchor.querySelector("img[alt]");
+      if (img) text = (img.getAttribute("alt") || "").trim();
+    }
+    if (!text) return "注释";
+    return text.length > 24 ? text.slice(0, 24) + "…" : text;
+  }
+
+  function findAnchorTarget(doc, anchorId) {
+    if (!doc || !anchorId) return null;
+    var el = doc.getElementById(anchorId);
+    if (el) return el;
+    if (doc.getElementsByName) {
+      var named = doc.getElementsByName(anchorId);
+      if (named && named.length > 0) return named[0];
+    }
+    return null;
+  }
+
+  function isFootnoteTarget(target) {
+    if (!target || target.nodeType !== 1) return false;
+    if (isFootnoteContainer(target)) return true;
+    var inlineTags = {
+      A: 1,
+      SPAN: 1,
+      SUP: 1,
+      SUB: 1,
+      B: 1,
+      STRONG: 1,
+      EM: 1,
+      I: 1,
+      SMALL: 1,
+    };
+    if (inlineTags[target.tagName] && target.parentElement) {
+      if (isFootnoteContainer(target.parentElement)) return true;
+      if (
+        target.parentElement.parentElement &&
+        isFootnoteContainer(target.parentElement.parentElement)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isReasonableNoteContainer(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.tagName === "BODY" || el.tagName === "HTML") return false;
+    if (el.querySelector && el.querySelector("h1, h2, h3")) return false;
+    var textLen = (el.textContent || "").trim().length;
+    if (textLen > 4000) {
+      var idChildren = 0;
+      for (var i = 0; i < el.children.length; i++) {
+        if (el.children[i].id) idChildren++;
+      }
+      if (idChildren > 3) return false;
+    }
+    return true;
+  }
+
+  function resolveFootnoteBlock(doc, target) {
+    if (!target || target.nodeType !== 1) return null;
+    var tag = target.tagName;
+    if (tag === "BODY" || tag === "HTML" || /^H[1-6]$/.test(tag)) return null;
+
+    if (tag === "DT") {
+      var next = target.nextElementSibling;
+      if (next && next.tagName === "DD") {
+        var wrap = doc.createElement("div");
+        wrap.appendChild(target.cloneNode(true));
+        wrap.appendChild(next.cloneNode(true));
+        return wrap;
+      }
+      return null;
+    }
+
+    if (
+      tag === "ASIDE" ||
+      tag === "LI" ||
+      tag === "BLOCKQUOTE" ||
+      tag === "DD" ||
+      tag === "P" ||
+      tag === "TR"
+    ) {
+      return target;
+    }
+
+    if (tag === "DIV" || tag === "SECTION" || tag === "ARTICLE") {
+      return isReasonableNoteContainer(target) ? target : null;
+    }
+
+    // Inline target (e.g. `<a id="fn1">` or `<span id="fn1">`) inside a note block.
+    var block = target.closest
+      ? target.closest("aside, li, p, dd, blockquote, tr")
+      : null;
+    if (block && block !== doc.body) {
+      return block;
+    }
+
+    // Empty anchor immediately preceding a note paragraph: `<a id="fn1"></a><p>...</p>`
+    var trimmedTarget = (target.textContent || "").trim();
+    if (!trimmedTarget && target.nextElementSibling) {
+      var sib = target.nextElementSibling;
+      if (
+        (sib.tagName === "P" ||
+          sib.tagName === "ASIDE" ||
+          sib.tagName === "BLOCKQUOTE" ||
+          sib.tagName === "DIV") &&
+        isReasonableNoteContainer(sib)
+      ) {
+        return sib;
+      }
+    }
+
+    var parent = target.parentElement;
+    if (parent && parent.tagName === "DIV" && isReasonableNoteContainer(parent)) {
+      var pCount = parent.querySelectorAll ? parent.querySelectorAll("p").length : 0;
+      if (pCount <= 3) return parent;
+    }
+    return null;
+  }
+
+  function extractHashId(href) {
+    if (!href) return "";
+    var idx = href.indexOf("#");
+    if (idx < 0) return "";
+    return safeDecode(href.slice(idx + 1));
+  }
+
+  function extractFootnoteHtml(doc, anchorId, sourceAnchor, requireTargetSemantics) {
+    var target = findAnchorTarget(doc, anchorId);
+    if (!target) return null;
+
+    var block = resolveFootnoteBlock(doc, target);
+    if (!block) return null;
+
+    var explicitTarget = isFootnoteTarget(target) || isFootnoteContainer(block);
+    if (requireTargetSemantics && !explicitTarget) {
+      var hasBacklinkInside = Boolean(
+        block.querySelector &&
+          block.querySelector(
+            'a[role="doc-backlink"], a[epub\\:type~="backlink"], a[href*="#"]'
+          )
+      );
+      if (!hasBacklinkInside && !NOTE_ID_RE.test(anchorId)) {
+        return null;
+      }
+    }
+
+    var clone = block.cloneNode(true);
+
+    // Strip non-content / active elements (host still strictly sanitizes too).
+    var forbidden = clone.querySelectorAll(
+      "script, style, iframe, frame, frameset, object, embed, link, meta, base, form, input, button, select, textarea"
+    );
+    for (var f = 0; f < forbidden.length; f++) {
+      if (forbidden[f].parentNode) forbidden[f].parentNode.removeChild(forbidden[f]);
+    }
+
+    // Collect clicked reference ids so matching backlinks in the footnote can be stripped.
+    var sourceIds = Object.create(null);
+    if (sourceAnchor) {
+      if (sourceAnchor.id) sourceIds[sourceAnchor.id] = true;
+      var sName = sourceAnchor.getAttribute("name");
+      if (sName) sourceIds[sName] = true;
+      if (sourceAnchor.parentElement && sourceAnchor.parentElement.id) {
+        sourceIds[sourceAnchor.parentElement.id] = true;
+      }
+    }
+
+    var links = clone.querySelectorAll("a");
+    for (var i = 0; i < links.length; i++) {
+      var a = links[i];
+      var aHref = a.getAttribute("href");
+      if (!aHref) {
+        // Unwrap pure anchor tags (`<a id="fn1"></a>` or `<a name="fn1">1.</a>`)
+        if (a.parentNode) {
+          while (a.firstChild) {
+            a.parentNode.insertBefore(a.firstChild, a);
+          }
+          a.parentNode.removeChild(a);
+        }
+        continue;
+      }
+      var aText = (a.textContent || "").trim();
+      var aHash = extractHashId(aHref);
+      var isBack =
+        hasToken(getEpubType(a), ["backlink"]) ||
+        hasToken(a.getAttribute("role"), ["doc-backlink"]) ||
+        Boolean(aHash && sourceIds[aHash]) ||
+        BACKLINK_TEXT_RE.test(aText);
+      if (isBack && a.parentNode) {
+        var wrapper = a.parentElement;
+        a.parentNode.removeChild(a);
+        if (
+          wrapper &&
+          wrapper !== clone &&
+          (wrapper.tagName === "SUP" || wrapper.tagName === "SPAN") &&
+          !(wrapper.textContent || "").trim() &&
+          !wrapper.querySelector("img") &&
+          wrapper.parentNode
+        ) {
+          wrapper.parentNode.removeChild(wrapper);
+        }
+      }
+    }
+
+    var text = (clone.textContent || "").trim();
+    var hasImg = Boolean(clone.querySelector && clone.querySelector("img"));
+    if (!text && !hasImg) return null;
+    if (text.length > 8000 && !explicitTarget) return null;
+
+    var tag = clone.tagName;
+    if (tag === "LI" || tag === "ASIDE" || tag === "DD" || tag === "DIV" || tag === "SECTION") {
+      return clone.innerHTML;
+    }
+    return clone.outerHTML;
+  }
+
+  function fetchFootnoteDocument(docUrl) {
+    if (footnoteDocCache[docUrl]) {
+      return Promise.resolve(footnoteDocCache[docUrl]);
+    }
+    if (typeof fetch !== "function" || typeof DOMParser !== "function") {
+      return Promise.resolve(null);
+    }
+    return fetch(docUrl)
+      .then(function (res) {
+        if (!res || !res.ok) return null;
+        return res.text();
+      })
+      .then(function (html) {
+        if (!html) return null;
+        var parsed = new DOMParser().parseFromString(html, "text/html");
+        if (!parsed) return null;
+        footnoteDocCache[docUrl] = parsed;
+        footnoteDocOrder.push(docUrl);
+        if (footnoteDocOrder.length > 8) {
+          var oldest = footnoteDocOrder.shift();
+          delete footnoteDocCache[oldest];
+        }
+        return parsed;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function resolveRemoteFootnoteRequest(requestId, rawHref, anchorId) {
+    var resolvedUrl;
+    try {
+      resolvedUrl = new URL(rawHref, window.location.href);
+    } catch (_) {
+      post({
+        type: "footnote-result",
+        requestId: requestId,
+        href: rawHref,
+        anchor: anchorId,
+        found: false,
+      });
+      return;
+    }
+    if (resolvedUrl.origin !== window.location.origin) {
+      post({
+        type: "footnote-result",
+        requestId: requestId,
+        href: rawHref,
+        anchor: anchorId,
+        found: false,
+      });
+      return;
+    }
+    var docUrl = resolvedUrl.origin + resolvedUrl.pathname;
+    var docPromise =
+      resolvedUrl.pathname === window.location.pathname
+        ? Promise.resolve(document)
+        : fetchFootnoteDocument(docUrl);
+    docPromise.then(function (doc) {
+      var html = doc ? extractFootnoteHtml(doc, anchorId, null, true) : null;
+      if (html) {
+        post({
+          type: "footnote-result",
+          requestId: requestId,
+          href: rawHref,
+          anchor: anchorId,
+          found: true,
+          label: "注释",
+          html: html,
+        });
+      } else {
+        post({
+          type: "footnote-result",
+          requestId: requestId,
+          href: rawHref,
+          anchor: anchorId,
+          found: false,
+        });
+      }
+    });
+  }
+
+  function handleInternalLink(anchor, raw) {
+    if (raw.charAt(0) === "#") {
+      var hashId = safeDecode(raw.slice(1));
+      if (hashId && !isBacklink(anchor)) {
+        var sameTarget = findAnchorTarget(document, hashId);
+        if (sameTarget && (isNoterefLink(anchor, hashId) || isFootnoteTarget(sameTarget))) {
+          var sameHtml = extractFootnoteHtml(document, hashId, anchor, false);
+          if (sameHtml) {
+            post({
+              type: "footnote",
+              href: raw,
+              anchor: hashId,
+              label: getFootnoteLabel(anchor),
+              html: sameHtml,
+              sameChapter: true,
+            });
+            return;
+          }
+        }
+      }
+      scrollToAnchor(hashId);
+      return;
+    }
+
+    // Resolve against current URL to detect same-chapter `ch1.xhtml#fn1` and
+    // cross-chapter `notes.xhtml#fn1` footnotes.
+    var resolvedUrl = null;
+    try {
+      resolvedUrl = new URL(raw, window.location.href);
+    } catch (_) {
+      resolvedUrl = null;
+    }
+
+    var fragmentId =
+      resolvedUrl && resolvedUrl.hash ? safeDecode(resolvedUrl.hash.slice(1)) : "";
+
+    if (
+      resolvedUrl &&
+      fragmentId &&
+      resolvedUrl.origin === window.location.origin &&
+      resolvedUrl.pathname === window.location.pathname
+    ) {
+      if (!isBacklink(anchor)) {
+        var localTarget = findAnchorTarget(document, fragmentId);
+        if (localTarget && (isNoterefLink(anchor, fragmentId) || isFootnoteTarget(localTarget))) {
+          var localHtml = extractFootnoteHtml(document, fragmentId, anchor, false);
+          if (localHtml) {
+            post({
+              type: "footnote",
+              href: raw,
+              anchor: fragmentId,
+              label: getFootnoteLabel(anchor),
+              html: localHtml,
+              sameChapter: true,
+            });
+            return;
+          }
+        }
+      }
+      scrollToAnchor(fragmentId);
+      return;
+    }
+
+    if (
+      resolvedUrl &&
+      fragmentId &&
+      resolvedUrl.origin === window.location.origin &&
+      isNoterefLink(anchor, fragmentId)
+    ) {
+      var label = getFootnoteLabel(anchor);
+      var docUrl = resolvedUrl.origin + resolvedUrl.pathname;
+      fetchFootnoteDocument(docUrl).then(function (doc) {
+        var remoteHtml = doc ? extractFootnoteHtml(doc, fragmentId, anchor, false) : null;
+        if (remoteHtml) {
+          post({
+            type: "footnote",
+            href: raw,
+            anchor: fragmentId,
+            label: label,
+            html: remoteHtml,
+            sameChapter: false,
+          });
+        } else {
+          post({ type: "link", href: raw });
+        }
+      });
+      return;
+    }
+
+    post({ type: "link", href: raw });
+  }
+
   // Intercept all internal/external links
   document.addEventListener("click", function (event) {
     if (Date.now() < state.suppressClickUntil) {
@@ -583,21 +1172,11 @@
       var raw = anchor.getAttribute("href");
       if (!raw) return;
       event.preventDefault();
-      if (raw.charAt(0) === "#") {
-        var anchorId = raw.slice(1);
-        try {
-          anchorId = decodeURIComponent(anchorId);
-        } catch (_) {
-          // Malformed percent-escape in EPUB anchor: fall back to raw id.
-        }
-        scrollToAnchor(anchorId);
-        return;
-      }
       if (/^(https?:|mailto:|tel:)/i.test(raw)) {
         post({ type: "external", href: raw });
         return;
       }
-      post({ type: "link", href: raw });
+      handleInternalLink(anchor, raw);
       return;
     }
 

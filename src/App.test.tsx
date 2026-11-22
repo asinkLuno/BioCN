@@ -1,11 +1,11 @@
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import * as exporting from "./lib/exporting";
 import * as library from "./lib/library";
 import * as reading from "./lib/reading";
-import * as exporting from "./lib/exporting";
-import { open, save } from "@tauri-apps/plugin-dialog";
 
 vi.mock("./lib/library", () => ({
   libraryList: vi.fn(),
@@ -17,7 +17,25 @@ vi.mock("./lib/library", () => ({
 // The reader loads a book on mount; the shelf tests only need it not to talk
 // to the backend.
 vi.mock("./components/Reader", () => ({
-  Reader: ({ id }: { id: string }) => <div role="main">reading {id}</div>,
+  Reader: ({
+    id,
+    onClose,
+    onOpenSettings,
+  }: {
+    id: string;
+    onClose: () => void;
+    onOpenSettings: () => void;
+  }) => (
+    <main>
+      <span>reading {id}</span>
+      <button type="button" onClick={onClose}>
+        返回书架
+      </button>
+      <button type="button" onClick={onOpenSettings}>
+        打开设置
+      </button>
+    </main>
+  ),
 }));
 
 // The coloring bridge is mocked at the module boundary, not `invoke`: the shelf
@@ -36,6 +54,22 @@ vi.mock("./lib/reading", async (importOriginal) => ({
 vi.mock("./lib/exporting", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./lib/exporting")>()),
   exportBook: vi.fn(),
+}));
+
+vi.mock("./lib/models", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lib/models")>()),
+  modelsStatus: vi.fn().mockResolvedValue({
+    active: null,
+    installed: [],
+    variants: [],
+    manifestError: null,
+    warning: null,
+  }),
+}));
+
+vi.mock("./lib/update", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lib/update")>()),
+  checkUpdate: vi.fn().mockResolvedValue(null),
 }));
 
 const openMock = vi.mocked(open);
@@ -363,9 +397,7 @@ describe("library", () => {
 
     // The save dialog opens on the book's title, so the common case is one
     // keystroke away from a file that names itself.
-    expect(saveMock).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultPath: "Dune.epub" }),
-    );
+    expect(saveMock).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Dune.epub" }));
     expect(exportMock).toHaveBeenCalledWith("dune", "/books/Dune-colored.epub", "inline");
     // Which file it went to, because the save dialog may have opened in a
     // folder the user was not looking at.
@@ -539,7 +571,9 @@ describe("library", () => {
 
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("无法添加 bad.pdf")).toBeInTheDocument();
-    expect(within(alert).getByText(/bad.pdf: not an EPUB file: invalid archive/)).toBeInTheDocument();
+    expect(
+      within(alert).getByText(/bad.pdf: not an EPUB file: invalid archive/),
+    ).toBeInTheDocument();
 
     await user.click(within(alert).getByRole("button", { name: "知道了" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
@@ -922,5 +956,58 @@ describe("library", () => {
 
     const image = screen.getByRole("presentation", { hidden: true });
     expect(image).toHaveAttribute("src", "data:image/png;base64,cG5n");
+  });
+
+  it("clips the coloring overlay inside a relative rounded-xl cover container", async () => {
+    listMock.mockResolvedValue([dune]);
+    progressMock.mockResolvedValue({
+      book: "dune",
+      done: 40,
+      total: 100,
+      chapters: 1,
+      chaptersTotal: 4,
+      finished: false,
+      cancelled: false,
+      error: null,
+    });
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const tile = screen.getByRole("heading", { name: "Dune" }).closest("li")!;
+    const overlay = jobStrip(tile);
+    const frame = overlay.parentElement!;
+    expect(frame).toHaveClass("relative", "overflow-hidden", "rounded-xl");
+    expect(overlay).toHaveClass("overflow-hidden", "rounded-[inherit]");
+  });
+
+  it("syncs shelf, reader, and settings with browser history so back returns to previous pages", async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([dune]);
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    // Shelf -> Reader
+    await user.click(screen.getByRole("button", { name: "阅读《Dune》" }));
+    expect(screen.getByText("reading dune")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/book/dune");
+
+    // Reader -> Settings (history overlay)
+    await user.click(screen.getByRole("button", { name: "打开设置" }));
+    const settingsDialog = screen.getByRole("heading", { name: "设置" }).closest("dialog")!;
+    expect(settingsDialog).toHaveAttribute("open");
+
+    // Back closes Settings and returns to Reader
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => expect(settingsDialog).not.toHaveAttribute("open"));
+    expect(screen.getByText("reading dune")).toBeInTheDocument();
+
+    // Back from Reader returns to Shelf
+    act(() => {
+      window.history.back();
+    });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "书架" })).toBeInTheDocument());
+    expect(screen.queryByText("reading dune")).not.toBeInTheDocument();
   });
 });

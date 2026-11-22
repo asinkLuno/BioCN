@@ -31,7 +31,7 @@ export function ColoringOverlay({ progress }: { progress: ColoringProgress }) {
     <div
       role="status"
       aria-label="着色进度"
-      className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 bg-base-100/88 px-3 pt-7 pb-3 backdrop-blur-md"
+      className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 overflow-hidden rounded-[inherit] bg-base-100/88 px-3 pt-7 pb-3 backdrop-blur-md"
     >
       {/* Native progressbar semantics for assistive technologies; visual progress
           is carried by the percentage and chapter readout beneath the helix. */}
@@ -134,9 +134,7 @@ export function ColoringOverlay({ progress }: { progress: ColoringProgress }) {
             )}
           </>
         ) : (
-          <span className="text-xs font-medium tracking-wide text-base-content/80">
-            准备中…
-          </span>
+          <span className="text-xs font-medium tracking-wide text-base-content/80">准备中…</span>
         )}
       </div>
     </div>

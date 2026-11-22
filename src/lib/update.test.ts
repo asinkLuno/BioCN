@@ -24,12 +24,9 @@ describe("compareVersions", () => {
 
 describe("plainNotes", () => {
   it("strips markdown markup and keeps list items as lines", () => {
-    expect(plainNotes("### 修复\n- **阅读器**：翻页不丢位置\n见 [说明](https://example.com)"))
-      .toEqual([
-        "修复",
-        "- 阅读器：翻页不丢位置",
-        "见 说明",
-      ]);
+    expect(
+      plainNotes("### 修复\n- **阅读器**：翻页不丢位置\n见 [说明](https://example.com)"),
+    ).toEqual(["修复", "- 阅读器：翻页不丢位置", "见 说明"]);
   });
 
   it("drops blank lines but keeps inline code readable", () => {
