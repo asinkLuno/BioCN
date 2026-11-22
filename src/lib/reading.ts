@@ -32,6 +32,8 @@ export interface ColoredParagraph {
 
 export interface ChapterSummary {
   index: number;
+  /** OPF manifest item ID; lets the frontend match parser sections after filtering. */
+  manifestId: string;
   title: string | null;
   paragraphs: number;
 }
@@ -46,6 +48,7 @@ export interface BookView {
 
 export interface ChapterView {
   index: number;
+  manifestId: string;
   title: string | null;
   paragraphs: ColoredParagraph[];
 }

@@ -7,14 +7,15 @@
  */
 declare module "foliate-js/view.js" {
   interface FoliateTocItem {
-    label: string;
+    label: string | null;
     /** Container-relative href, possibly with a `#fragment`. */
     href: string;
     subitems?: FoliateTocItem[];
   }
 
   interface FoliateSection {
-    /** Spine order index equals the Rust reader's chapter index. */
+    /** Foliate's resolved manifest href, not the OPF item ID. */
+    id: string;
     linear: string;
     size: number;
     // For XHTML the loader branch returns a blob: URL of the whole
@@ -26,6 +27,9 @@ declare module "foliate-js/view.js" {
 
   export interface FoliateBook {
     sections: FoliateSection[];
+    resources: {
+      getItemByID(id: string): { id: string; href: string } | undefined;
+    };
     toc?: FoliateTocItem[];
     metadata?: Record<string, unknown>;
     dir?: string;

@@ -51,7 +51,13 @@ function fakeBook(sectionDocs: (string | null)[]) {
   return {
     created,
     book: {
-      sections: sectionDocs.map((src) => ({
+      resources: {
+        getItemByID: (id: string) => sectionDocs
+          .map((_, i) => ({ id: `part-${i}`, href: `OPS/Text/${i}.xhtml` }))
+          .find((item) => item.id === id),
+      },
+      sections: sectionDocs.map((src, i) => ({
+        id: `OPS/Text/${i}.xhtml`,
         linear: "yes",
         size: 0,
         load: async () => {
@@ -80,14 +86,15 @@ const book: reading.BookView = {
   filePath: "dune.epub",
   title: "Dune",
   chapters: [
-    { index: 0, title: null, paragraphs: 0 },
-    { index: 1, title: "One", paragraphs: 2 },
-    { index: 2, title: "Two", paragraphs: 1 },
+    { index: 0, manifestId: "part-0", title: null, paragraphs: 0 },
+    { index: 1, manifestId: "part-1", title: "One", paragraphs: 2 },
+    { index: 2, manifestId: "part-2", title: "Two", paragraphs: 1 },
   ],
 };
 
 const chapter: reading.ChapterView = {
   index: 1,
+  manifestId: "part-1",
   title: "One",
   paragraphs: [
     {
@@ -142,6 +149,15 @@ describe("reader", () => {
     expect(srcdoc).toContain("了。</p>");
   });
 
+  it("opens the matching document after foliate drops a dangling spine item", async () => {
+    const parsed = fakeBook(["<p>target document</p>", "<p>wrong document</p>"]);
+    openBookMock.mockResolvedValue(parsed.book);
+    // Original spine: dangling, part-0, part-1. Both surviving slots are valid documents.
+    openMock.mockResolvedValue({ ...book, chapters: book.chapters.slice(1) });
+    chapterMock.mockResolvedValue({ ...chapter, manifestId: "part-0", paragraphs: [] });
+    renderReader();
+    expect(await screen.findByTitle("One")).toHaveAttribute("srcdoc", expect.stringContaining("target document"));
+  });
   it("colors subjects and predicates inside the document", async () => {
     renderReader();
     const frame = await screen.findByTitle("One");
@@ -210,11 +226,12 @@ describe("reader", () => {
       filePath: "emma.epub",
       title: "Emma",
       chapters: [
-        { index: 0, title: null, paragraphs: 0 },
-        { index: 7, title: "Seven", paragraphs: 1 },
+        { index: 0, manifestId: "part-0", title: null, paragraphs: 0 },
+        { index: 7, manifestId: "part-7", title: "Seven", paragraphs: 1 },
       ],
     });
     openBookMock.mockResolvedValue(second.book);
+    chapterMock.mockResolvedValue({ ...chapter, index: 7, manifestId: "part-7", title: "Seven" });
     chapterMock.mockClear();
     rerender(
       <Reader id="emma" onClose={() => {}} onOpenSettings={() => {}} modelsOpen={false} />,
@@ -241,7 +258,7 @@ describe("reader", () => {
     renderReader();
     await screen.findByTitle("One");
 
-    chapterMock.mockResolvedValue({ ...chapter, index: 2, title: "Two" });
+    chapterMock.mockResolvedValue({ ...chapter, index: 2, manifestId: "part-2", title: "Two" });
     await userEvent.keyboard("{ArrowRight}");
     await screen.findByTitle("Two");
 

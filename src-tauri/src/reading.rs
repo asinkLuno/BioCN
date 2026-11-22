@@ -43,6 +43,7 @@ pub struct ReadingState {
 #[serde(rename_all = "camelCase")]
 pub struct ChapterSummary {
     pub index: usize,
+    pub manifest_id: String,
     pub title: Option<String>,
     pub paragraphs: usize,
 }
@@ -64,6 +65,7 @@ pub struct BookView {
 #[serde(rename_all = "camelCase")]
 pub struct ChapterView {
     pub index: usize,
+    pub manifest_id: String,
     pub title: Option<String>,
     pub paragraphs: Vec<ColoredParagraph>,
 }
@@ -153,6 +155,7 @@ pub async fn book_open<R: Runtime>(app: AppHandle<R>, id: String) -> Result<Book
         chapters: chapters
             .iter()
             .map(|chapter| ChapterSummary {
+                manifest_id: chapter.manifest_id.clone(),
                 index: chapter.index,
                 title: chapter.title.clone(),
                 paragraphs: chapter.paragraphs.len(),
@@ -199,6 +202,7 @@ pub async fn book_chapter<R: Runtime>(
 
     Ok(ChapterView {
         index: chapter.index,
+        manifest_id: chapter.manifest_id,
         title: chapter.title,
         paragraphs,
     })
@@ -212,10 +216,12 @@ mod tests {
     fn a_chapter_list_row_counts_paragraphs_without_text() {
         let chapter = Chapter {
             index: 3,
+            manifest_id: "part-three".into(),
             title: Some("第三章".into()),
             paragraphs: vec![Paragraph::text_only("一。"), Paragraph::text_only("二。")],
         };
         let summary = ChapterSummary {
+            manifest_id: chapter.manifest_id.clone(),
             index: chapter.index,
             title: chapter.title.clone(),
             paragraphs: chapter.paragraphs.len(),

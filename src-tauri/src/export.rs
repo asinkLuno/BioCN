@@ -989,6 +989,20 @@ mod tests {
     }
 
     #[test]
+    fn reader_keeps_manifest_identity_after_a_dangling_spine_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = epub_with(
+            dir.path(),
+            chapter_manifest(),
+            r#"<itemref idref="missing"/><itemref idref="c1"/>"#,
+            &[("c1.xhtml", b"<html><body><p>hi</p></body></html>")],
+        );
+        let chapters = crate::reader::chapters(std::fs::File::open(source).unwrap()).unwrap();
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].index, 1);
+        assert_eq!(chapters[0].manifest_id, "c1");
+    }
+    #[test]
     fn a_spine_item_that_is_not_a_document_keeps_its_bytes() {
         // The cover image sits in the spine of a great many EPUB 2 books.
         // Rewriting it as a chapter would replace the PNG with text — and the

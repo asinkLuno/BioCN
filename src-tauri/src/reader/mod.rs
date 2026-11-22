@@ -153,6 +153,7 @@ pub const SYNTHETIC: u32 = u32::MAX;
 pub struct Chapter {
     /// Index in the spine, which is also the reader's page order.
     pub index: usize,
+    pub manifest_id: String,
     /// The chapter's title from the table of contents, when it has one.
     pub title: Option<String>,
     pub paragraphs: Vec<Paragraph>,
@@ -207,6 +208,7 @@ pub fn chapters<R: std::io::Read + std::io::Seek + 'static>(
         let html = decode(&bytes);
         out.push(Chapter {
             index,
+            manifest_id: entry.idref().to_owned(),
             title: titles.get(&index).cloned(),
             paragraphs: paragraphs(&html),
         });

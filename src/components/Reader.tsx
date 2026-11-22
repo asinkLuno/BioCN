@@ -13,7 +13,7 @@
  * verified against the document text before painting; a paragraph that cannot
  * be matched stays uncolored rather than mis-colored.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MODEL_MISSING,
   bookChapter,
@@ -23,7 +23,7 @@ import {
   type BookView,
   type ChapterView,
 } from "../lib/reading";
-import { fetchBookBlob, openBook } from "../lib/epub";
+import { fetchBookBlob, openBook, resolveTocHref, sectionForChapter } from "../lib/epub";
 import { renderSection } from "../lib/section";
 
 interface Props {
@@ -36,10 +36,34 @@ interface Props {
   modelsOpen: boolean;
 }
 
-/** One open book: the parsed TOC plus the parser instance behind it. */
+
 interface OpenedBook {
   view: BookView;
   book: Awaited<ReturnType<typeof openBook>>;
+}
+
+type TocItemData = NonNullable<OpenedBook["book"]["toc"]>[number];
+
+function TocItem({ item, book, chapters, currentIndex, onNavigate }: {
+  item: TocItemData;
+  book: OpenedBook["book"];
+  chapters: BookView["chapters"];
+  currentIndex: number | null;
+  onNavigate: (destination: NonNullable<ReturnType<typeof resolveTocHref>>) => void;
+}) {
+  const destination = item.href ? resolveTocHref(book, item.href, chapters) : null;
+  const label = item.label || "未命名章节";
+  return (
+    <li>
+      {destination ? (
+        <button type="button" className={destination.index === currentIndex && !destination.anchor ? "menu-active" : undefined}
+          onClick={() => onNavigate(destination)}>{label}</button>
+      ) : <span className="menu-title">{label}</span>}
+      {item.subitems?.length ? <ul>{item.subitems.map((child, i) => (
+        <TocItem key={i} item={child} book={book} chapters={chapters} currentIndex={currentIndex} onNavigate={onNavigate} />
+      ))}</ul> : null}
+    </li>
+  );
 }
 
 /**
@@ -51,12 +75,49 @@ interface OpenedBook {
  * keeps watching the document (images decode late, book CSS reflows late),
  * and `main` above stays the only scroller — no pagination engine in between.
  */
-function Frame({ srcdoc, title }: { srcdoc: string; title: string }) {
+function Frame({ srcdoc, title, jump, onKeyDown }: {
+  srcdoc: string;
+  title: string;
+  jump: { anchor: string | null } | null;
+  onKeyDown: (event: KeyboardEvent) => void;
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number | null>(null);
-  // Exactly one ResizeObserver stays alive per frame; a chapter swap replaces
-  // the document, so the previous one is disconnected when the new arrives.
-  const observerRef = useRef<ResizeObserver | null>(null);
-
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    let detach: (() => void) | undefined;
+    const attach = () => {
+      detach?.();
+      const doc = frame.contentDocument;
+      if (!doc?.body) return;
+      const measure = () => setHeight(Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight, 200));
+      const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+      observer?.observe(doc.body);
+      doc.addEventListener("keydown", onKeyDown);
+      measure();
+      let tick = 0;
+      if (jump) tick = requestAnimationFrame(() => {
+        tick = requestAnimationFrame(() => {
+          const main = frame.parentElement;
+          if (!main || frame.contentDocument !== doc) return;
+          const target = jump.anchor && (doc.getElementById(jump.anchor) ?? doc.getElementsByName(jump.anchor)[0]);
+          main.scrollTop = target ? main.scrollTop + frame.getBoundingClientRect().top - main.getBoundingClientRect().top + target.getBoundingClientRect().top : 0;
+        });
+      });
+      detach = () => {
+        cancelAnimationFrame(tick);
+        observer?.disconnect();
+        doc.removeEventListener("keydown", onKeyDown);
+      };
+    };
+    frame.addEventListener("load", attach);
+    if (frame.contentDocument?.readyState === "complete") attach();
+    return () => {
+      frame.removeEventListener("load", attach);
+      detach?.();
+    };
+  }, [onKeyDown, jump]);
   return (
     <iframe
       // srcdoc content cannot reach tauri: IPC, but it also cannot navigate
@@ -66,28 +127,7 @@ function Frame({ srcdoc, title }: { srcdoc: string; title: string }) {
       className="block w-full border-0 bg-transparent"
       style={{ height: height ?? "50vh" }}
       srcDoc={srcdoc}
-      onLoad={(event) => {
-        const frame = event.currentTarget;
-        const doc = frame.contentDocument;
-        if (!doc?.body) return;
-        const read = () =>
-          setHeight(
-            Math.max(
-              doc.body.scrollHeight,
-              doc.documentElement.scrollHeight,
-              200,
-            ),
-          );
-        read();
-        // Images decode late; book CSS can reflow late too.
-        doc.fonts?.ready.then(read);
-        const observer = new ResizeObserver(read);
-        observer.observe(doc.body);
-        // A chapter swap replaces the document; disconnect the previous
-        // observer so exactly one is watching the live one.
-        observerRef.current?.disconnect();
-        observerRef.current = observer;
-      }}
+      ref={frameRef}
     />
   );
 }
@@ -97,6 +137,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   const [chapter, setChapter] = useState<ChapterView | null>(null);
   const [index, setIndex] = useState<number | null>(null);
   const [srcdoc, setSrcdoc] = useState<string | null>(null);
+  const [jump, setJump] = useState<NonNullable<ReturnType<typeof resolveTocHref>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [missingModel, setMissingModel] = useState(false);
@@ -105,6 +146,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   // common reason a chapter failed, and the reader must not sit on that error
   // until the user navigates away and back.
   const [attempt, setAttempt] = useState(0);
+  const [openAttempt, setOpenAttempt] = useState(0);
   const wasOpen = useRef(modelsOpen);
   const content = useRef<HTMLDivElement>(null);
 
@@ -112,8 +154,13 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   // asset protocol into the parser. Either may fail; both are fatal for now.
   useEffect(() => {
     let cancelled = false;
+    let parsed: OpenedBook["book"] | undefined;
+    setOpened(null);
+    setError(null);
+    setMissingModel(false);
     setLoading(true);
     setChapter(null);
+    setJump(null);
     setIndex(null);
     setSrcdoc(null);
     bookOpen(id)
@@ -121,8 +168,13 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
         if (cancelled) return null;
         if (!view.filePath) throw new Error("book-missing: 书库缺少这本书的文件");
         const file = await fetchBookBlob(view.filePath);
-        const book = await openBook(file);
-        return { view, book };
+        if (cancelled) return null;
+        parsed = await openBook(file);
+        if (cancelled) {
+          parsed.destroy();
+          return null;
+        }
+        return { view, book: parsed };
       })
       .then((value) => {
         if (cancelled || !value) return;
@@ -146,8 +198,9 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
       });
     return () => {
       cancelled = true;
+      parsed?.destroy();
     };
-  }, [id]);
+  }, [id, openAttempt]);
 
   useEffect(() => {
     // `index === null` is the gap between opening a book and knowing its first
@@ -157,15 +210,13 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
     // fire a request either.
     if (index === null || opened?.view.id !== id) return;
     let cancelled = false;
+    let acquired: OpenedBook["book"]["sections"][number] | undefined;
     setLoading(true);
     setError(null);
     bookChapter(id, index)
       .then(async (loaded) => {
         if (cancelled) return;
-        // Parser sections and Rust chapters share the spine index (rbook
-        // keeps dangling spine items, foliate filters them — a warning here
-        // beats silently coloring the wrong chapter on a broken book).
-        const section = opened.book.sections[index];
+        const section = sectionForChapter(opened.book, loaded.manifestId);
         if (!section) throw new Error("book-chapter: 这一章不在书文件里");
         // `load()` returns a blob: URL of the whole serialized chapter — its
         // resources (CSS, images) are already rewritten to blob: by the
@@ -178,11 +229,14 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
           section.unload();
           return;
         }
+        acquired = section;
         if (typeof url !== "string") {
           throw new Error("book-chapter: 这一章不是文档");
         }
         const response = await fetch(url);
+        if (!response.ok) throw new Error(`book-chapter: 无法读取章节（${response.status}）`);
         const str = await response.text();
+        if (cancelled) return;
         const doc = new DOMParser().parseFromString(str, "text/html");
         if (!doc.documentElement) throw new Error("book-chapter: 这一章解析失败");
         setSrcdoc(renderSection(doc, loaded.paragraphs));
@@ -195,6 +249,8 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
+        acquired?.unload();
+        acquired = undefined;
         setLoading(false);
         // A missing model is not a failure to show a raw error for: it is
         // something the user can fix, and the prompt says how.
@@ -203,12 +259,9 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
       });
     return () => {
       cancelled = true;
+      acquired?.unload();
     };
-    // `opened` enters as the primitive `opened?.view.id`: the guard below is
-    // the only use, and a dependency on the object would re-run this effect on
-    // every parse that lands, for a fetch the previous run already decided
-    // against (rerender-dependencies).
-  }, [id, index, opened?.view.id, opened?.book, attempt]);
+  }, [id, index, opened, attempt]);
 
   // Coming back from settings after a failed chapter is worth one more try:
   // "download a model" is the reason the prompt sent the user there.
@@ -236,40 +289,28 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
     };
   }, [opened, index]);
 
-  // Arrow keys and Escape, but never while the user is typing or has a menu open.
+  const onKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "")) return;
+    if (document.querySelector("dialog[open]")) return;
+    if (event.key === "Escape") {
+      if (tocOpen) setTocOpen(false);
+      else onClose();
+    } else if (event.key === "ArrowRight" && position?.next) {
+      setJump(null);
+      setIndex(position.next.index);
+    } else if (event.key === "ArrowLeft" && position?.previous) {
+      setJump(null);
+      setIndex(position.previous.index);
+    } else return;
+    event.preventDefault();
+  }, [position, tocOpen, onClose]);
 
-  // The handler reads `position`/`tocOpen` through refs, so the listener is
-  // attached once for the page's lifetime instead of on every chapter flip or
-  // contents-panel toggle (rerender-dependencies / advanced-use-latest).
-  const positionRef = useRef(position);
-  const tocRef = useRef(tocOpen);
   useEffect(() => {
-    positionRef.current = position;
-    tocRef.current = tocOpen;
-  });
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-      const tag = (event.target as HTMLElement | null)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      // Settings can be open above the page: Escape there dismisses settings,
-      // not the book, and an arrow key must not turn the page behind a modal.
-      if (document.querySelector("dialog[open]") !== null) return;
-      if (event.key === "Escape") {
-        if (tocRef.current) setTocOpen(false);
-        else onClose();
-      } else if (event.key === "ArrowRight") {
-        const next = positionRef.current?.next;
-        if (next) setIndex(next.index);
-      } else if (event.key === "ArrowLeft") {
-        const previous = positionRef.current?.previous;
-        if (previous) setIndex(previous.index);
-      }
-    };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onKeyDown]);
 
   return (
     <div className="flex h-dvh flex-col bg-base-100 text-base-content">
@@ -314,29 +355,36 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
       {tocOpen && opened && (
         <nav
           aria-label="章节目录"
-          className="border-b border-base-content/10 bg-base-200/50"
+          className="w-full max-h-[60vh] overflow-y-auto overscroll-contain border-b border-base-content/10 bg-base-200/50"
         >
-          <ul className="menu mx-auto w-full max-w-3xl max-h-[60vh] flex-nowrap overflow-y-auto px-2 py-2">
-            {opened.view.chapters.map((entry) => (
+          <ul className="menu mx-auto w-full max-w-3xl flex-nowrap px-2 py-2">
+            {opened.book.toc?.length ? opened.book.toc.map((entry, item) => (
+              <TocItem
+                key={`${entry.href ?? entry.label ?? "toc"}-${item}`}
+                item={entry}
+                book={opened.book}
+                chapters={opened.view.chapters}
+                currentIndex={index}
+                onNavigate={(destination) => {
+                  setJump(destination);
+                  setIndex(destination.index);
+                  setTocOpen(false);
+                }}
+              />
+            )) : opened.view.chapters.map((entry) => (
               <li key={entry.index}>
                 <button
                   type="button"
                   className={entry.index === index ? "menu-active" : undefined}
-                  // A spine document with no prose (a cover, a copyright page) is
-                  // still listed: hiding it would renumber the chapter list away
-                  // from the book's own numbering.
                   disabled={entry.paragraphs === 0}
                   onClick={() => {
+                    setJump({ index: entry.index, anchor: null });
                     setIndex(entry.index);
                     setTocOpen(false);
                   }}
                 >
-                  <span className="min-w-0 flex-1 truncate text-left">
-                    {entry.title ?? `第 ${entry.index} 节`}
-                  </span>
-                  {entry.paragraphs === 0 && (
-                    <span className="badge badge-ghost badge-sm">无正文</span>
-                  )}
+                  <span className="min-w-0 flex-1 truncate text-left">{entry.title ?? `第 ${entry.index} 节`}</span>
+                  {entry.paragraphs === 0 && <span className="badge badge-ghost badge-sm">无正文</span>}
                 </button>
               </li>
             ))}
@@ -346,14 +394,14 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
 
       <main
         ref={content}
-        className="w-full flex-1 overflow-y-auto overscroll-contain pb-[45vh]"
+        className="w-full flex-1 overflow-y-auto overscroll-contain"
         aria-busy={loading}
       >
         {error !== null ? (
           <div role="alert" className="alert alert-error items-start">
             <div className="min-w-0 flex-1">
               <p className="font-medium">
-                {missingModel ? "主谓宾着色需要分析模型" : "无法打开这一章"}
+                {missingModel ? "主谓宾着色需要分析模型" : index === null ? "无法打开这本书" : "无法打开这一章"}
               </p>
               <p className="mt-1 text-sm break-words opacity-80">
                 {missingModel
@@ -362,7 +410,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
               </p>
             </div>
             <div className="flex shrink-0 gap-2">
-              <button type="button" className="btn btn-sm" onClick={() => setAttempt((n) => n + 1)}>
+              <button type="button" className="btn btn-sm" onClick={() => (index === null ? setOpenAttempt : setAttempt)((n) => n + 1)}>
                 重试
               </button>
               {missingModel && (
@@ -384,7 +432,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             ))}
           </div>
         ) : (
-          <Frame srcdoc={srcdoc} title={chapter?.title ?? "章节内容"} />
+          <Frame jump={chapter?.index === jump?.index ? jump : null} onKeyDown={onKeyDown} srcdoc={srcdoc} title={chapter?.title ?? "章节内容"} />
         )}
       </main>
 
@@ -394,7 +442,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={!position?.previous}
-            onClick={() => position?.previous && setIndex(position.previous.index)}
+            onClick={() => { setJump(null); if (position?.previous) setIndex(position.previous.index); }}
           >
             上一章
           </button>
@@ -405,7 +453,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={!position?.next}
-            onClick={() => position?.next && setIndex(position.next.index)}
+            onClick={() => { setJump(null); if (position?.next) setIndex(position.next.index); }}
           >
             下一章
           </button>

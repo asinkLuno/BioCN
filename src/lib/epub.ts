@@ -24,6 +24,30 @@ export async function openBook(
   return book;
 }
 
+export interface TocDestination {
+  index: number;
+  anchor: string | null;
+}
+
+export function resolveTocHref(
+  book: import("foliate-js/view.js").FoliateBook,
+  href: string,
+  chapters: readonly { index: number; manifestId: string }[],
+): TocDestination | null {
+  if (book.isExternal(href)) return null;
+  // Foliate returns the original spine index (not an index into filtered sections).
+  let resolved;
+  try { resolved = book.resolveHref(href); } catch { return null; }
+  const chapter = chapters.find((entry) => entry.index === resolved?.index);
+  if (!chapter) return null;
+  const anchor = href.split("#").slice(1).join("#");
+  return { index: chapter.index, anchor: anchor || null };
+}
+
+export function sectionForChapter(book: import("foliate-js/view.js").FoliateBook, manifestId: string) {
+  const href = book.resources.getItemByID(manifestId)?.href;
+  return book.sections.find((section) => section.id === href);
+}
 /**
  * Reads the stored EPUB through the asset protocol.
  *
