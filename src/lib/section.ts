@@ -18,7 +18,7 @@ const READER_STYLESHEET = `
 :root { color-scheme: light dark; }
 body {
   margin: 0 auto;
-  padding: 1rem 1.25rem 50vh;
+  padding: 1rem 1.25rem 4rem;
   max-width: 42rem;
   font-size: 1.0625rem;
   line-height: 1.9;

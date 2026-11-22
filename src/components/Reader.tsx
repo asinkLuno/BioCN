@@ -272,7 +272,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
   }, [onClose]);
 
   return (
-    <div className="flex min-h-dvh flex-col bg-base-100 text-base-content">
+    <div className="flex h-dvh flex-col bg-base-100 text-base-content">
       <header className="sticky top-0 z-10 border-b border-base-content/10 bg-base-100/90 backdrop-blur">
         <div className="mx-auto flex w-full max-w-3xl items-center gap-2 px-2 py-2 sm:px-4">
           <button type="button" className="btn btn-ghost btn-sm gap-1" onClick={onClose}>
@@ -346,7 +346,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen }: Props) {
 
       <main
         ref={content}
-        className="mx-auto w-full max-w-3xl flex-1 overflow-y-auto px-5 py-6 sm:px-8 sm:py-10"
+        className="mx-auto w-full max-w-3xl flex-1 overflow-y-auto overscroll-contain px-5 py-6 sm:px-8 sm:py-10"
         aria-busy={loading}
       >
         {error !== null ? (
