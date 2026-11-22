@@ -6,6 +6,15 @@
 import type { ReaderPrefs, ReaderViewMode } from "./readerPrefs";
 import type { RunPatch } from "./reading";
 
+export interface AnchorRect {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+export type FootnoteTrigger = "hover" | "click";
+
 export interface ChapterTarget {
   anchor?: string | null;
   paragraphIndex?: number | null;
@@ -41,7 +50,7 @@ export type FrameToHostMessage =
       paragraphIndex: number | null;
     }
   | { source: "biocn-reader"; type: "turn"; direction: "prev" | "next" }
-  | { source: "biocn-reader"; type: "link"; href: string }
+  | { source: "biocn-reader"; type: "link"; href: string; rect?: AnchorRect }
   | {
       source: "biocn-reader";
       type: "footnote";
@@ -50,7 +59,10 @@ export type FrameToHostMessage =
       label: string;
       html: string;
       sameChapter: boolean;
+      trigger?: FootnoteTrigger;
+      rect?: AnchorRect;
     }
+  | { source: "biocn-reader"; type: "footnote-leave" }
   | {
       source: "biocn-reader";
       type: "footnote-result";
@@ -67,6 +79,21 @@ export type FrameToHostMessage =
 
 const EXTERNAL_SCHEME_RE = /^(https?:|mailto:|tel:)/i;
 
+function isAnchorRect(value: unknown): value is AnchorRect {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return (
+    typeof r.top === "number" &&
+    Number.isFinite(r.top) &&
+    typeof r.bottom === "number" &&
+    Number.isFinite(r.bottom) &&
+    typeof r.left === "number" &&
+    Number.isFinite(r.left) &&
+    typeof r.right === "number" &&
+    Number.isFinite(r.right)
+  );
+}
+
 export function isFrameMessage(data: unknown): data is FrameToHostMessage {
   if (typeof data !== "object" || data === null) return false;
   const msg = data as Record<string, unknown>;
@@ -75,6 +102,7 @@ export function isFrameMessage(data: unknown): data is FrameToHostMessage {
     case "ready":
     case "painted":
     case "tap":
+    case "footnote-leave":
       return true;
     case "progress":
       return (
@@ -91,7 +119,11 @@ export function isFrameMessage(data: unknown): data is FrameToHostMessage {
     case "turn":
       return msg.direction === "prev" || msg.direction === "next";
     case "link":
-      return typeof msg.href === "string" && msg.href.length > 0;
+      return (
+        typeof msg.href === "string" &&
+        msg.href.length > 0 &&
+        (msg.rect === undefined || isAnchorRect(msg.rect))
+      );
     case "footnote":
       return (
         typeof msg.href === "string" &&
@@ -101,7 +133,9 @@ export function isFrameMessage(data: unknown): data is FrameToHostMessage {
         typeof msg.label === "string" &&
         typeof msg.html === "string" &&
         msg.html.length > 0 &&
-        typeof msg.sameChapter === "boolean"
+        typeof msg.sameChapter === "boolean" &&
+        (msg.trigger === undefined || msg.trigger === "hover" || msg.trigger === "click") &&
+        (msg.rect === undefined || isAnchorRect(msg.rect))
       );
     case "footnote-result":
       return (

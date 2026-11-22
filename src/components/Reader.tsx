@@ -24,7 +24,12 @@ import {
   looksLikeFootnoteHref,
   parseFootnoteHtml,
 } from "../lib/footnote";
-import { type ChapterTarget, isFrameMessage, postToFrame } from "../lib/readerBridge";
+import {
+  type AnchorRect,
+  type ChapterTarget,
+  isFrameMessage,
+  postToFrame,
+} from "../lib/readerBridge";
 import {
   loadReaderPrefs,
   type ReaderPrefs,
@@ -44,9 +49,24 @@ import {
   type RunPatch,
 } from "../lib/reading";
 import { useHistoryOverlay } from "../lib/router";
-import { type FootnoteView, ReaderFootnoteDialog } from "./ReaderFootnoteDialog";
+import { type FootnoteView, ReaderFootnotePopover } from "./ReaderFootnotePopover";
 import { ReaderPrefsPopover } from "./ReaderPrefsPopover";
 import { ReaderTocDrawer } from "./ReaderTocDrawer";
+
+function toHostRect(
+  frame: HTMLIFrameElement | null,
+  rect: AnchorRect | undefined,
+): AnchorRect | null {
+  if (!rect) return null;
+  const box = frame?.getBoundingClientRect();
+  if (!box) return rect;
+  return {
+    top: box.top + rect.top,
+    bottom: box.top + rect.bottom,
+    left: box.left + rect.left,
+    right: box.left + rect.right,
+  };
+}
 
 interface Props {
   id: string;
@@ -175,7 +195,11 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
     fallback: () => void;
     targetChapterIndex: number | null;
     baseHref: string;
+    rect: AnchorRect | null;
   } | null>(null);
+  const footnoteCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const footnoteRef = useRef<FootnoteView | null>(null);
+  footnoteRef.current = footnote;
   const prefsRef = useRef(effectivePrefs);
   // Keep latest effective prefs visible synchronously to chapterUrl and message handlers.
   prefsRef.current = effectivePrefs;
@@ -194,6 +218,31 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
   } | null>(null);
   const prefsMenuRef = useRef<HTMLDivElement>(null);
 
+  const cancelFootnoteClose = useCallback(() => {
+    if (footnoteCloseTimerRef.current) {
+      clearTimeout(footnoteCloseTimerRef.current);
+      footnoteCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const closeFootnote = useCallback(() => {
+    cancelFootnoteClose();
+    setFootnote(null);
+  }, [cancelFootnoteClose]);
+
+  const scheduleFootnoteClose = useCallback(
+    (delayMs = 220) => {
+      cancelFootnoteClose();
+      footnoteCloseTimerRef.current = setTimeout(() => {
+        footnoteCloseTimerRef.current = null;
+        if (footnoteRef.current && !footnoteRef.current.pinned) {
+          setFootnote(null);
+        }
+      }, delayMs);
+    },
+    [cancelFootnoteClose],
+  );
+
   const clearPendingFootnoteRequest = useCallback(() => {
     if (footnoteRequestRef.current) {
       clearTimeout(footnoteRequestRef.current.timer);
@@ -209,12 +258,15 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
       targetChapterIndex: number | null;
       targetAnchor: string;
       sameChapter: boolean;
+      rect: AnchorRect | null;
+      pinned: boolean;
     }): boolean => {
       const nodes = parseFootnoteHtml(params.html, {
         bookId: id,
         baseHref: params.baseHref,
       });
       if (!hasVisibleFootnoteContent(nodes)) return false;
+      cancelFootnoteClose();
       setPrefsOpen(false);
       setFootnote({
         label: params.label,
@@ -222,10 +274,12 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
         targetChapterIndex: params.targetChapterIndex,
         targetAnchor: params.targetAnchor,
         sameChapter: params.sameChapter,
+        rect: params.rect,
+        pinned: params.pinned,
       });
       return true;
     },
-    [id],
+    [id, cancelFootnoteClose],
   );
 
   const flushProgress = useCallback(() => {
@@ -292,7 +346,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
     let cancelled = false;
     flushProgress();
     clearPendingFootnoteRequest();
-    setFootnote(null);
+    closeFootnote();
     needsReloadOnColorOnRef.current = false;
     lastSavedRef.current = null;
     setBook(null);
@@ -341,7 +395,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
     return () => {
       cancelled = true;
     };
-  }, [id, openAttempt, flushProgress, clearPendingFootnoteRequest]);
+  }, [id, openAttempt, flushProgress, clearPendingFootnoteRequest, closeFootnote]);
 
   // Refresh chapter coloring badges & hasModel when the user installs, switches,
   // or removes a model in Settings without losing their current chapter/position.
@@ -371,10 +425,11 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
         swapFallbackRef.current = null;
       }
       clearPendingFootnoteRequest();
+      cancelFootnoteClose();
       flushProgress();
       void bookChapterCancelStream().catch(() => {});
     };
-  }, [flushProgress, clearPendingFootnoteRequest]);
+  }, [flushProgress, clearPendingFootnoteRequest, cancelFootnoteClose]);
 
   const position = useMemo(() => {
     if (!book || book.id !== id || index === null) return null;
@@ -636,12 +691,12 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
         return;
       }
       clearPendingFootnoteRequest();
-      setFootnote(null);
+      closeFootnote();
       needsReloadOnColorOnRef.current = false;
       pendingTargetRef.current = target;
       setIndex(targetIndex);
     },
-    [index, getCurrentFrame, clearPendingFootnoteRequest],
+    [index, getCurrentFrame, clearPendingFootnoteRequest, closeFootnote],
   );
 
   const handleTocNavigate = useCallback(
@@ -654,13 +709,13 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
 
   const closeToc = useCallback(() => setTocOpen(false), []);
   const closePrefs = useCallback(() => setPrefsOpen(false), []);
-  const closeFootnote = useCallback(() => setFootnote(null), []);
 
   // Register reader overlays with browser history so Android/browser Back
-  // closes them cleanly before leaving the book.
+  // closes them cleanly before leaving the book. Hover-only footnotes never
+  // push history state; explicit click/tap (pinned) footnotes do.
   useHistoryOverlay(tocOpen, closeToc);
   useHistoryOverlay(prefsOpen, closePrefs);
-  useHistoryOverlay(footnote !== null, closeFootnote);
+  useHistoryOverlay(Boolean(footnote?.pinned), closeFootnote);
 
   const handleFootnoteJump = useCallback(() => {
     if (!footnote) return;
@@ -757,6 +812,13 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
         }
         case "progress": {
           if (!isCurrentTarget) break;
+          if (
+            footnoteRef.current &&
+            (viewportRef.current.page !== msg.page ||
+              Math.abs(viewportRef.current.ratio - msg.ratio) > 0.001)
+          ) {
+            closeFootnote();
+          }
           setViewport({
             mode: msg.mode,
             page: msg.page,
@@ -771,6 +833,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
         }
         case "turn": {
           if (!isCurrentTarget) break;
+          closeFootnote();
           if (msg.direction === "next" && position?.next) {
             navigateToChapter(position.next.index, { edge: "start" });
           } else if (msg.direction === "prev" && position?.previous) {
@@ -782,6 +845,9 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
         }
         case "footnote": {
           if (!isCurrentTarget || !position || !book) break;
+          const pinned = msg.trigger !== "hover";
+          // Do not let an incidental mouse brush overwrite an explicitly pinned note.
+          if (!pinned && footnoteRef.current?.pinned) break;
           clearPendingFootnoteRequest();
           const resolved = resolveRelativeHref(position.current.href, msg.href);
           const baseHref = resolved?.path ?? position.current.href;
@@ -795,8 +861,10 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
             targetChapterIndex: targetChapter ? targetChapter.index : null,
             targetAnchor: msg.anchor,
             sameChapter: msg.sameChapter,
+            rect: toHostRect(senderFrame, msg.rect),
+            pinned,
           });
-          if (!opened) {
+          if (!opened && pinned) {
             if (msg.sameChapter) {
               postToFrame(senderFrame, {
                 source: "biocn-host",
@@ -806,6 +874,13 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
             } else if (targetChapter) {
               navigateToChapter(targetChapter.index, { anchor: msg.anchor });
             }
+          }
+          break;
+        }
+        case "footnote-leave": {
+          if (!isCurrentTarget) break;
+          if (footnoteRef.current && !footnoteRef.current.pinned) {
+            scheduleFootnoteClose(240);
           }
           break;
         }
@@ -822,6 +897,8 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
               targetChapterIndex: pending.targetChapterIndex,
               targetAnchor: msg.anchor,
               sameChapter: false,
+              rect: pending.rect,
+              pinned: true,
             });
             if (opened) break;
           }
@@ -858,6 +935,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
               fallback,
               targetChapterIndex: targetChapter ? targetChapter.index : null,
               baseHref: resolved.path,
+              rect: toHostRect(senderFrame, msg.rect),
             };
             postToFrame(senderFrame, {
               source: "biocn-host",
@@ -877,8 +955,8 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
         }
         case "key": {
           if (msg.key === "Escape") {
-            if (footnote) {
-              setFootnote(null);
+            if (footnoteRef.current) {
+              closeFootnote();
               break;
             }
             if (modelsOpen || document.querySelector("dialog[open]")) break;
@@ -889,7 +967,9 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
           break;
         }
         case "tap": {
-          if (prefsOpen) {
+          if (footnoteRef.current) {
+            closeFootnote();
+          } else if (prefsOpen) {
             setPrefsOpen(false);
           } else {
             setChromeVisible((visible) => !visible);
@@ -906,7 +986,6 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
     index,
     position,
     tocAnchors,
-    footnote,
     prefsOpen,
     tocOpen,
     modelsOpen,
@@ -916,6 +995,8 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
     promoteSlot,
     clearPendingFootnoteRequest,
     openFootnotePopup,
+    closeFootnote,
+    scheduleFootnoteClose,
   ]);
 
   // Host keyboard shortcuts (when focus is outside the iframe).
@@ -930,7 +1011,8 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
         ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "");
 
       if (event.key === "Escape") {
-        if (prefsOpen) setPrefsOpen(false);
+        if (footnoteRef.current) closeFootnote();
+        else if (prefsOpen) setPrefsOpen(false);
         else if (tocOpen) setTocOpen(false);
         else onClose();
         event.preventDefault();
@@ -972,6 +1054,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
       onClose,
       navigateToChapter,
       getCurrentFrame,
+      closeFootnote,
     ],
   );
 
@@ -1279,7 +1362,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
       />
 
       {footnote && (
-        <ReaderFootnoteDialog
+        <ReaderFootnotePopover
           footnote={footnote}
           prefs={effectivePrefs}
           effectiveTheme={effectiveTheme}
@@ -1287,6 +1370,10 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
           onJumpToTarget={handleFootnoteJump}
           onNavigateInternal={handleFootnoteNavigateInternal}
           onOpenExternal={handleFootnoteOpenExternal}
+          onPointerEnter={cancelFootnoteClose}
+          onPointerLeave={() => {
+            if (!footnote.pinned) scheduleFootnoteClose(180);
+          }}
         />
       )}
     </div>

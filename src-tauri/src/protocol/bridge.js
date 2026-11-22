@@ -251,6 +251,10 @@
   }
 
   function step(direction) {
+    if (hoveredFootnoteAnchor) {
+      cancelPendingHover();
+      hoveredFootnoteAnchor = null;
+    }
     if (state.mode === "paginated") {
       recountPages();
       if (direction === "next") {
@@ -470,6 +474,10 @@
   window.addEventListener(
     "scroll",
     function () {
+      if (hoveredFootnoteAnchor) {
+        cancelPendingHover();
+        hoveredFootnoteAnchor = null;
+      }
       if (state.mode !== "scrolled" || !state.initialized) return;
       if (scrollTimer) return;
       scrollTimer = requestAnimationFrame(function () {
@@ -525,9 +533,11 @@
 
   // Touch swipe & live 1:1 drag-follow paging (Android / touchscreens)
   var drag = null;
+  var lastTouchAt = 0;
   window.addEventListener(
     "touchstart",
     function (event) {
+      lastTouchAt = Date.now();
       if (event.touches.length !== 1) {
         drag = null;
         return;
@@ -1068,97 +1078,195 @@
     });
   }
 
-  function handleInternalLink(anchor, raw) {
-    if (raw.charAt(0) === "#") {
-      var hashId = safeDecode(raw.slice(1));
-      if (hashId && !isBacklink(anchor)) {
-        var sameTarget = findAnchorTarget(document, hashId);
-        if (sameTarget && (isNoterefLink(anchor, hashId) || isFootnoteTarget(sameTarget))) {
-          var sameHtml = extractFootnoteHtml(document, hashId, anchor, false);
-          if (sameHtml) {
-            post({
-              type: "footnote",
-              href: raw,
-              anchor: hashId,
-              label: getFootnoteLabel(anchor),
-              html: sameHtml,
-              sameChapter: true,
-            });
-            return;
-          }
-        }
-      }
-      scrollToAnchor(hashId);
-      return;
+  function readAnchorRect(anchor) {
+    if (!anchor || typeof anchor.getBoundingClientRect !== "function") return undefined;
+    var r = anchor.getBoundingClientRect();
+    if (!r || (!r.width && !r.height)) return undefined;
+    if (
+      !Number.isFinite(r.top) ||
+      !Number.isFinite(r.bottom) ||
+      !Number.isFinite(r.left) ||
+      !Number.isFinite(r.right)
+    ) {
+      return undefined;
     }
+    return {
+      top: r.top,
+      bottom: r.bottom,
+      left: r.left,
+      right: r.right,
+    };
+  }
 
-    // Resolve against current URL to detect same-chapter `ch1.xhtml#fn1` and
-    // cross-chapter `notes.xhtml#fn1` footnotes.
+  function postFootnoteMessage(payload) {
+    var msg = {
+      type: "footnote",
+      href: payload.href,
+      anchor: payload.anchor,
+      label: payload.label,
+      html: payload.html,
+      sameChapter: payload.sameChapter,
+      trigger: payload.trigger,
+    };
+    if (payload.rect) msg.rect = payload.rect;
+    post(msg);
+  }
+
+  var hoveredFootnoteAnchor = null;
+  var hoverTimer = null;
+  var hoverSeq = 0;
+  var HOVER_OPEN_DELAY_MS = 120;
+
+  function cancelPendingHover() {
+    if (hoverTimer) {
+      clearTimeout(hoverTimer);
+      hoverTimer = null;
+    }
+    hoverSeq += 1;
+  }
+
+  function resolveLinkTarget(raw) {
+    if (!raw || /^(https?:|mailto:|tel:)/i.test(raw)) return null;
+    if (raw.charAt(0) === "#") {
+      return {
+        sameChapter: true,
+        fragmentId: safeDecode(raw.slice(1)),
+        docUrl: null,
+      };
+    }
     var resolvedUrl = null;
     try {
       resolvedUrl = new URL(raw, window.location.href);
     } catch (_) {
-      resolvedUrl = null;
+      return null;
     }
+    var fragmentId = resolvedUrl.hash ? safeDecode(resolvedUrl.hash.slice(1)) : "";
+    if (!fragmentId || resolvedUrl.origin !== window.location.origin) {
+      return null;
+    }
+    if (resolvedUrl.pathname === window.location.pathname) {
+      return {
+        sameChapter: true,
+        fragmentId: fragmentId,
+        docUrl: null,
+      };
+    }
+    return {
+      sameChapter: false,
+      fragmentId: fragmentId,
+      docUrl: resolvedUrl.origin + resolvedUrl.pathname,
+    };
+  }
 
-    var fragmentId =
-      resolvedUrl && resolvedUrl.hash ? safeDecode(resolvedUrl.hash.slice(1)) : "";
-
-    if (
-      resolvedUrl &&
-      fragmentId &&
-      resolvedUrl.origin === window.location.origin &&
-      resolvedUrl.pathname === window.location.pathname
-    ) {
-      if (!isBacklink(anchor)) {
-        var localTarget = findAnchorTarget(document, fragmentId);
-        if (localTarget && (isNoterefLink(anchor, fragmentId) || isFootnoteTarget(localTarget))) {
-          var localHtml = extractFootnoteHtml(document, fragmentId, anchor, false);
-          if (localHtml) {
-            post({
-              type: "footnote",
-              href: raw,
-              anchor: fragmentId,
-              label: getFootnoteLabel(anchor),
-              html: localHtml,
-              sameChapter: true,
-            });
-            return;
-          }
-        }
-      }
-      scrollToAnchor(fragmentId);
+  function tryExtractFootnote(anchor, raw, trigger, expectedHoverSeq, onMiss) {
+    var info = resolveLinkTarget(raw);
+    if (!info || !info.fragmentId || isBacklink(anchor)) {
+      if (onMiss) onMiss(info);
       return;
     }
 
-    if (
-      resolvedUrl &&
-      fragmentId &&
-      resolvedUrl.origin === window.location.origin &&
-      isNoterefLink(anchor, fragmentId)
-    ) {
-      var label = getFootnoteLabel(anchor);
-      var docUrl = resolvedUrl.origin + resolvedUrl.pathname;
-      fetchFootnoteDocument(docUrl).then(function (doc) {
-        var remoteHtml = doc ? extractFootnoteHtml(doc, fragmentId, anchor, false) : null;
-        if (remoteHtml) {
-          post({
-            type: "footnote",
+    var rect = readAnchorRect(anchor);
+    if (info.sameChapter) {
+      var target = findAnchorTarget(document, info.fragmentId);
+      if (target && (isNoterefLink(anchor, info.fragmentId) || isFootnoteTarget(target))) {
+        var sameHtml = extractFootnoteHtml(document, info.fragmentId, anchor, false);
+        if (sameHtml) {
+          postFootnoteMessage({
             href: raw,
-            anchor: fragmentId,
+            anchor: info.fragmentId,
+            label: getFootnoteLabel(anchor),
+            html: sameHtml,
+            sameChapter: true,
+            trigger: trigger,
+            rect: rect,
+          });
+          return;
+        }
+      }
+      if (onMiss) onMiss(info);
+      return;
+    }
+
+    var isNoteref = isNoterefLink(anchor, info.fragmentId);
+    var allowHoverRemote = trigger === "hover" && NOTE_ID_RE.test(info.fragmentId);
+    if (info.docUrl && (isNoteref || allowHoverRemote)) {
+      var label = getFootnoteLabel(anchor);
+      fetchFootnoteDocument(info.docUrl).then(function (doc) {
+        if (trigger === "hover" && expectedHoverSeq !== hoverSeq) return;
+        var remoteHtml = doc ? extractFootnoteHtml(doc, info.fragmentId, anchor, !isNoteref) : null;
+        if (remoteHtml) {
+          postFootnoteMessage({
+            href: raw,
+            anchor: info.fragmentId,
             label: label,
             html: remoteHtml,
             sameChapter: false,
+            trigger: trigger,
+            rect: readAnchorRect(anchor) || rect,
           });
-        } else {
-          post({ type: "link", href: raw });
+        } else if (onMiss) {
+          onMiss(info);
         }
       });
       return;
     }
 
-    post({ type: "link", href: raw });
+    if (onMiss) onMiss(info);
   }
+
+  function handleInternalLink(anchor, raw) {
+    var rect = readAnchorRect(anchor);
+    tryExtractFootnote(anchor, raw, "click", 0, function (info) {
+      if (info && info.sameChapter) {
+        scrollToAnchor(info.fragmentId);
+        return;
+      }
+      var msg = { type: "link", href: raw };
+      if (rect) msg.rect = rect;
+      post(msg);
+    });
+  }
+
+  // Hover preview for EPUB footnotes (desktop / pointer devices)
+  document.addEventListener("mouseover", function (event) {
+    if (Date.now() - lastTouchAt < 700) return;
+    var target = event.target;
+    var anchor = target && target.closest ? target.closest("a[href]") : null;
+    if (!anchor || anchor === hoveredFootnoteAnchor) return;
+    var raw = anchor.getAttribute("href");
+    var info = resolveLinkTarget(raw);
+    if (!info || !info.fragmentId || isBacklink(anchor)) return;
+    if (info.sameChapter) {
+      var localTarget = findAnchorTarget(document, info.fragmentId);
+      if (!localTarget || (!isNoterefLink(anchor, info.fragmentId) && !isFootnoteTarget(localTarget))) {
+        return;
+      }
+    } else if (!isNoterefLink(anchor, info.fragmentId) && !NOTE_ID_RE.test(info.fragmentId)) {
+      return;
+    }
+
+    cancelPendingHover();
+    hoveredFootnoteAnchor = anchor;
+    var seq = hoverSeq;
+    hoverTimer = setTimeout(function () {
+      hoverTimer = null;
+      if (seq !== hoverSeq) return;
+      tryExtractFootnote(anchor, raw, "hover", seq, null);
+    }, HOVER_OPEN_DELAY_MS);
+  });
+
+  document.addEventListener("mouseout", function (event) {
+    if (!hoveredFootnoteAnchor) return;
+    if (event.relatedTarget && hoveredFootnoteAnchor.contains(event.relatedTarget)) {
+      return;
+    }
+    if (event.target && !hoveredFootnoteAnchor.contains(event.target)) {
+      return;
+    }
+    cancelPendingHover();
+    hoveredFootnoteAnchor = null;
+    post({ type: "footnote-leave" });
+  });
 
   // Intercept all internal/external links
   document.addEventListener("click", function (event) {
@@ -1169,6 +1277,8 @@
     var target = event.target;
     var anchor = target && target.closest ? target.closest("a[href]") : null;
     if (anchor) {
+      cancelPendingHover();
+      hoveredFootnoteAnchor = null;
       var raw = anchor.getAttribute("href");
       if (!raw) return;
       event.preventDefault();

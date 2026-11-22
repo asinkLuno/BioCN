@@ -46,6 +46,44 @@ describe("isFrameMessage boundary validation", () => {
     expect(
       isFrameMessage({
         source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "[1]",
+        html: "<p>注释</p>",
+        sameChapter: true,
+        trigger: "hover",
+        rect: { top: 100, bottom: 118, left: 200, right: 220 },
+      }),
+    ).toBe(true);
+    expect(
+      isFrameMessage({
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "[1]",
+        html: "<p>注释</p>",
+        sameChapter: true,
+        trigger: "focus",
+      }),
+    ).toBe(false);
+    expect(
+      isFrameMessage({
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "[1]",
+        html: "<p>注释</p>",
+        sameChapter: true,
+        rect: { top: Number.NaN, bottom: 118, left: 200, right: 220 },
+      }),
+    ).toBe(false);
+    expect(isFrameMessage({ source: "biocn-reader", type: "footnote-leave" })).toBe(true);
+    expect(
+      isFrameMessage({
+        source: "biocn-reader",
         type: "footnote-result",
         requestId: 1,
         href: "notes.xhtml#fn1",
@@ -357,6 +395,73 @@ describe("reader iframe bridge.js", () => {
     posted = [];
     document.getElementById("sec-link")!.click();
     expect(posted.some((m) => (m as { type?: string }).type === "footnote")).toBe(false);
+  });
+
+  it("extracts footnotes on hover with anchor coordinates and emits footnote-leave on mouseout", async () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = `
+        <p>正文句子<a id="ref1" epub:type="noteref" href="#fn1">1</a>和<a id="sec-link" href="#sec-title">标题</a>。</p>
+        <h2 id="sec-title">第一节</h2>
+        <aside id="fn1" epub:type="footnote"><p>悬停显示的注释内容。<a epub:type="backlink" href="#ref1">↩</a></p></aside>
+      `;
+
+      const ref1 = document.getElementById("ref1")!;
+      ref1.getBoundingClientRect = () =>
+        ({
+          top: 120,
+          bottom: 138,
+          left: 240,
+          right: 256,
+          width: 16,
+          height: 18,
+          x: 240,
+          y: 120,
+          toJSON: () => ({}),
+        }) as DOMRect;
+
+      // Brief sweep across the link cancels before posting (no flicker).
+      posted = [];
+      ref1.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      vi.advanceTimersByTime(50);
+      ref1.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }));
+      vi.advanceTimersByTime(200);
+      expect(posted.some((m) => (m as { type?: string }).type === "footnote")).toBe(false);
+
+      // Pausing over the footnote link emits a hover footnote with its bounding rect.
+      posted = [];
+      ref1.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      vi.advanceTimersByTime(150);
+      expect(posted).toContainEqual(
+        expect.objectContaining({
+          source: "biocn-reader",
+          type: "footnote",
+          href: "#fn1",
+          anchor: "fn1",
+          label: "1",
+          sameChapter: true,
+          trigger: "hover",
+          rect: { top: 120, bottom: 138, left: 240, right: 256 },
+        }),
+      );
+
+      // Moving the cursor off the footnote link emits footnote-leave so host can start grace close.
+      posted = [];
+      ref1.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }));
+      expect(posted).toContainEqual({
+        source: "biocn-reader",
+        type: "footnote-leave",
+      });
+
+      // Hovering a regular section link never posts a footnote or navigates.
+      posted = [];
+      const secLink = document.getElementById("sec-link")!;
+      secLink.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      vi.advanceTimersByTime(200);
+      expect(posted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fetches cross-chapter footnotes same-origin and falls back to link navigation on miss", async () => {

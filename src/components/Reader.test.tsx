@@ -314,7 +314,7 @@ describe("reader", () => {
     );
   });
 
-  it("opens a footnote popup without jumping, supports jumping on demand, and closes cleanly", async () => {
+  it("shows footnotes in a hover popover (not a modal dialog), keeps open while hovering the card, and closes on leave", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     renderReader({ onClose });
@@ -323,7 +323,7 @@ describe("reader", () => {
     act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
     postSpy.mockClear();
 
-    // Same-chapter footnote message pops up in host dialog without changing chapters.
+    // Hovering a same-chapter footnote shows a floating popover, not a modal dialog.
     act(() =>
       sendFromFrame(frame, {
         source: "biocn-reader",
@@ -333,23 +333,48 @@ describe("reader", () => {
         label: "[1]",
         html: '<p>这是一条<span class="svo svo-subject">脚注</span>说明。<script>window.__bad = 1</script><a href="https://example.org/note">来源</a></p>',
         sameChapter: true,
+        trigger: "hover",
+        rect: { top: 300, bottom: 318, left: 200, right: 220 },
       }),
     );
 
-    const dialog = screen.getByRole("dialog");
-    expect(dialog).toBeInTheDocument();
-    expect(within(dialog).getByText("[1]")).toBeInTheDocument();
-    expect(within(dialog).getByText(/说明。/)).toBeInTheDocument();
-    expect(within(dialog).getByText("脚注")).toBeInTheDocument();
-    expect(dialog.querySelector("script")).toBeNull();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const popover = screen.getByRole("region", { name: /注释/ });
+    expect(within(popover).getByText("[1]")).toBeInTheDocument();
+    expect(within(popover).getByText(/说明。/)).toBeInTheDocument();
+    expect(within(popover).getByText("脚注")).toBeInTheDocument();
+    expect(popover.querySelector("script")).toBeNull();
+
+    // Moving from link into the hovercard cancels the leave timer so links remain clickable.
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "footnote-leave" }));
+    await user.hover(popover);
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    expect(screen.getByRole("region", { name: /注释/ })).toBeInTheDocument();
 
     // External link inside footnote opens via opener without leaving the chapter.
-    await user.click(within(dialog).getByRole("link", { name: "来源" }));
+    await user.click(within(popover).getByRole("link", { name: "来源" }));
     expect(openUrlMock).toHaveBeenCalledWith("https://example.org/note");
 
-    // Clicking "跳转到注释处" closes dialog and sends jump command to iframe.
-    await user.click(within(dialog).getByRole("button", { name: "跳转到注释处" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Moving out of the hovercard auto-closes it after the grace delay.
+    await user.unhover(popover);
+    await waitFor(() => expect(screen.queryByRole("region", { name: /注释/ })).not.toBeInTheDocument());
+
+    // Clicking a footnote pins the popover, supports jumping on demand, and closes cleanly.
+    act(() =>
+      sendFromFrame(frame, {
+        source: "biocn-reader",
+        type: "footnote",
+        href: "#fn1",
+        anchor: "fn1",
+        label: "[1]",
+        html: "<p>点击固定的注释</p>",
+        sameChapter: true,
+        trigger: "click",
+      }),
+    );
+    const pinned = screen.getByRole("region", { name: /注释/ });
+    await user.click(within(pinned).getByRole("button", { name: "跳转到注释处" }));
+    expect(screen.queryByRole("region", { name: /注释/ })).not.toBeInTheDocument();
     expect(postSpy).toHaveBeenCalledWith(
       { source: "biocn-host", type: "jump", anchor: "fn1" },
       "*",
@@ -379,7 +404,7 @@ describe("reader", () => {
     );
     const requestId = (resolveCall![0] as { requestId: number }).requestId;
 
-    // When iframe resolves the cross-chapter note, open popup instead of switching chapters.
+    // When iframe resolves the cross-chapter note, open floating popover instead of switching chapters.
     act(() =>
       sendFromFrame(frame, {
         source: "biocn-reader",
@@ -392,13 +417,13 @@ describe("reader", () => {
         html: "<p>跨章尾注正文</p>",
       }),
     );
-    const remoteDialog = screen.getByRole("dialog");
-    expect(within(remoteDialog).getByText("跨章尾注正文")).toBeInTheDocument();
+    const remotePopover = screen.getByRole("region", { name: /注释/ });
+    expect(within(remotePopover).getByText("跨章尾注正文")).toBeInTheDocument();
     expect(screen.queryByTitle("Two")).not.toBeInTheDocument();
 
-    // Clicking "关闭注释" dismisses popup without closing the reader.
-    await user.click(within(remoteDialog).getByRole("button", { name: "关闭注释" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Clicking "关闭注释" dismisses popover without closing the reader.
+    await user.click(within(remotePopover).getByRole("button", { name: "关闭注释" }));
+    expect(screen.queryByRole("region", { name: /注释/ })).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -470,14 +495,17 @@ describe("reader", () => {
         label: "[1]",
         html: "<p>注释正文</p>",
         sameChapter: true,
+        trigger: "click",
       }),
     );
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /注释/ })).toBeInTheDocument();
 
     act(() => {
       window.history.back();
     });
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: /注释/ })).not.toBeInTheDocument(),
+    );
     expect(onClose).not.toHaveBeenCalled();
   });
 });
