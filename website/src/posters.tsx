@@ -1,5 +1,4 @@
 import { createRoot } from 'react-dom/client';
-import Download from 'lucide-react/icons/download';
 import { HelixMark } from './components/HeroTitle';
 import {
   DEMO_PARAGRAPHS,
@@ -37,7 +36,7 @@ function PosterCoverComparison() {
     <section className="poster-canvas flex flex-col justify-between px-10 py-9 text-base-content">
       {/* 上半部分：未开启仿生阅读（退后、低反差，体现普通长文阅读的平淡吃力） */}
       <div className="card border border-base-content/12 bg-base-200/85">
-        <div className="card-body gap-3 px-6 py-5">
+        <div className="card-body gap-3.5 px-7 py-5">
           <div className="flex items-center justify-between border-b border-base-content/10 pb-2.5">
             <span className="badge badge-ghost badge-md border-base-content/12 bg-base-100/70 px-3 font-semibold text-base-content/65">
               普通阅读
@@ -49,7 +48,7 @@ function PosterCoverComparison() {
                 key={index}
                 html={paragraph.text}
                 colored={false}
-                className="text-[16.2px] leading-[1.68] text-base-content/60"
+                className="text-[16.5px] leading-[1.7] text-base-content/60"
               />
             ))}
           </article>
@@ -57,7 +56,7 @@ function PosterCoverComparison() {
       </div>
 
       {/* 中间核心主标题：最大字号、最强反差的品牌与定位锚点 */}
-      <div className="flex flex-col items-center justify-center gap-3.5 py-2 text-center">
+      <div className="flex flex-col items-center justify-center gap-4 py-2 text-center">
         <div className="flex items-center justify-center gap-4.5">
           <HelixMark className="size-[82px] shrink-0" />
           <h1 className="text-[86px] font-black leading-none tracking-[-0.035em]">
@@ -72,20 +71,20 @@ function PosterCoverComparison() {
 
       {/* 下半部分：开启仿生阅读（高亮、抬升、主谓宾骨架一眼跃出） */}
       <div className="poster-hero-card card overflow-hidden bg-base-100">
-        <div className="flex items-center justify-between border-b border-primary/15 bg-primary/[0.08] px-6 py-3">
+        <div className="flex items-center justify-between border-b border-primary/15 bg-primary/[0.08] px-7 py-3.5">
           <span className="badge badge-primary badge-lg px-3.5 text-[15px] font-bold tracking-wide">
             BioCN 仿生阅读
           </span>
           <PosterSvoLegend />
         </div>
-        <div className="card-body px-6 py-4.5">
+        <div className="card-body px-7 py-5">
           <article className="heti heti--serif demo-heti poster-reading">
             {COLORED_PARAGRAPHS.map((paragraph, index) => (
               <Paragraph
                 key={index}
                 html={paragraph.text}
                 colored
-                className="text-[16.2px] leading-[1.68] text-base-content/68"
+                className="text-[16.5px] leading-[1.7] text-base-content/68"
               />
             ))}
           </article>
@@ -97,70 +96,64 @@ function PosterCoverComparison() {
 
 function PosterWhyAndBenchmark() {
   return (
-    <section className="poster-canvas flex flex-col justify-between px-12 py-11 text-base-content">
+    <section className="poster-canvas flex flex-col justify-between px-12 py-12 text-base-content">
       {/* 一级核心论点：全张海报最大的视觉重心 */}
-      <section className="space-y-5">
-        <h2 className="poster-display text-[48px] font-black leading-[1.14] tracking-[-0.025em] text-base-content">
+      <section className="space-y-7">
+        <h2 className="poster-display text-[54px] font-black leading-[1.12] tracking-[-0.025em] text-base-content">
           为什么需要<span className="text-primary">中文仿生阅读</span>
         </h2>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-3 gap-5">
           <div className="card border border-base-content/10 bg-base-100/65">
-            <div className="card-body justify-between gap-4 p-5">
-              <div className="space-y-3">
-                <span className="badge badge-ghost badge-sm border-base-content/12 bg-base-200/80 font-semibold text-base-content/65">
-                  英文
-                </span>
-                <p className="text-[18.5px] leading-[1.72] text-base-content/65">
-                  <strong className="font-extrabold text-base-content">Bio</strong>nic{' '}
-                  <strong className="font-extrabold text-base-content">rea</strong>ding{' '}
-                  <strong className="font-extrabold text-base-content">gui</strong>des{' '}
-                  <strong className="font-extrabold text-base-content">th</strong>e{' '}
-                  <strong className="font-extrabold text-base-content">ey</strong>es
-                </p>
-              </div>
-              <p className="border-t border-base-content/8 pt-3 text-[15.5px] font-medium leading-snug text-base-content/60">
+            <div className="card-body gap-4 p-7">
+              <span className="badge badge-ghost badge-sm border-base-content/12 bg-base-200/80 font-semibold text-base-content/65">
+                英文
+              </span>
+              <p className="min-h-[5.16em] grow text-[20px] leading-[1.72] text-base-content/65">
+                <strong className="font-extrabold text-base-content">Bio</strong>nic{' '}
+                <strong className="font-extrabold text-base-content">rea</strong>ding{' '}
+                <strong className="font-extrabold text-base-content">gui</strong>des{' '}
+                <strong className="font-extrabold text-base-content">th</strong>e{' '}
+                <strong className="font-extrabold text-base-content">ey</strong>es
+              </p>
+              <p className="mt-auto grow-0 border-t border-base-content/8 pt-4 text-[16.5px] font-medium leading-snug text-base-content/60">
                 加粗词首，给眼睛锚点
               </p>
             </div>
           </div>
 
           <div className="card border border-base-content/10 bg-base-100/65">
-            <div className="card-body justify-between gap-4 p-5">
-              <div className="space-y-3">
-                <span className="badge badge-ghost badge-sm border-base-content/12 bg-base-200/80 font-semibold text-base-content/65">
-                  中文
-                </span>
-                <p
-                  className="heti heti--serif text-[18.2px] leading-[1.74] text-base-content/62"
-                  style={{ fontFamily: 'var(--font-serif)' }}
-                >
-                  <strong className="font-black text-base-content">中</strong>文
-                  <strong className="font-black text-base-content">没</strong>有
-                  <strong className="font-black text-base-content">空</strong>格
-                  <strong className="font-black text-base-content">边</strong>界，
-                  <strong className="font-black text-base-content">直</strong>接
-                  <strong className="font-black text-base-content">按</strong>词
-                  <strong className="font-black text-base-content">加</strong>粗
-                  <strong className="font-black text-base-content">反</strong>而
-                  <strong className="font-black text-base-content">打</strong>断
-                  <strong className="font-black text-base-content">语</strong>义。
-                </p>
-              </div>
-              <p className="border-t border-base-content/8 pt-3 text-[15.5px] font-medium leading-snug text-secondary/85">
+            <div className="card-body gap-4 p-7">
+              <span className="badge badge-ghost badge-sm border-base-content/12 bg-base-200/80 font-semibold text-base-content/65">
+                中文
+              </span>
+              <p
+                className="heti heti--serif min-h-[5.16em] grow text-[20px] leading-[1.72] text-base-content/62"
+                style={{ fontFamily: 'var(--font-serif)' }}
+              >
+                <strong className="font-black text-base-content">中</strong>文
+                <strong className="font-black text-base-content">没</strong>有
+                <strong className="font-black text-base-content">空</strong>格
+                <strong className="font-black text-base-content">边</strong>界，
+                <strong className="font-black text-base-content">直</strong>接
+                <strong className="font-black text-base-content">按</strong>词
+                <strong className="font-black text-base-content">加</strong>粗
+                <strong className="font-black text-base-content">反</strong>而
+                <strong className="font-black text-base-content">打</strong>断
+                <strong className="font-black text-base-content">语</strong>义。
+              </p>
+              <p className="mt-auto grow-0 border-t border-base-content/8 pt-4 text-[16.5px] font-medium leading-snug text-secondary/85">
                 照搬加粗，反而打断语义
               </p>
             </div>
           </div>
 
-          {/* 第三栏作为答案主角：纯阴影抬升 + 浅青玉眉条呼应封面主卡，避免边线与阴影叠加 */}
-          <div className="poster-hero-card card overflow-hidden bg-base-100">
-            <div className="border-b border-primary/15 bg-primary/[0.08] px-5 py-2.5">
+          {/* 第三栏作为答案主角：同样的三段结构保证三栏眉标/正文/脚注齐平，只靠阴影与主色系徽标抬升 */}
+          <div className="poster-hero-card card border border-transparent bg-base-100">
+            <div className="card-body gap-4 p-7">
               <span className="badge badge-primary badge-sm px-2.5 font-bold">BioCN</span>
-            </div>
-            <div className="card-body justify-between gap-4 px-5 pt-4 pb-5">
               <p
-                className="heti heti--serif demo-heti poster-reading text-[18.2px] leading-[1.74] text-base-content/68"
+                className="heti heti--serif demo-heti poster-reading min-h-[5.16em] grow text-[20px] leading-[1.72] text-base-content/68"
                 style={{ fontFamily: 'var(--font-serif)' }}
               >
                 <span className="svo-subject">中文</span>
@@ -170,8 +163,8 @@ function PosterWhyAndBenchmark() {
                 <span className="svo-predicate">打断</span>
                 <span className="svo-object">语义</span>。
               </p>
-              <p className="border-t border-primary/15 pt-3 text-[15.5px] font-bold leading-snug text-primary">
-                主谓宾染色，主干一眼看清
+              <p className="mt-auto grow-0 border-t border-primary/15 pt-4 text-[16.5px] font-bold leading-snug text-primary">
+                主谓宾染色，主干更清晰
               </p>
             </div>
           </div>
@@ -179,44 +172,44 @@ function PosterWhyAndBenchmark() {
       </section>
 
       {/* 二级硬核实测：次级标题 + 重点提亮正文 + 主次分明的数据矩阵 */}
-      <section className="space-y-4">
+      <section className="space-y-6">
         <div className="space-y-2.5">
-          <h2 className="poster-display text-[34px] font-extrabold leading-tight tracking-[-0.02em] text-base-content">
+          <h2 className="poster-display text-[38px] font-extrabold leading-tight tracking-[-0.02em] text-base-content">
             内置 EPUB 阅读器，边读边染色
           </h2>
-          <p className="poster-prose-lead text-[19px] leading-[1.68] text-base-content/70">
+          <p className="poster-prose-lead text-[20.5px] leading-[1.66] text-base-content/70">
             整本 <strong className="font-bold text-base-content">107 万字《红楼梦》</strong>全量染色仅需{' '}
             <strong className="font-bold text-primary">2 分钟</strong>：采用 INT8 量化模型，
-            <strong className="font-semibold text-base-content">全流程本地 CPU 运行</strong>，不依赖显卡与云端，结果缓存二次秒开。
+            <strong className="font-semibold text-base-content">全流程本地 CPU 运行</strong>，不依赖显卡与云端。
           </p>
         </div>
 
         <div className="card overflow-hidden border border-base-content/10 bg-base-100">
           <div className="grid grid-cols-[1.26fr_1.06fr_1fr_0.88fr] divide-x divide-base-content/10">
-            <div className="flex flex-col justify-between gap-2 bg-primary/[0.07] px-5 py-5">
-              <div className="text-[14.5px] font-semibold text-primary">整本《红楼梦》耗时</div>
-              <div className="text-[40px] font-black leading-none tracking-[-0.03em] text-primary tabular-nums">
-                1<span className="mx-0.5 text-[21px] font-bold">分</span>59
-                <span className="ml-0.5 text-[21px] font-bold">秒</span>
+            <div className="flex flex-col justify-between gap-2 bg-primary/[0.07] px-7 py-7">
+              <div className="text-[15.5px] font-semibold text-primary">整本《红楼梦》耗时</div>
+              <div className="text-[46px] font-black leading-none tracking-[-0.03em] text-primary tabular-nums">
+                1<span className="mx-0.5 text-[23px] font-bold">分</span>59
+                <span className="ml-0.5 text-[23px] font-bold">秒</span>
               </div>
             </div>
-            <div className="flex flex-col justify-between gap-2 px-5 py-5">
-              <div className="text-[14.5px] font-medium text-base-content/60">省流 INT8 分析吞吐</div>
-              <div className="text-[36px] font-extrabold leading-none tracking-[-0.025em] text-base-content tabular-nums">
-                361<span className="ml-1 text-[18px] font-semibold text-base-content/65">句/秒</span>
+            <div className="flex flex-col justify-between gap-2 px-7 py-7">
+              <div className="text-[15.5px] font-medium text-base-content/60">省流 INT8 分析吞吐</div>
+              <div className="text-[41px] font-extrabold leading-none tracking-[-0.025em] text-base-content tabular-nums">
+                361<span className="ml-1 text-[20px] font-semibold text-base-content/65">句/秒</span>
               </div>
             </div>
-            <div className="flex flex-col justify-between gap-2 px-5 py-5">
-              <div className="text-[14.5px] font-medium text-base-content/60">INT8 推理峰值内存</div>
-              <div className="text-[36px] font-extrabold leading-none tracking-[-0.025em] text-base-content tabular-nums">
-                <span className="mr-0.5 text-[19px] font-semibold text-base-content/65">约</span>200
-                <span className="ml-1 text-[18px] font-semibold text-base-content/65">MB</span>
+            <div className="flex flex-col justify-between gap-2 px-7 py-7">
+              <div className="text-[15.5px] font-medium text-base-content/60">INT8 推理峰值内存</div>
+              <div className="text-[41px] font-extrabold leading-none tracking-[-0.025em] text-base-content tabular-nums">
+                <span className="mr-0.5 text-[21px] font-semibold text-base-content/65">约</span>200
+                <span className="ml-1 text-[20px] font-semibold text-base-content/65">MB</span>
               </div>
             </div>
-            <div className="flex flex-col justify-between gap-2 px-5 py-5">
-              <div className="text-[14.5px] font-medium text-base-content/60">模型权重体积</div>
-              <div className="text-[36px] font-extrabold leading-none tracking-[-0.025em] text-base-content tabular-nums">
-                64.3<span className="ml-1 text-[18px] font-semibold text-base-content/65">MB</span>
+            <div className="flex flex-col justify-between gap-2 px-7 py-7">
+              <div className="text-[15.5px] font-medium text-base-content/60">模型权重体积</div>
+              <div className="text-[41px] font-extrabold leading-none tracking-[-0.025em] text-base-content tabular-nums">
+                64.3<span className="ml-1 text-[20px] font-semibold text-base-content/65">MB</span>
               </div>
             </div>
           </div>
@@ -224,26 +217,26 @@ function PosterWhyAndBenchmark() {
       </section>
 
       {/* 三级辅助信息：收小标题层级，避免与核心论点抢焦 */}
-      <section className="space-y-3.5">
-        <h2 className="poster-display text-[26px] font-bold leading-tight tracking-[-0.015em] text-base-content/88">
+      <section className="space-y-5">
+        <h2 className="poster-display text-[30px] font-bold leading-tight tracking-[-0.015em] text-base-content/88">
           全平台支持
         </h2>
-        <div className="grid grid-cols-4 gap-3.5">
+        <div className="grid grid-cols-4 gap-4">
           {platformOrder.map((platform) => {
             const meta = platformMeta[platform];
             const Icon = meta.icon;
             return (
               <div key={platform} className="card border border-base-content/10 bg-base-100/90">
-                <div className="card-body items-start gap-2.5 p-4.5">
+                <div className="card-body items-start gap-3 p-6.5">
                   <div className="flex items-center gap-2.5">
-                    <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                      <Icon aria-hidden="true" className="size-5" />
+                    <span className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Icon aria-hidden="true" className="size-5.5" />
                     </span>
-                    <span className="text-[20px] font-bold tracking-tight text-base-content">
+                    <span className="text-[22px] font-bold tracking-tight text-base-content">
                       {meta.label}
                     </span>
                   </div>
-                  <span className="poster-mono text-[14.5px] font-semibold tracking-tight text-base-content/58">
+                  <span className="poster-mono text-[15.5px] font-semibold tracking-tight text-base-content/58">
                     {meta.pkg}
                   </span>
                 </div>
@@ -253,30 +246,26 @@ function PosterWhyAndBenchmark() {
         </div>
       </section>
 
-      {/* 底部高反差主锚点：深青玉通栏收底，品牌网址 + 高对比度点击下载按钮 */}
+      {/* 底部高反差主锚点：深青玉通栏收底，品牌网址 + 官网地址直接排字，不做按钮（海报是图片，读者点不了，别写动作话术） */}
       <div className="poster-cta-banner card text-primary-content">
-        <div className="card-body flex-row items-center justify-between gap-5 px-7 py-6">
+        <div className="card-body flex-row items-center justify-between gap-6 px-8 py-8">
           <div className="flex items-center gap-4">
-            <div className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-base-100 p-1.5">
-              <HelixMark className="size-11" />
+            <div className="flex size-16 shrink-0 items-center justify-center rounded-xl bg-base-100 p-1.5">
+              <HelixMark className="size-12" />
             </div>
             <div className="space-y-1">
               <div className="flex items-center gap-2.5">
-                <span className="text-[28px] font-black leading-none tracking-[-0.025em] text-primary-content">
+                <span className="text-[34px] font-black leading-none tracking-[-0.025em] text-primary-content">
                   BioCN
                 </span>
                 <span className="badge badge-sm border-primary-content/30 bg-primary-content/15 font-semibold text-primary-content">
                   GPL-3.0
                 </span>
               </div>
-              <div className="poster-mono text-[17.5px] font-semibold tracking-tight text-primary-content/88">
-                asinkluno.github.io/BioCN
-              </div>
             </div>
           </div>
-          <div className="btn btn-lg pointer-events-none h-auto min-h-0 gap-2.5 rounded-xl border-0 bg-base-100 px-6 py-3.5 text-[21px] font-black tracking-wide text-primary shadow-none">
-            <Download aria-hidden="true" className="size-5.5 stroke-[2.5]" />
-            <span>点击下载</span>
+          <div className="poster-mono text-[31px] font-black tracking-tight text-primary-content">
+            asinkluno.github.io/BioCN
           </div>
         </div>
       </div>
