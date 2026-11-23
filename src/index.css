@@ -180,6 +180,45 @@
       stroke-dashoffset: 0;
       opacity: 1;
     }
+    .biocn-popover-top,
+    .biocn-popover-bottom {
+      animation: none;
+    }
+  }
+
+  /*
+   * Lightweight pop-up entrance for anchored reader footnote hovercards.
+   * Custom CSS is kept minimal here because daisyUI has no keyframes for a
+   * dynamically positioned pop-up entrance.
+   */
+  .biocn-popover-top {
+    animation: biocn-popover-top 140ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .biocn-popover-bottom {
+    animation: biocn-popover-bottom 140ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+
+@keyframes biocn-popover-top {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes biocn-popover-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

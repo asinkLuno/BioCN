@@ -1,4 +1,12 @@
-import { type CSSProperties, createElement, type ReactNode, useEffect, useRef } from "react";
+import {
+  type CSSProperties,
+  createElement,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { FootnoteNode, SvoRole } from "../lib/footnote";
 import type { AnchorRect } from "../lib/readerBridge";
 import type { ReaderPrefs, ReaderTheme } from "../lib/readerPrefs";
@@ -17,46 +25,57 @@ export interface FootnoteView {
 
 export interface PopoverLayout {
   left: number;
-  width: number;
+  maxWidth: number;
   top?: number;
   bottom?: number;
   maxHeight: number;
   placement: "top" | "bottom";
+  /** Horizontal offset (px from pop-up left edge) for the pointer arrow, or null when unanchored. */
+  arrowLeft: number | null;
 }
 
 const VIEWPORT_MARGIN = 12;
-const ANCHOR_GAP = 8;
-const MAX_CARD_WIDTH = 384;
-const MIN_CARD_WIDTH = 220;
-const PREFERRED_ABOVE_HEIGHT = 180;
+const ANCHOR_GAP = 10;
+const MAX_POPUP_WIDTH = 340;
+const MIN_POPUP_WIDTH = 200;
+const PREFERRED_ABOVE_HEIGHT = 160;
+const ARROW_INSET = 16;
 
 /**
- * Pure layout calculation for a floating footnote hovercard so it anchors near
- * the reference link, flips above/below based on space, and never clips off-screen.
+ * Pure layout calculation for a floating footnote pop-up bubble: anchors tightly
+ * over/under the reference link, computes the pointer arrow offset, flips when
+ * near the top edge, and clamps horizontally inside the viewport.
  */
 export function computeFootnotePopoverLayout(
   anchor: AnchorRect | null,
   viewport: { width: number; height: number },
+  measuredWidth?: number,
 ): PopoverLayout {
-  const width = Math.min(
-    MAX_CARD_WIDTH,
-    Math.max(MIN_CARD_WIDTH, Math.round(viewport.width - VIEWPORT_MARGIN * 2)),
+  const maxWidth = Math.min(
+    MAX_POPUP_WIDTH,
+    Math.max(MIN_POPUP_WIDTH, Math.round(viewport.width - VIEWPORT_MARGIN * 2)),
   );
-  const maxCardHeight = Math.max(140, Math.round(viewport.height * 0.48));
+  const effectiveWidth =
+    measuredWidth && measuredWidth > 0 ? Math.min(Math.round(measuredWidth), maxWidth) : maxWidth;
+  const maxCardHeight = Math.max(140, Math.round(viewport.height * 0.45));
 
   if (!anchor) {
     return {
-      left: Math.max(VIEWPORT_MARGIN, Math.round((viewport.width - width) / 2)),
-      width,
+      left: Math.max(VIEWPORT_MARGIN, Math.round((viewport.width - effectiveWidth) / 2)),
+      maxWidth,
       bottom: 24,
       maxHeight: maxCardHeight,
       placement: "top",
+      arrowLeft: null,
     };
   }
 
   const center = (anchor.left + anchor.right) / 2;
-  const maxLeft = Math.max(VIEWPORT_MARGIN, viewport.width - VIEWPORT_MARGIN - width);
-  const left = Math.round(Math.min(maxLeft, Math.max(VIEWPORT_MARGIN, center - width / 2)));
+  const maxLeft = Math.max(VIEWPORT_MARGIN, viewport.width - VIEWPORT_MARGIN - effectiveWidth);
+  const left = Math.round(Math.min(maxLeft, Math.max(VIEWPORT_MARGIN, center - effectiveWidth / 2)));
+  const arrowLeft = Math.round(
+    Math.min(effectiveWidth - ARROW_INSET, Math.max(ARROW_INSET, center - left)),
+  );
 
   const spaceAbove = Math.max(0, anchor.top - VIEWPORT_MARGIN - ANCHOR_GAP);
   const spaceBelow = Math.max(0, viewport.height - anchor.bottom - VIEWPORT_MARGIN - ANCHOR_GAP);
@@ -64,19 +83,21 @@ export function computeFootnotePopoverLayout(
   if (spaceAbove >= PREFERRED_ABOVE_HEIGHT || spaceAbove >= spaceBelow) {
     return {
       left,
-      width,
+      maxWidth,
       bottom: Math.max(VIEWPORT_MARGIN, Math.round(viewport.height - anchor.top + ANCHOR_GAP)),
       maxHeight: Math.min(maxCardHeight, Math.max(120, Math.round(spaceAbove))),
       placement: "top",
+      arrowLeft,
     };
   }
 
   return {
     left,
-    width,
+    maxWidth,
     top: Math.max(VIEWPORT_MARGIN, Math.round(anchor.bottom + ANCHOR_GAP)),
     maxHeight: Math.min(maxCardHeight, Math.max(120, Math.round(spaceBelow))),
     placement: "bottom",
+    arrowLeft,
   };
 }
 
@@ -118,19 +139,19 @@ function svoColorFor(role: SvoRole, prefs: ReaderPrefs, effectiveTheme: ReaderTh
 function elementClassName(tag: string): string | undefined {
   switch (tag) {
     case "p":
-      return "mb-2 last:mb-0";
+      return "mb-1.5 last:mb-0";
     case "blockquote":
-      return "my-1.5 border-l-2 border-primary/40 pl-3 opacity-85";
+      return "my-1.5 border-l-2 border-primary/40 pl-2.5 opacity-85";
     case "ul":
-      return "my-1.5 list-disc pl-5 space-y-1";
+      return "my-1.5 list-disc pl-4 space-y-0.5";
     case "ol":
-      return "my-1.5 list-decimal pl-5 space-y-1";
+      return "my-1.5 list-decimal pl-4 space-y-0.5";
     case "dl":
-      return "my-1.5 space-y-1";
+      return "my-1.5 space-y-0.5";
     case "dt":
       return "font-semibold";
     case "dd":
-      return "pl-3 opacity-90";
+      return "pl-2.5 opacity-90";
     case "pre":
       return "my-1.5 overflow-x-auto rounded bg-base-200 p-2 text-xs";
     case "code":
@@ -162,14 +183,14 @@ function renderNodes(nodes: FootnoteNode[], handlers: RenderHandlers, prefix: st
       case "br":
         return <br key={key} />;
       case "hr":
-        return <hr key={key} className="my-2 border-base-content/15" />;
+        return <hr key={key} className="my-1.5 border-base-content/15" />;
       case "img":
         return (
           <img
             key={key}
             src={node.src}
             alt={node.alt}
-            className="my-2 max-h-52 max-w-full rounded object-contain"
+            className="my-1.5 max-h-48 max-w-full rounded object-contain"
           />
         );
       case "svo": {
@@ -232,8 +253,8 @@ function renderNodes(nodes: FootnoteNode[], handlers: RenderHandlers, prefix: st
 }
 
 /**
- * Floating non-modal footnote hovercard anchored near the reference link in the
- * reader host layer so hovering or tapping a footnote never dims or blocks the page.
+ * Anchored floating footnote pop-up bubble with a pointer arrow aimed at the
+ * reference marker, translucent elevated surface, and content-first layout.
  */
 export function ReaderFootnotePopover({
   footnote,
@@ -247,8 +268,15 @@ export function ReaderFootnotePopover({
   onPointerLeave,
 }: Props) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(undefined);
 
-  // Dismiss when clicking/tapping outside the floating card or resizing the viewport
+  // Measure natural bubble width before paint so compact notes center tightly over the anchor.
+  useLayoutEffect(() => {
+    const width = cardRef.current?.offsetWidth;
+    setMeasuredWidth(width && width > 0 ? width : undefined);
+  }, [footnote]);
+
+  // Dismiss when clicking/tapping outside the pop-up or resizing the viewport
   // (reflow shifts the iframe anchor rect).
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -266,12 +294,16 @@ export function ReaderFootnotePopover({
 
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
   const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 768;
-  const layout = computeFootnotePopoverLayout(footnote.rect, {
-    width: viewportWidth,
-    height: viewportHeight,
-  });
+  const layout = computeFootnotePopoverLayout(
+    footnote.rect,
+    { width: viewportWidth, height: viewportHeight },
+    measuredWidth,
+  );
 
   const canJump = footnote.sameChapter || footnote.targetChapterIndex !== null;
+  const showLabel = Boolean(footnote.label && footnote.label !== "注释");
+  const showFooter = showLabel || canJump;
+
   const cardTheme =
     effectiveTheme === "dark"
       ? "dark"
@@ -280,14 +312,20 @@ export function ReaderFootnotePopover({
         : undefined;
 
   // Match sepia paper surface when sepia theme is active (daisyUI has no sepia token).
-  const surfaceClass =
-    effectiveTheme === "sepia" ? "bg-[#f4ede0] text-[#362d24]" : "bg-base-100 text-base-content";
+  // Use the same opaque surface on bubble and arrow so they join with zero seam.
+  const isSepia = effectiveTheme === "sepia";
+  const surfaceClass = isSepia
+    ? "bg-[#f6efe2] text-[#362d24] ring-[#362d24]/15"
+    : "bg-base-100 text-base-content ring-base-content/12";
+  const arrowSurfaceClass = isSepia
+    ? "bg-[#f6efe2] border-[#362d24]/15"
+    : "bg-base-100 border-base-content/12";
 
-  const bodyFontSize = Math.min(18, Math.max(13, prefs.fontSize - 2));
+  const bodyFontSize = Math.min(16, Math.max(13, prefs.fontSize - 3));
   const bodyStyle: CSSProperties = {
     fontSize: `${bodyFontSize}px`,
-    lineHeight: Math.min(1.9, Math.max(1.55, prefs.lineHeight - 0.15)),
-    maxHeight: `${Math.max(80, layout.maxHeight - 52)}px`,
+    lineHeight: Math.min(1.75, Math.max(1.5, prefs.lineHeight - 0.2)),
+    maxHeight: `${Math.max(80, layout.maxHeight - (showFooter ? 48 : 20))}px`,
     ...(prefs.fontFamily === "serif"
       ? {
           fontFamily:
@@ -298,51 +336,61 @@ export function ReaderFootnotePopover({
 
   const positionStyle: CSSProperties = {
     left: `${layout.left}px`,
-    width: `${layout.width}px`,
+    maxWidth: `${layout.maxWidth}px`,
     ...(layout.top !== undefined ? { top: `${layout.top}px` } : {}),
     ...(layout.bottom !== undefined ? { bottom: `${layout.bottom}px` } : {}),
   };
 
-  const showLabel = footnote.label && footnote.label !== "注释";
+  const animClass = layout.placement === "top" ? "biocn-popover-top" : "biocn-popover-bottom";
 
   return (
     <div
       ref={cardRef}
       role="region"
-      aria-labelledby="reader-footnote-title"
+      aria-label={showLabel ? `注释 ${footnote.label}` : "注释"}
+      data-placement={layout.placement}
       data-theme={cardTheme}
       style={positionStyle}
       onMouseEnter={onPointerEnter}
       onMouseLeave={onPointerLeave}
-      className={`card card-border fixed z-40 border-base-content/15 shadow-xl ${surfaceClass}`}
+      className={`card fixed z-40 w-max min-w-44 overflow-visible shadow-2xl ring-1 ${surfaceClass} ${animClass}`}
     >
-      <div className="card-body gap-2 p-3.5">
-        <div className="flex items-center justify-between gap-2">
-          <h3
-            id="reader-footnote-title"
-            className="flex min-w-0 items-center gap-1.5 text-xs font-medium"
-          >
-            <span className="badge badge-soft badge-primary badge-xs shrink-0">注释</span>
-            {showLabel && <span className="truncate opacity-70">{footnote.label}</span>}
-          </h3>
-          {canJump && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs shrink-0 font-normal opacity-70 hover:opacity-100"
-              onClick={onJumpToTarget}
-            >
-              跳转到注释处
-            </button>
-          )}
-        </div>
+      {layout.arrowLeft !== null && (
+        <span
+          aria-hidden="true"
+          data-popover-arrow=""
+          style={{ left: `${layout.arrowLeft}px` }}
+          className={`pointer-events-none absolute size-2.5 -translate-x-1/2 rotate-45 ${arrowSurfaceClass} ${
+            layout.placement === "top"
+              ? "-bottom-[5px] border-r border-b"
+              : "-top-[5px] border-t border-l"
+          }`}
+        />
+      )}
 
-        <div className="overflow-y-auto break-words pr-1" style={bodyStyle}>
+      <div className="card-body gap-0 px-3.5 py-2.5">
+        <div className="overflow-y-auto break-words pr-0.5" style={bodyStyle}>
           {renderNodes(
             footnote.nodes,
             { prefs, effectiveTheme, onNavigateInternal, onOpenExternal },
             "fn",
           )}
         </div>
+
+        {showFooter && (
+          <div className="mt-2 flex items-center justify-between gap-3 border-t border-base-content/10 pt-1.5 text-[11px]">
+            <span className="min-w-0 truncate opacity-55">{showLabel ? footnote.label : ""}</span>
+            {canJump && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs h-auto min-h-0 shrink-0 px-1.5 py-0.5 text-[11px] font-normal text-primary/80 hover:text-primary"
+                onClick={onJumpToTarget}
+              >
+                跳转到注释处
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
