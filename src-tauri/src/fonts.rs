@@ -17,6 +17,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::models::{download, modelscope_url, part_path, sha256};
+use crate::net::{CANCELLED_ERR, CancelSlot};
 
 /// Filename stored under `<app_data_dir>/fonts/`.
 pub const SERIF_FONT_FILE: &str = "SourceHanSerifSC-Regular.woff2";
@@ -48,6 +49,11 @@ fn err(e: impl std::fmt::Display) -> String {
 fn op_lock() -> &'static tauri::async_runtime::Mutex<()> {
     static LOCK: OnceLock<tauri::async_runtime::Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| tauri::async_runtime::Mutex::new(()))
+}
+
+fn cancel_slot() -> &'static CancelSlot {
+    static SLOT: OnceLock<CancelSlot> = OnceLock::new();
+    SLOT.get_or_init(CancelSlot::default)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -164,11 +170,20 @@ pub async fn font_status<R: Runtime>(app: AppHandle<R>) -> Result<FontStatus> {
     Ok(status_in(&dir, FONT_BYTES))
 }
 
+/// Cancels an in-flight serif font download promptly while keeping `.part` for
+/// Range resume on the next attempt.
+#[tauri::command]
+pub async fn font_cancel() -> bool {
+    cancel_slot().cancel()
+}
+
 /// Downloads (with Range resume), verifies, and installs Source Han Serif SC.
 /// Idempotent: if already verified on disk, returns immediately without network I/O.
 #[tauri::command]
 pub async fn font_install<R: Runtime>(app: AppHandle<R>) -> Result<FontStatus> {
     let _guard = op_lock().lock().await;
+    let cancel_guard = cancel_slot().begin();
+    let cancel = cancel_guard.token();
     let dir = fonts_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(err)?;
     let dest = font_path_in(&dir);
@@ -204,7 +219,7 @@ pub async fn font_install<R: Runtime>(app: AppHandle<R>) -> Result<FontStatus> {
 
     let client = crate::net::model_client()?;
     let url = font_url();
-    download(client, &url, &dest, FONT_BYTES, |done| {
+    download(client, &url, &dest, FONT_BYTES, cancel, |done| {
         let _ = app.emit(
             FONT_PROGRESS_EVENT,
             FontProgress {
@@ -214,6 +229,10 @@ pub async fn font_install<R: Runtime>(app: AppHandle<R>) -> Result<FontStatus> {
         );
     })
     .await?;
+
+    if cancel.is_cancelled() {
+        return Err(CANCELLED_ERR.to_string());
+    }
 
     {
         let dest = dest.clone();

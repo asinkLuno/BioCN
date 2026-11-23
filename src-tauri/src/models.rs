@@ -32,6 +32,12 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::analyzer::AnalyzerState;
+use crate::net::{CANCELLED_ERR, CancelSlot, CancelToken, race_cancel};
+
+fn cancel_slot() -> &'static CancelSlot {
+    static SLOT: std::sync::OnceLock<CancelSlot> = std::sync::OnceLock::new();
+    SLOT.get_or_init(CancelSlot::default)
+}
 
 /// Repository on ModelScope (upstream's `tools/publish_models.py` uploads it).
 pub(crate) const REPO: &str = "starmountain1997/biocn";
@@ -322,8 +328,12 @@ pub(crate) async fn download(
     url: &str,
     dest: &Path,
     len: u64,
+    cancel: &CancelToken,
     mut progress: impl FnMut(u64),
 ) -> Result<()> {
+    if cancel.is_cancelled() {
+        return Err(CANCELLED_ERR.to_string());
+    }
     let part = part_path(dest);
     let mut have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
     // A part file longer than the target cannot be a prefix of it (the manifest
@@ -337,9 +347,8 @@ pub(crate) async fn download(
     if have > 0 {
         request = request.header(reqwest::header::RANGE, format!("bytes={have}-"));
     }
-    let mut response = request
-        .send()
-        .await
+    let mut response = race_cancel(cancel, request.send())
+        .await?
         .map_err(|e| format!("{url}: {e}"))?
         .error_for_status()
         .map_err(|e| format!("{url}: {e}"))?;
@@ -362,7 +371,18 @@ pub(crate) async fn download(
 
     let mut written = if resumed { have } else { 0 };
     let mut reported = written;
-    while let Some(chunk) = response.chunk().await.map_err(|e| format!("{url}: {e}"))? {
+    loop {
+        let chunk = match race_cancel(cancel, response.chunk()).await {
+            Ok(res) => res.map_err(|e| format!("{url}: {e}"))?,
+            Err(cancelled) => {
+                // Flush buffered bytes so `.part` stays intact for Range resume.
+                let _ = std::io::Write::flush(&mut file);
+                return Err(cancelled);
+            }
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
         std::io::Write::write_all(&mut file, &chunk).map_err(err)?;
         written += chunk.len() as u64;
         if written - reported >= PROGRESS_STEP {
@@ -601,14 +621,26 @@ pub async fn models_install<R: Runtime>(app: AppHandle<R>, variant: String) -> R
     }
 }
 
+/// Cancel an in-flight `models_install` transfer promptly while keeping any
+/// downloaded `.part` bytes on disk for Range resume.
+#[tauri::command]
+pub async fn models_cancel() -> bool {
+    cancel_slot().cancel()
+}
+
 async fn install<R: Runtime>(app: AppHandle<R>, variant: String) -> Result<Status> {
+    let cancel_guard = cancel_slot().begin();
+    let cancel = cancel_guard.token();
     let root = root(&app)?;
     // The download lands in `staging/<variant>/`, not in `models/<variant>/`:
     // it takes minutes and the analyzer must keep answering from the current
     // variant while it runs. Only the final swap touches the installed files.
     let staging = root.join("staging").join(&variant);
     std::fs::create_dir_all(&staging).map_err(err)?;
-    let files = fetch(&app, &staging, &variant).await?;
+    let files = fetch(&app, &staging, &variant, cancel).await?;
+    if cancel.is_cancelled() {
+        return Err(CANCELLED_ERR.to_string());
+    }
     // The swap renames the directory the loaded sessions map, and activates the
     // newly installed variant atomically under the install gate so no running
     // analysis can write spans under the wrong weights fingerprint.
@@ -674,7 +706,11 @@ async fn fetch<R: Runtime>(
     app: &AppHandle<R>,
     staging: &Path,
     variant: &str,
+    cancel: &CancelToken,
 ) -> Result<Vec<(String, u64)>> {
+    if cancel.is_cancelled() {
+        return Err(CANCELLED_ERR.to_string());
+    }
     if cfg!(debug_assertions)
         && Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(LOCAL_SOURCE)
@@ -683,7 +719,7 @@ async fn fetch<R: Runtime>(
     {
         return install_local(staging, variant);
     }
-    let manifest = fetch_manifest().await?;
+    let manifest = race_cancel(cancel, fetch_manifest()).await??;
     let (spec, files) = manifest.files(variant)?;
     // Every path is used as `<variant>/<basename>`, so duplicates land on top
     // of each other and the stamp would list one name twice — a manifest that
@@ -704,6 +740,9 @@ async fn fetch<R: Runtime>(
     let mut written = Vec::new();
     let mut done = 0u64;
     for (name, file) in names.iter().zip(files.iter()) {
+        if cancel.is_cancelled() {
+            return Err(CANCELLED_ERR.to_string());
+        }
         let name = name.to_string();
         let dest = dir.join(&name);
         let expected_bytes = file.bytes;
@@ -727,7 +766,7 @@ async fn fetch<R: Runtime>(
             continue;
         }
         let base = done;
-        download(client, &file_url(&file.path), &dest, file.bytes, |bytes| {
+        download(client, &file_url(&file.path), &dest, file.bytes, cancel, |bytes| {
             let _ = app.emit(
                 MODELS_PROGRESS_EVENT,
                 Progress {
@@ -739,6 +778,9 @@ async fn fetch<R: Runtime>(
             );
         })
         .await?;
+        if cancel.is_cancelled() {
+            return Err(CANCELLED_ERR.to_string());
+        }
         {
             let dest = dest.clone();
             let file_spec: File = (*file).clone();
@@ -1093,6 +1135,32 @@ mod tests {
         install_fixture(&dir, "int8", 7);
         std::fs::write(dir.join("int8/biocn_tok.ort"), vec![1u8; 5]).expect("write");
         assert_eq!(installed(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cancelled_download_exits_immediately_and_keeps_part_file() {
+        let dir = std::env::temp_dir().join(format!("biocn-cancel-dl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let dest = dir.join("biocn_tok.ort");
+        let part = part_path(&dest);
+        std::fs::write(&part, b"partial-bytes").expect("part");
+
+        let token = CancelToken::new();
+        token.cancel();
+        let client = crate::net::builder().build().expect("client");
+        let err = tauri::async_runtime::block_on(download(
+            &client,
+            "http://127.0.0.1:1/unreachable",
+            &dest,
+            1024,
+            &token,
+            |_| {},
+        ))
+        .expect_err("must cancel");
+        assert_eq!(err, CANCELLED_ERR);
+        assert_eq!(std::fs::read(&part).expect("part kept"), b"partial-bytes");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

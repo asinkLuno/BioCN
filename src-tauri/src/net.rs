@@ -13,8 +13,152 @@
 //! with each app release. Desktop keeps the platform verifier: corporate
 //! proxies and user-installed CAs keep working there.
 
-use std::sync::OnceLock;
+use std::future::Future;
+use std::pin::{Pin, pin};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+/// Error prefix returned when a download is cancelled by the user.
+/// Frontend checks this prefix to treat cancellation cleanly instead of showing
+/// an error banner.
+pub(crate) const CANCELLED_ERR: &str = "cancelled: 下载已取消";
+
+/// Lightweight zero-dependency async cancellation token.
+#[derive(Clone, Default)]
+pub(crate) struct CancelToken {
+    inner: Arc<Mutex<CancelState>>,
+}
+
+#[derive(Default)]
+struct CancelState {
+    cancelled: bool,
+    wakers: Vec<Waker>,
+}
+
+impl CancelToken {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn cancel(&self) {
+        let wakers = {
+            let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if state.cancelled {
+                return;
+            }
+            state.cancelled = true;
+            std::mem::take(&mut state.wakers)
+        };
+        for waker in wakers {
+            waker.wake();
+        }
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cancelled
+    }
+
+    pub(crate) fn cancelled(&self) -> CancelledFuture {
+        CancelledFuture {
+            token: self.clone(),
+        }
+    }
+}
+
+pub(crate) struct CancelledFuture {
+    token: CancelToken,
+}
+
+impl Future for CancelledFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let mut state = self.token.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if state.cancelled {
+            return Poll::Ready(());
+        }
+        if !state.wakers.iter().any(|w| w.will_wake(cx.waker())) {
+            state.wakers.push(cx.waker().clone());
+        }
+        Poll::Pending
+    }
+}
+
+/// Holds the active download's [`CancelToken`] without blocking on the
+/// download mutex, so cancellation responds immediately.
+#[derive(Default)]
+pub(crate) struct CancelSlot {
+    active: Mutex<Option<CancelToken>>,
+}
+
+impl CancelSlot {
+    pub(crate) fn begin(&self) -> CancelGuard<'_> {
+        let token = CancelToken::new();
+        *self.active.lock().unwrap_or_else(|e| e.into_inner()) = Some(token.clone());
+        CancelGuard { slot: self, token }
+    }
+
+    pub(crate) fn cancel(&self) -> bool {
+        let token = self.active.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match token {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+pub(crate) struct CancelGuard<'a> {
+    slot: &'a CancelSlot,
+    token: CancelToken,
+}
+
+impl CancelGuard<'_> {
+    pub(crate) fn token(&self) -> &CancelToken {
+        &self.token
+    }
+}
+
+impl Drop for CancelGuard<'_> {
+    fn drop(&mut self) {
+        let mut active = self.slot.active.lock().unwrap_or_else(|e| e.into_inner());
+        if active
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&current.inner, &self.token.inner))
+        {
+            *active = None;
+        }
+    }
+}
+
+/// Awaits `fut` while racing against `cancel`. When cancelled, `fut` is dropped
+/// immediately (closing in-flight HTTP streams) and `Err(CANCELLED_ERR)` is returned.
+pub(crate) async fn race_cancel<F: Future>(
+    cancel: &CancelToken,
+    fut: F,
+) -> Result<F::Output, String> {
+    let mut fut = pin!(fut);
+    let mut cancelled = pin!(cancel.cancelled());
+    std::future::poll_fn(|cx| {
+        if cancel.is_cancelled() {
+            return Poll::Ready(Err(CANCELLED_ERR.to_string()));
+        }
+        if let Poll::Ready(val) = fut.as_mut().poll(cx) {
+            return Poll::Ready(Ok(val));
+        }
+        if cancelled.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Err(CANCELLED_ERR.to_string()));
+        }
+        Poll::Pending
+    })
+    .await
+}
 
 /// A client builder whose TLS backend works on every platform. The caller
 /// layers its own user agent, timeouts and redirect policy on top.
@@ -106,5 +250,24 @@ mod tests {
             .user_agent("biocn-test")
             .build()
             .expect("client");
+    }
+
+    #[test]
+    fn cancel_slot_wakes_pending_future_and_clears_on_drop() {
+        let slot = CancelSlot::default();
+        assert!(!slot.cancel(), "idle slot reports nothing to cancel");
+
+        let guard = slot.begin();
+        let token = guard.token().clone();
+        let pending_handle = tauri::async_runtime::spawn(async move {
+            race_cancel(&token, std::future::pending::<()>()).await
+        });
+
+        assert!(slot.cancel(), "active download is cancelled");
+        let result = tauri::async_runtime::block_on(pending_handle).expect("join");
+        assert_eq!(result.expect_err("must cancel"), CANCELLED_ERR);
+
+        drop(guard);
+        assert!(!slot.cancel(), "guard drop clears active token");
     }
 }
