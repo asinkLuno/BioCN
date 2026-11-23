@@ -86,3 +86,19 @@ is verified against the digests inside the manifest, so the manifest is the root
 of trust — a revision sha only says where the app asks, not what it gets. Both
 constants are printed by `publish_models.py` when it finishes; bump them
 together.
+
+## Publishing the serif font
+
+Source Han Serif SC (`SourceHanSerifSC-Regular.woff2`, ~16 MB, OFL-1.1) is also
+hosted in the same ModelScope repo under `fonts/` so platform installers stay
+small and download the font on demand when the user selects 思源宋体:
+
+```sh
+python3 publish_fonts.py --dry-run /path/to/fonts_dir
+python3 publish_fonts.py /path/to/fonts_dir
+```
+
+Pin the printed `FONT_REVISION`, `FONT_BYTES`, and `FONT_SHA256` constants in
+`src-tauri/src/fonts.rs`. Because shipped apps pin `REVISION` for models and
+`FONT_REVISION` for fonts independently, uploading under `fonts/` does not
+affect existing model releases.
