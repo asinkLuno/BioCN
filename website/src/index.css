@@ -181,21 +181,30 @@
   }
 
   /*
-   * Scoped bridge for sivan/heti modern reading typography in the hero demo card:
-   * keeps the preloaded Noto Serif SC subset, fits the daisyUI card width, and
-   * uses comfortable modern paragraph spacing without first-line indentation.
+   * Scoped bridge for sivan/heti CJK typography across the hero demo card and
+   * prose blocks: keeps strict line breaking, punctuation trimming, and the
+   * page's font smoothing; pairs the demo card with the preloaded Noto Serif SC
+   * subset and uses comfortable modern paragraph spacing.
    */
-  .demo-heti.heti {
-    max-width: none;
-    font-family: var(--font-serif);
-    line-height: 1.85;
+  .demo-heti.heti,
+  .prose-heti.heti {
     line-break: strict;
     text-spacing-trim: space-all;
     -webkit-font-smoothing: inherit;
   }
 
+  .demo-heti.heti {
+    max-width: none;
+    font-family: var(--font-serif);
+    line-height: 1.85;
+  }
+
   .demo-heti.heti p {
     margin-block: 0.75em;
+  }
+
+  .prose-heti.heti p {
+    margin-block: 0.875em;
   }
   /*
    * HeroTitle: brand-origin typography animation

@@ -280,9 +280,11 @@ function BenchmarkSection() {
         <h2 id="benchmark-title" className="text-2xl font-semibold tracking-tight sm:text-[1.65rem]">
           性能参考
         </h2>
-        <p className="max-w-2xl text-[0.95rem] leading-relaxed text-base-content/70 sm:text-base">
-          全流程本地 CPU 运行，不依赖显卡或云端接口。安装后可在应用设置中按需选择「省流」或「高精度」模型；以下为整本 107 万字《红楼梦》（137 章、42,961 唯一句）的实测数据，实际耗时视设备 CPU 性能而定。
-        </p>
+        <div className="heti prose-heti max-w-2xl text-[0.95rem] leading-relaxed text-base-content/70 sm:text-base">
+          <p>
+            全流程本地 CPU 运行，不依赖显卡或云端接口。安装后可在应用设置中按需选择「省流」或「高精度」模型；以下为整本 107 万字《红楼梦》（137 章、42,961 唯一句）的实测数据，实际耗时视设备 CPU 性能而定。
+          </p>
+        </div>
       </div>
 
       <div className="card border border-base-content/8 bg-base-200/50">
@@ -647,7 +649,7 @@ function App() {
           >
             为什么做这个应用？
           </h2>
-          <div className="max-w-2xl space-y-3.5 text-[0.95rem] leading-[1.8] text-base-content/75 sm:text-base lg:col-span-8">
+          <div className="heti prose-heti max-w-2xl text-[0.95rem] leading-[1.8] text-base-content/75 sm:text-base lg:col-span-8">
             <p>
               英文世界里有一种“仿生阅读”，通过加粗每个单词的开头来帮眼睛锚定重心，对 ADHD 和容易分心的读者特别友好。
             </p>
@@ -666,14 +668,9 @@ function App() {
         >
           <div className="card border border-base-content/8 bg-base-200/50">
             <div className="card-body gap-5 p-5 sm:gap-6 sm:p-7">
-              <div className="space-y-1.5">
-                <h2 id="download-title" className="text-2xl font-semibold tracking-tight sm:text-[1.65rem]">
-                  下载 BioCN
-                </h2>
-                <p className="text-sm leading-relaxed text-base-content/70 sm:text-base">
-                  所有安装包发布在 GitHub Releases。
-                </p>
-              </div>
+              <h2 id="download-title" className="text-2xl font-semibold tracking-tight sm:text-[1.65rem]">
+                下载 BioCN
+              </h2>
 
               {status === 'loading' ? (
                 <div className="space-y-4" aria-label="正在读取最新版本">
