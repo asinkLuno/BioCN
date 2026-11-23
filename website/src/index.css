@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import './fonts.css';
+@import "heti/umd/heti.min.css" layer(components);
 @plugin "daisyui" {
   themes: false;
 }
@@ -177,6 +178,24 @@
 
   .svo-object {
     color: var(--biocn-hero-p);
+  }
+
+  /*
+   * Scoped bridge for sivan/heti modern reading typography in the hero demo card:
+   * keeps the preloaded Noto Serif SC subset, fits the daisyUI card width, and
+   * uses comfortable modern paragraph spacing without first-line indentation.
+   */
+  .demo-heti.heti {
+    max-width: none;
+    font-family: var(--font-serif);
+    line-height: 1.85;
+    line-break: strict;
+    text-spacing-trim: space-all;
+    -webkit-font-smoothing: inherit;
+  }
+
+  .demo-heti.heti p {
+    margin-block: 0.75em;
   }
   /*
    * HeroTitle: brand-origin typography animation

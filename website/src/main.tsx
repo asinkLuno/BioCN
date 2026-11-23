@@ -185,14 +185,14 @@ function formatLabel(name: string): string {
 function Paragraph({ html, colored }: { html: string; colored: boolean }) {
   if (!colored) {
     return (
-      <p className="font-serif text-[0.95rem] leading-[1.85] text-base-content/75 sm:text-base">
+      <p className="text-[0.95rem] text-base-content/75 sm:text-base">
         {html}
       </p>
     );
   }
   return (
     <p
-      className="font-serif text-[0.95rem] leading-[1.85] text-base-content/90 sm:text-base"
+      className="text-[0.95rem] text-base-content/90 sm:text-base"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -223,13 +223,13 @@ function DemoPanels() {
       >
         <SvoLegend />
       </div>
-      <div className="space-y-2.5 rounded-box border border-base-content/8 bg-base-100 px-4 py-3.5 sm:px-5 sm:py-4">
+      <article className="heti heti--serif demo-heti rounded-box border border-base-content/8 bg-base-100 px-4 py-3.5 sm:px-5 sm:py-4">
         {DEMO_PARAGRAPHS.filter((paragraph) => paragraph.colored === colored).map(
           (paragraph, index) => (
             <Paragraph key={index} html={paragraph.text} colored={paragraph.colored} />
           ),
         )}
-      </div>
+      </article>
     </div>
   );
 }

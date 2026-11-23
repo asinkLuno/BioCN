@@ -441,6 +441,18 @@ harfbuzzjs@^1.6.1:
   resolved "https://registry.yarnpkg.com/harfbuzzjs/-/harfbuzzjs-1.6.4.tgz#ac8c7c39da3f8e16e5fa19786ee9468d22c40d42"
   integrity sha512-T/PyfhVt1gGR2Tkf5KJUj1DQFkVBXHw552lS1iLEEDhV1Lukb3eq1pk2ov85kgbT2YUiZtJBTak9w+M7YgzUEQ==
 
+heti-findandreplacedomtext@^0.5.0:
+  version "0.5.0"
+  resolved "https://registry.yarnpkg.com/heti-findandreplacedomtext/-/heti-findandreplacedomtext-0.5.0.tgz#a69dd028ac3d37c73a33173e376f2c3366cdd46f"
+  integrity sha512-GFZjqU8LAdu1uR72GqrReI+lzNLMlcWtvdz1TKNJiofyo1mfTecFYSZEoEbcLcRMl+KwEldnNQoS4BwO8wtg0A==
+
+heti@^0.9.6:
+  version "0.9.6"
+  resolved "https://registry.yarnpkg.com/heti/-/heti-0.9.6.tgz#fedb0a103fb7083edd2d006dfd0da925c76924d9"
+  integrity sha512-HdfW9QENMp0j54mgrRqEMJ4oa9CmhvrbRk9ijr1IGqxCmVa8Z8ENftHowCSSC2unAL+Qbglu8k8OLneuNV0jeQ==
+  dependencies:
+    heti-findandreplacedomtext "^0.5.0"
+
 is-docker@^3.0.0:
   version "3.0.0"
   resolved "https://registry.yarnpkg.com/is-docker/-/is-docker-3.0.0.tgz#90093aa3106277d8a77a5910dbae71747e15a200"
