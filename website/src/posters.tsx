@@ -294,7 +294,7 @@ function PostersApp() {
       <div className="flex flex-wrap items-baseline justify-between gap-4">
         <h1 className="text-2xl font-bold tracking-tight">BioCN · 3:4 展示海报（仅开发期）</h1>
         <p className="text-sm text-base-content/60">
-          使用 <code>yarn posters:render</code> 导出 1800×2400 PNG 到 <code>design/posters/</code>
+          使用 <code>yarn posters:render</code> 导出 1800×2400 WebP 到 <code>design/posters/</code>
         </p>
       </div>
       <div className="flex flex-wrap justify-center gap-9">

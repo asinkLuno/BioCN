@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * 启动本地 Vite 开发服务器访问 /posters.html?poster=1..2，
- * 调用系统 Chrome 无头渲染 2 张 3:4 高清 PNG（1800×2400 @2x）到 design/posters/。
+ * 调用系统 Chrome 无头渲染 2 张 3:4 高清图（1800×2400 @2x），并用 ImageMagick 转成 WebP 存到 design/posters/。
  *
  * 用法（在 website/ 目录下）：yarn posters:render
  */
@@ -20,8 +20,8 @@ const WEBSITE_ROOT = path.resolve(__dirname, '..');
 const OUT_DIR = path.resolve(WEBSITE_ROOT, '../design/posters');
 
 const POSTERS = [
-  { id: '1', file: '01-cover.png' },
-  { id: '2', file: '02-why-and-benchmark.png' },
+  { id: '1', file: '01-cover.webp' },
+  { id: '2', file: '02-why-and-benchmark.webp' },
 ];
 
 function findChrome() {
@@ -38,7 +38,16 @@ function findChrome() {
   throw new Error('未找到 Chrome/Chromium 可执行文件，请通过 CHROME_BIN 指定路径。');
 }
 
+function findImageMagick() {
+  const candidates = ['magick', '/usr/bin/magick', 'convert', '/usr/bin/convert'];
+  for (const bin of candidates) {
+    if (!bin.startsWith('/') || fs.existsSync(bin)) return bin;
+  }
+  throw new Error('未找到 ImageMagick（magick/convert），无法把截图转成 WebP。');
+}
+
 const chrome = findChrome();
+const magick = findImageMagick();
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
 const server = await createServer({
@@ -59,6 +68,7 @@ const tmpProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'biocn-posters-chrome-'
 try {
   for (const { id, file } of POSTERS) {
     const outPath = path.join(OUT_DIR, file);
+    const rawPath = path.join(tmpProfile, `${id}.png`);
     const url = `http://127.0.0.1:${addr.port}/posters.html?poster=${id}`;
     await execFileAsync(
       chrome,
@@ -74,11 +84,13 @@ try {
         '--force-device-scale-factor=2',
         '--window-size=900,1200',
         '--virtual-time-budget=2000',
-        `--screenshot=${outPath}`,
+        `--screenshot=${rawPath}`,
         url,
       ],
       { timeout: 30000 },
     );
+    await execFileAsync(magick, [rawPath, '-quality', '92', outPath], { timeout: 30000 });
+    fs.rmSync(rawPath, { force: true });
     const sizeKB = (fs.statSync(outPath).size / 1024).toFixed(0);
     console.log(`Rendered ${path.relative(path.resolve(WEBSITE_ROOT, '..'), outPath)} (${sizeKB} KB)`);
   }
