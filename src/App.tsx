@@ -57,8 +57,11 @@ export default function App() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-base-100 text-base-content">
-      <header className="sticky top-0 z-10 border-b border-base-content/10 bg-base-100/90 backdrop-blur">
+    // Match Reader's viewport-locked shell so the shelf header stays pinned at
+    // the top on desktop and below Android's status bar, while only `<main>`
+    // scrolls (which also clips book-tile menus cleanly below the header).
+    <div className="flex h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] flex-col overflow-hidden bg-base-100 text-base-content">
+      <header className="z-20 shrink-0 border-b border-base-content/10 bg-base-100">
         <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
           <div className="min-w-0 flex-1">
             <h1 className="text-lg leading-tight font-semibold tracking-tight">书架</h1>
@@ -106,69 +109,71 @@ export default function App() {
         )}
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-5 sm:px-6 sm:py-8">
-        {(problem !== null || errors.length > 0) && (
-          <div
-            role="alert"
-            className="alert alert-error mb-5 flex-col items-start gap-2 sm:flex-row sm:items-center"
-          >
-            <div className="min-w-0">
-              <p className="font-medium">
-                {problem !== null ? "出了点问题" : errorHeading(errors)}
-              </p>
-              <ul className="mt-1 list-inside list-disc text-sm opacity-80">
-                {keyedLines(problem !== null ? [problem] : errorDetails(errors)).map(
-                  ({ key, text }) => (
-                    <li key={key} className="break-words">
-                      {text}
-                    </li>
-                  ),
-                )}
-              </ul>
-            </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm sm:ml-auto"
-              onClick={dismissErrors}
+      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="mx-auto w-full max-w-6xl px-4 py-5 pb-24 sm:px-6 sm:py-8 sm:pb-28">
+          {(problem !== null || errors.length > 0) && (
+            <div
+              role="alert"
+              className="alert alert-error mb-5 flex-col items-start gap-2 sm:flex-row sm:items-center"
             >
-              知道了
-            </button>
-          </div>
-        )}
+              <div className="min-w-0">
+                <p className="font-medium">
+                  {problem !== null ? "出了点问题" : errorHeading(errors)}
+                </p>
+                <ul className="mt-1 list-inside list-disc text-sm opacity-80">
+                  {keyedLines(problem !== null ? [problem] : errorDetails(errors)).map(
+                    ({ key, text }) => (
+                      <li key={key} className="break-words">
+                        {text}
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm sm:ml-auto"
+                onClick={dismissErrors}
+              >
+                知道了
+              </button>
+            </div>
+          )}
 
-        {isEmpty ? (
-          <EmptyState onAdd={addBooks} />
-        ) : (
-          <ul className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {books.map((book) => (
-              <BookTile
-                key={book.id}
-                book={book}
-                cover={covers[book.id]}
-                progress={job !== null && job.book === book.id ? job : null}
-                anyJob={job !== null}
-                onOpen={openBook}
-                onColorize={coloring.start}
-                onCancel={coloring.cancel}
-                onClearCache={clearCache}
-                onRemove={removeBook}
-              />
-            ))}
-            {Array.from({ length: pending }, (_, slot) => `pending-${slot}`).map((slotKey) => (
-              <li key={slotKey} aria-hidden="true">
-                <div className="skeleton aspect-[2/3] w-full rounded-xl" />
-                <div className="skeleton mt-3 h-3.5 w-4/5 rounded" />
-                <div className="skeleton mt-2 h-3 w-2/5 rounded" />
-              </li>
-            ))}
-          </ul>
-        )}
+          {isEmpty ? (
+            <EmptyState onAdd={addBooks} />
+          ) : (
+            <ul className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+              {books.map((book) => (
+                <BookTile
+                  key={book.id}
+                  book={book}
+                  cover={covers[book.id]}
+                  progress={job !== null && job.book === book.id ? job : null}
+                  anyJob={job !== null}
+                  onOpen={openBook}
+                  onColorize={coloring.start}
+                  onCancel={coloring.cancel}
+                  onClearCache={clearCache}
+                  onRemove={removeBook}
+                />
+              ))}
+              {Array.from({ length: pending }, (_, slot) => `pending-${slot}`).map((slotKey) => (
+                <li key={slotKey} aria-hidden="true">
+                  <div className="skeleton aspect-[2/3] w-full rounded-xl" />
+                  <div className="skeleton mt-3 h-3.5 w-4/5 rounded" />
+                  <div className="skeleton mt-2 h-3 w-2/5 rounded" />
+                </li>
+              ))}
+            </ul>
+          )}
 
-        {loading && (
-          <p className="sr-only" role="status">
-            正在加载书架
-          </p>
-        )}
+          {loading && (
+            <p className="sr-only" role="status">
+              正在加载书架
+            </p>
+          )}
+        </div>
       </main>
 
       {/* The floating add button lives over the content, bottom-right, like

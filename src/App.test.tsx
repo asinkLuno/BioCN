@@ -1023,4 +1023,18 @@ describe("library", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "书架" })).toBeInTheDocument());
     expect(screen.queryByText("reading dune")).not.toBeInTheDocument();
   });
+
+  it("pins the shelf header above a dedicated scrollable main region", async () => {
+    listMock.mockResolvedValue([dune]);
+    render(<App />);
+    await screen.findByText("1 本书");
+
+    const banner = header();
+    const main = screen.getByRole("main");
+    const shell = banner.parentElement!;
+
+    expect(shell).toHaveClass("flex", "flex-col", "overflow-hidden");
+    expect(banner).toHaveClass("shrink-0");
+    expect(main).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+  });
 });
