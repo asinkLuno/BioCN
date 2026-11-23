@@ -24,7 +24,7 @@ export interface ReleaseInfo {
   notes: string;
   /** Every official installer of the release, in the published order. */
   downloads: UpdateAsset[];
-  /** The installer for this build; null where an in-app download can't install (Android). */
+  /** The installer for this build; null when the current platform has no published asset. */
   download: UpdateAsset | null;
 }
 
@@ -38,13 +38,29 @@ export interface UpdateProgress {
   total: number;
 }
 
+/** Android「安装未知应用」授权状态（supported=false 表示当前平台不支持应用内安装）。 */
+export interface InstallPermission {
+  supported: boolean;
+  granted: boolean;
+}
+
 export const checkUpdate = () => invoke<UpdateStatus>("check_update");
 
 export const downloadUpdate = (url: string, sha256: string) =>
   invoke<{ path: string; bytes: number }>("download_update", { url, sha256 });
 
+export const cancelUpdateDownload = () => invoke<boolean>("cancel_update_download");
+
 /** Shows the verified installer in the file manager; refused for foreign paths. */
 export const revealUpdate = (path: string) => invoke<void>("reveal_update", { path });
+
+export const installPermission = () => invoke<InstallPermission>("install_permission");
+
+export const openInstallPermissionSettings = () =>
+  invoke<void>("open_install_permission_settings");
+
+/** Hands a verified cached APK over to Android's package installer. */
+export const installApk = (path: string) => invoke<void>("install_apk", { path });
 
 export const openReleasePage = () => invoke<void>("open_release_page");
 

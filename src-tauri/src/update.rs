@@ -5,9 +5,10 @@
 //! SHA-256，所以检查更新不需要调用有速率限制的 GitHub API。安装包字节
 //! 本身来自 `github.com/…/releases/download/`，边下边算 SHA-256。
 
+use crate::net::{CancelSlot, race_cancel};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -16,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager};
 const RELEASES_URL: &str = "https://asinkluno.github.io/BioCN/releases.json";
 /// 安装包只接受这个仓库的 GitHub Release 附件，绝不下载任意链接。
 const DOWNLOAD_PREFIX: &str = "https://github.com/asinkLuno/BioCN/releases/download/";
-/// 应用内没有对应安装包（Android）或检查失败时展示的发布页。
+/// 检查失败或当前平台缺少官方安装包时展示的发布页。
 const RELEASES_PAGE: &str = "https://github.com/asinkLuno/BioCN/releases/latest";
 /// 下载进度事件：`{ received, total }`，total 未知时为 0。前端
 /// （`src/lib/update.ts`）监听同一个字面量。
@@ -65,8 +66,8 @@ pub struct ReleaseInfo {
     pub notes: String,
     /// 该 Release 的全部官方安装包，保持 releases.json 的顺序。
     pub downloads: Vec<AssetInfo>,
-    /// 当前平台对应的安装包；Android 没有应用内安装的交接（BioCN 还没有
-    /// MusicDan 那套 install_apk），为 None，前端改给发布页链接。
+    /// 当前平台对应的安装包（桌面端与 Android 均支持应用内下载）；
+    /// 仅当该平台没有对应产物时为 None，前端回退到发布页链接。
     pub download: Option<AssetInfo>,
 }
 
@@ -75,6 +76,13 @@ pub struct ReleaseInfo {
 pub struct UpdateStatus {
     pub current_version: String,
     pub latest: Option<ReleaseInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPermission {
+    pub supported: bool,
+    pub granted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -120,10 +128,6 @@ fn asset_file_name(url: &str) -> Option<String> {
 /// 优先级（Windows .exe 先于 .msi，Linux .deb 先于 RPM）由发布脚本
 /// 排序，这里只取顺序。`os` 是参数以便测试；调用处传运行平台的 OS。
 fn pick_for(os: &str, assets: &[AssetInfo]) -> Option<AssetInfo> {
-    if os == "android" {
-        // 下载下来的 APK 停在应用缓存里装不上，不如直接给发布页。
-        return None;
-    }
     assets.iter().find(|asset| asset.platform == os).cloned()
 }
 
@@ -208,6 +212,31 @@ pub async fn check_update(app: AppHandle) -> Result<UpdateStatus, String> {
 static DOWNLOAD_LOCK: std::sync::OnceLock<tauri::async_runtime::Mutex<()>> =
     std::sync::OnceLock::new();
 
+fn cancel_slot() -> &'static CancelSlot {
+    static SLOT: std::sync::OnceLock<CancelSlot> = std::sync::OnceLock::new();
+    SLOT.get_or_init(CancelSlot::default)
+}
+
+#[cfg(target_os = "android")]
+struct AndroidInstaller(tauri::plugin::PluginHandle<tauri::Wry>);
+
+#[cfg(target_os = "android")]
+#[derive(Debug, Deserialize)]
+struct EmptyResponse {}
+
+/// 注册 Android 侧原生安装插件（`ApkInstallerPlugin`）。
+#[cfg(target_os = "android")]
+pub fn android_installer_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("apk-installer")
+        .setup(|app, api| {
+            let handle =
+                api.register_android_plugin("io.github.asinkluno.biocn", "ApkInstallerPlugin")?;
+            app.manage(AndroidInstaller(handle));
+            Ok(())
+        })
+        .build()
+}
+
 /// 下载目录：应用缓存内的 `updates/`，属于派生数据，系统可随时清理。
 fn download_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -223,6 +252,55 @@ fn hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// 若缓存目录里已有同名安装包且 SHA-256 与期望一致，返回其字节数以便直接复用。
+fn verified_existing_file(path: &Path, expected_sha256: &str) -> Option<u64> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        total += n as u64;
+    }
+    (hex_digest(&hasher.finalize()) == expected_sha256).then_some(total)
+}
+
+fn validate_update_file_in_dir(
+    dir: &Path,
+    path: &str,
+    required_ext: Option<&str>,
+) -> Result<PathBuf, String> {
+    let dir = dir
+        .canonicalize()
+        .map_err(|error| format!("无法定位下载目录：{error}"))?;
+    let canonical = Path::new(path)
+        .canonicalize()
+        .map_err(|error| format!("无法定位安装包：{error}"))?;
+    if !canonical.is_file() || canonical.parent() != Some(dir.as_path()) {
+        return Err("只能操作应用下载的安装包".to_string());
+    }
+    if let Some(ext) = required_ext {
+        let matches = canonical
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(ext));
+        if !matches {
+            return Err("安装包格式无效".to_string());
+        }
+    }
+    Ok(canonical)
+}
+
+/// 取消正在进行的安装包下载。
+#[tauri::command]
+pub fn cancel_update_download() -> bool {
+    cancel_slot().cancel()
+}
+
 /// 应用内下载安装包，边写边算 SHA-256；校验不通过的文件不会留在磁盘上。
 /// 读超时（models.rs 同款）兜底"连上了却不发数据"的 CDN，传输继续时不会
 /// 被总超时误杀。
@@ -236,6 +314,8 @@ pub async fn download_update(
     let _guard = lock
         .try_lock()
         .map_err(|_| "安装包正在下载中，请稍候".to_string())?;
+    let cancel_guard = cancel_slot().begin();
+    let cancel = cancel_guard.token();
 
     let expected = normalize_sha256(&Some(sha256))
         .ok_or_else(|| "更新信息缺少有效的 SHA-256 校验值".to_string())?;
@@ -244,11 +324,25 @@ pub async fn download_update(
     let target = dir.join(&file_name);
     let partial = dir.join(format!("{file_name}.part"));
 
+    // 已经完整下载并匹配同一 SHA-256 的缓存包直接复用（例如去系统设置授权后返回重试）。
+    if target.is_file() {
+        let check_path = target.clone();
+        let check_sha = expected.clone();
+        if let Ok(Some(bytes)) =
+            tauri::async_runtime::spawn_blocking(move || verified_existing_file(&check_path, &check_sha))
+                .await
+        {
+            let _ = app.emit(
+                UPDATE_PROGRESS_EVENT,
+                DownloadProgress { received: bytes, total: bytes },
+            );
+            return Ok(DownloadResult { path: target.to_string_lossy().into_owned(), bytes });
+        }
+    }
+
     let client = crate::net::update_download_client()?;
-    let mut response = client
-        .get(&url)
-        .send()
-        .await
+    let mut response = race_cancel(cancel, client.get(&url).send())
+        .await?
         .and_then(|response| response.error_for_status())
         .map_err(|error| request_error(&error))?;
 
@@ -268,7 +362,10 @@ pub async fn download_update(
     emit_progress(0);
 
     let write_result = async {
-        while let Some(chunk) = response.chunk().await.map_err(|error| request_error(&error))? {
+        while let Some(chunk) = race_cancel(cancel, response.chunk())
+            .await?
+            .map_err(|error| request_error(&error))?
+        {
             hasher.update(&chunk);
             written.write_all(&chunk).map_err(|error| format!("无法写入安装包：{error}"))?;
             received += chunk.len() as u64;
@@ -315,15 +412,7 @@ pub async fn reveal_update(app: AppHandle, path: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     tauri::async_runtime::spawn_blocking(move || {
         let dir = download_dir(&app)?;
-        let dir = dir
-            .canonicalize()
-            .map_err(|error| format!("无法定位下载目录：{error}"))?;
-        let canonical = Path::new(&path)
-            .canonicalize()
-            .map_err(|error| format!("无法定位安装包：{error}"))?;
-        if !canonical.is_file() || canonical.parent() != Some(dir.as_path()) {
-            return Err("只能显示应用下载的安装包".to_string());
-        }
+        let canonical = validate_update_file_in_dir(&dir, &path, None)?;
         app.opener()
             .reveal_item_in_dir(&canonical)
             .map_err(|error| format!("无法打开文件管理器：{error}"))
@@ -332,8 +421,78 @@ pub async fn reveal_update(app: AppHandle, path: String) -> Result<(), String> {
     .map_err(|error| format!("无法打开文件管理器：{error}"))?
 }
 
-/// 在浏览器打开 GitHub Releases 页：本平台没有应用内下载（Android）或
-/// 检查失败时的兜底。
+/// 查询 Android「安装未知应用」权限状态；桌面端返回 `supported: false`。
+#[tauri::command]
+pub async fn install_permission(app: AppHandle) -> Result<InstallPermission, String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<AndroidInstaller>()
+                .0
+                .run_mobile_plugin::<InstallPermission>("installPermission", ())
+                .map_err(|error| format!("无法查询安装权限：{error}"))
+        })
+        .await
+        .map_err(|error| format!("无法查询安装权限：{error}"))?
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(InstallPermission { supported: false, granted: false })
+    }
+}
+
+/// 打开 Android「安装未知应用」系统设置页。
+#[tauri::command]
+pub async fn open_install_permission_settings(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<AndroidInstaller>()
+                .0
+                .run_mobile_plugin::<EmptyResponse>("openInstallPermissionSettings", ())
+                .map(|_| ())
+                .map_err(|error| format!("无法打开安装授权设置：{error}"))
+        })
+        .await
+        .map_err(|error| format!("无法打开安装授权设置：{error}"))?
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("仅支持 Android".to_string())
+    }
+}
+
+/// 把已通过 SHA-256 校验的 APK 交给 Android 系统安装器。
+#[tauri::command]
+pub async fn install_apk(app: AppHandle, path: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            let dir = download_dir(&app)?;
+            let canonical = validate_update_file_in_dir(&dir, &path, Some(".apk"))?;
+            let canonical_path = canonical.to_string_lossy().into_owned();
+            app.state::<AndroidInstaller>()
+                .0
+                .run_mobile_plugin::<EmptyResponse>(
+                    "installApk",
+                    serde_json::json!({ "path": canonical_path }),
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| format!("无法启动系统安装器：{error}"))?
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, path);
+        Err("应用内安装仅支持 Android".to_string())
+    }
+}
+
+/// 在浏览器打开 GitHub Releases 页：当前平台没有应用内下载或检查失败时的兜底。
 #[tauri::command]
 pub async fn open_release_page(app: AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -434,15 +593,61 @@ mod tests {
     }
 
     #[test]
-    fn android_gets_no_in_app_download_but_the_release_still_shows() {
+    fn android_picks_apk_for_in_app_download_and_unknown_os_stays_none() {
+        let sha = "a".repeat(64);
         let release = WebsiteRelease {
             version: "0.2.0".to_string(),
             notes: String::new(),
-            downloads: vec![asset("BioCN_0.2.0_arm64.apk", "android", None)],
+            downloads: vec![asset("BioCN_0.2.0_arm64.apk", "android", Some(sha.as_str()))],
         };
         let info = release_info(&release).expect("the release is still listed");
-        assert_eq!(pick_for("android", &info.downloads), None);
+        let picked = pick_for("android", &info.downloads).expect("android apk selected");
+        assert_eq!(picked.name, "BioCN_0.2.0_arm64.apk");
+        assert_eq!(picked.sha256.as_deref(), Some(sha.as_str()));
         assert_eq!(pick_for("freebsd", &info.downloads), None);
+    }
+
+    #[test]
+    fn verified_existing_file_reuses_matching_digest_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("BioCN_0.6.1_arm64.apk");
+        std::fs::write(&file, b"apk-bytes").expect("write");
+        let expected = hex_digest(&Sha256::digest(b"apk-bytes"));
+        assert_eq!(verified_existing_file(&file, &expected), Some(9));
+        assert_eq!(verified_existing_file(&file, &"0".repeat(64)), None);
+        assert_eq!(
+            verified_existing_file(&dir.path().join("missing.apk"), &expected),
+            None
+        );
+    }
+
+    #[test]
+    fn validate_update_file_in_dir_checks_parent_and_extension() {
+        let root = tempfile::tempdir().expect("root");
+        let updates = root.path().join("updates");
+        std::fs::create_dir_all(&updates).expect("mkdir");
+        let apk = updates.join("BioCN_0.6.1_arm64.apk");
+        let deb = updates.join("BioCN_0.6.1_amd64.deb");
+        let outside = root.path().join("BioCN_0.6.1_arm64.apk");
+        std::fs::write(&apk, b"a").expect("apk");
+        std::fs::write(&deb, b"d").expect("deb");
+        std::fs::write(&outside, b"o").expect("outside");
+
+        assert!(
+            validate_update_file_in_dir(&updates, apk.to_str().unwrap(), Some(".apk")).is_ok()
+        );
+        assert!(
+            validate_update_file_in_dir(&updates, deb.to_str().unwrap(), Some(".apk")).is_err()
+        );
+        assert!(
+            validate_update_file_in_dir(&updates, deb.to_str().unwrap(), None).is_ok()
+        );
+        assert!(
+            validate_update_file_in_dir(&updates, outside.to_str().unwrap(), Some(".apk")).is_err()
+        );
+        assert!(
+            validate_update_file_in_dir(&updates, updates.to_str().unwrap(), None).is_err()
+        );
     }
 
     #[test]

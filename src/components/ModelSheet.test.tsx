@@ -21,8 +21,12 @@ const mocks = vi.hoisted(() => ({
   onFontProgress: vi.fn(),
   checkUpdate: vi.fn(),
   downloadUpdate: vi.fn(),
+  cancelUpdateDownload: vi.fn(),
   onUpdateProgress: vi.fn(),
   revealUpdate: vi.fn(),
+  installPermission: vi.fn(),
+  openInstallPermissionSettings: vi.fn(),
+  installApk: vi.fn(),
   openReleasePage: vi.fn(),
 }));
 
@@ -57,8 +61,12 @@ vi.mock("../lib/update", async (importOriginal) => {
     ...actual,
     checkUpdate: mocks.checkUpdate,
     downloadUpdate: mocks.downloadUpdate,
+    cancelUpdateDownload: mocks.cancelUpdateDownload,
     onUpdateProgress: mocks.onUpdateProgress,
     revealUpdate: mocks.revealUpdate,
+    installPermission: mocks.installPermission,
+    openInstallPermissionSettings: mocks.openInstallPermissionSettings,
+    installApk: mocks.installApk,
     openReleasePage: mocks.openReleasePage,
   };
 });
@@ -143,8 +151,12 @@ describe("ModelSheet & UpdateSection", () => {
       latest: null,
     } satisfies UpdateStatus);
     mocks.downloadUpdate.mockReset();
+    mocks.cancelUpdateDownload.mockReset().mockResolvedValue(true);
     mocks.onUpdateProgress.mockReset().mockResolvedValue(() => {});
     mocks.revealUpdate.mockReset().mockResolvedValue(undefined);
+    mocks.installPermission.mockReset().mockResolvedValue({ supported: true, granted: true });
+    mocks.openInstallPermissionSettings.mockReset().mockResolvedValue(undefined);
+    mocks.installApk.mockReset().mockResolvedValue(undefined);
     mocks.openReleasePage.mockReset().mockResolvedValue(undefined);
   });
 
@@ -375,6 +387,122 @@ describe("ModelSheet & UpdateSection", () => {
     rejectFontInstall("cancelled: 下载已取消");
 
     expect(await screen.findByRole("button", { name: "继续下载字体" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "完成" })).toBeEnabled());
+  });
+
+  it("guides Android users to grant install permission before downloading APK", async () => {
+    mocks.modelsStatus.mockResolvedValue(makeModelStatus({ manifestError: null }));
+    mocks.checkUpdate.mockResolvedValue(
+      makeUpdateStatus({
+        latest: {
+          version: "0.6.2",
+          notes: "Android update",
+          download: {
+            name: "BioCN_0.6.2_arm64.apk",
+            platform: "android",
+            size: 18 * 1024 * 1024,
+            sha256: "b".repeat(64),
+            url: "https://github.com/asinkLuno/BioCN/releases/download/v0.6.2/BioCN_0.6.2_arm64.apk",
+          },
+          downloads: [],
+        },
+      }),
+    );
+    mocks.installPermission.mockResolvedValue({ supported: true, granted: false });
+
+    const user = userEvent.setup();
+    render(<ModelSheet open onClose={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "下载并安装" }));
+
+    expect(mocks.openInstallPermissionSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.downloadUpdate).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText(/请在系统设置中允许 BioCN 安装应用，然后返回重试/),
+    ).toBeInTheDocument();
+    const settingsBtn = screen.getByRole("button", { name: "打开安装授权设置" });
+    await user.click(settingsBtn);
+    expect(mocks.openInstallPermissionSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("downloads Android APK, hands off to installApk, and supports reinstall without redownloading", async () => {
+    mocks.modelsStatus.mockResolvedValue(makeModelStatus({ manifestError: null }));
+    mocks.checkUpdate.mockResolvedValue(
+      makeUpdateStatus({
+        latest: {
+          version: "0.6.2",
+          notes: "Android update",
+          download: {
+            name: "BioCN_0.6.2_arm64.apk",
+            platform: "android",
+            size: 18 * 1024 * 1024,
+            sha256: "c".repeat(64),
+            url: "https://github.com/asinkLuno/BioCN/releases/download/v0.6.2/BioCN_0.6.2_arm64.apk",
+          },
+          downloads: [],
+        },
+      }),
+    );
+    mocks.downloadUpdate.mockResolvedValue({
+      path: "/data/user/0/io.github.asinkluno.biocn/cache/updates/BioCN_0.6.2_arm64.apk",
+      bytes: 18 * 1024 * 1024,
+    });
+
+    const user = userEvent.setup();
+    render(<ModelSheet open onClose={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "下载并安装" }));
+
+    expect(mocks.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.installApk).toHaveBeenCalledWith(
+      "/data/user/0/io.github.asinkluno.biocn/cache/updates/BioCN_0.6.2_arm64.apk",
+    );
+    expect(
+      await screen.findByText("安装包已通过 SHA-256 校验，请在系统安装器中确认安装。"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "再次安装" }));
+    expect(mocks.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.installApk).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels update download cleanly without showing an error alert", async () => {
+    mocks.modelsStatus.mockResolvedValue(makeModelStatus({ manifestError: null }));
+    mocks.checkUpdate.mockResolvedValue(
+      makeUpdateStatus({
+        latest: {
+          version: "0.6.2",
+          notes: "Android update",
+          download: {
+            name: "BioCN_0.6.2_arm64.apk",
+            platform: "android",
+            size: 18 * 1024 * 1024,
+            sha256: "d".repeat(64),
+            url: "https://github.com/asinkLuno/BioCN/releases/download/v0.6.2/BioCN_0.6.2_arm64.apk",
+          },
+          downloads: [],
+        },
+      }),
+    );
+
+    let rejectDownload!: (reason?: unknown) => void;
+    mocks.downloadUpdate.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectDownload = reject;
+        }),
+    );
+
+    const user = userEvent.setup();
+    render(<ModelSheet open onClose={() => {}} />);
+
+    await user.click(await screen.findByRole("button", { name: "下载并安装" }));
+    await user.click(await screen.findByRole("button", { name: "取消下载安装包" }));
+    expect(mocks.cancelUpdateDownload).toHaveBeenCalledTimes(1);
+
+    rejectDownload("cancelled: 下载已取消");
+    expect(await screen.findByRole("button", { name: "下载并安装" })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "完成" })).toBeEnabled());
   });

@@ -22,10 +22,14 @@ pub const PROGRESS_EVENT: &str = "coloring://progress";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(update::android_installer_plugin());
+
+    builder
         .register_asynchronous_uri_scheme_protocol("book", protocol::handle)
         .setup(|app| {
             // The minimal libonnxruntime is a bundled resource, so point the
@@ -96,7 +100,11 @@ pub fn run() {
             export::export_book,
             update::check_update,
             update::download_update,
+            update::cancel_update_download,
             update::reveal_update,
+            update::install_permission,
+            update::open_install_permission_settings,
+            update::install_apk,
             update::open_release_page,
         ])
         .run(tauri::generate_context!())

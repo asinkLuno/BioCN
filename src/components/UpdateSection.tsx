@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
+import { isCancelledError } from "../lib/models";
 import { message } from "../lib/reading";
 import {
+  cancelUpdateDownload,
   checkUpdate,
   compareVersions,
   downloadUpdate,
   formatSize,
+  installApk,
+  installPermission,
   onUpdateProgress,
+  openInstallPermissionSettings,
   openReleasePage,
   parseReleaseNotes,
   revealUpdate,
@@ -22,11 +27,18 @@ export function resetUpdateCacheForTests(): void {
   cachedStatus = null;
 }
 
+type UpdateBusy = "download" | "install" | null;
+
+interface DownloadedAsset {
+  version: string;
+  path: string;
+}
+
 /**
  * 设置 → 版本与更新：当前版本、检查更新、应用内下载。安装包来自 GitHub
- * Releases 并由 Rust 侧边下边校验 SHA-256；下载完成后在文件管理器中显示。
- * Android 没有安装交接（BioCN 还没有 MusicDan 那套 install_apk），只给
- * 发布页链接。
+ * Releases 并由 Rust 侧边下边校验 SHA-256：
+ * - 桌面端：下载校验完成后在文件管理器中显示安装包；
+ * - Android：校验「安装未知应用」权限后下载 APK 并直接拉起系统安装器。
  */
 export function UpdateSection({
   open,
@@ -41,17 +53,22 @@ export function UpdateSection({
   const [attempted, setAttempted] = useState(cachedStatus !== null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
-  const [downloading, setDownloading] = useState(false);
+  const [busy, setBusy] = useState<UpdateBusy>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
-  const [downloaded, setDownloaded] = useState<string | null>(null);
+  const [downloaded, setDownloaded] = useState<DownloadedAsset | null>(null);
+  const [installerOpened, setInstallerOpened] = useState(false);
+  const [needsPermission, setNeedsPermission] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
+  const isBusy = busy !== null;
+
   useEffect(() => {
-    onBusyChange?.(downloading);
+    onBusyChange?.(isBusy);
     return () => {
-      if (downloading) onBusyChange?.(false);
+      if (isBusy) onBusyChange?.(false);
     };
-  }, [downloading, onBusyChange]);
+  }, [isBusy, onBusyChange]);
 
   const check = useCallback(async () => {
     setAttempted(true);
@@ -75,6 +92,7 @@ export function UpdateSection({
   }, [open, attempted, check]);
 
   const reveal = async (path: string) => {
+    setProblem(null);
     try {
       await revealUpdate(path);
     } catch (error) {
@@ -83,6 +101,7 @@ export function UpdateSection({
   };
 
   const openReleases = async () => {
+    setProblem(null);
     try {
       await openReleasePage();
     } catch (error) {
@@ -90,45 +109,118 @@ export function UpdateSection({
     }
   };
 
+  const openPermissionSettings = async () => {
+    setProblem(null);
+    try {
+      await openInstallPermissionSettings();
+    } catch (error) {
+      setProblem(message(error));
+    }
+  };
+
   const latest = status?.latest ?? null;
   const asset = latest?.download ?? null;
+  const isAndroidApk = asset?.platform === "android";
   const hasUpdate =
     !!status && !!latest && compareVersions(status.currentVersion, latest.version) < 0;
+  const downloadedPath =
+    downloaded !== null && latest !== null && downloaded.version === latest.version
+      ? downloaded.path
+      : null;
+
+  const ensureAndroidInstallPermission = async (): Promise<boolean> => {
+    const permission = await installPermission();
+    if (!permission.supported) {
+      setProblem("当前平台不支持应用内安装");
+      return false;
+    }
+    if (!permission.granted) {
+      setNeedsPermission(true);
+      try {
+        await openInstallPermissionSettings();
+      } catch (error) {
+        setProblem(message(error));
+        return false;
+      }
+      setProblem("请在系统设置中允许 BioCN 安装应用，然后返回重试");
+      return false;
+    }
+    setNeedsPermission(false);
+    return true;
+  };
+
+  const reinstallAndroid = async (path: string) => {
+    setProblem(null);
+    setInstallerOpened(false);
+    try {
+      if (!(await ensureAndroidInstallPermission())) return;
+      setBusy("install");
+      await installApk(path);
+      setInstallerOpened(true);
+    } catch (error) {
+      setProblem(message(error));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const download = async () => {
     if (!latest || !asset) return;
+    if (isAndroidApk && downloadedPath !== null) {
+      await reinstallAndroid(downloadedPath);
+      return;
+    }
     if (!asset.sha256) {
       setProblem("该版本未提供 SHA-256 校验值，请到发布页手动下载");
       return;
     }
-    setDownloading(true);
     setProblem(null);
-    setDownloaded(null);
-    // Everything from the subscription on is guarded: if listening fails,
-    // `downloading` still clears, or the download button would stay disabled.
+    setInstallerOpened(false);
+    // Everything from the permission check / subscription on is guarded so
+    // `busy` always clears and never leaves the button stuck disabled.
     let unlisten: (() => void) | undefined;
     try {
-      // Subscribe before the command: a fast CDN response can finish before a
-      // listener attached afterwards is told.
+      if (isAndroidApk && !(await ensureAndroidInstallPermission())) {
+        return;
+      }
+      setBusy("download");
+      setCancelling(false);
+      setDownloaded(null);
+      // Subscribe before the command: a fast CDN response (or cached verified
+      // installer) can finish before a listener attached afterwards is told.
       unlisten = await onUpdateProgress((event) => setProgress(event));
       const file = await downloadUpdate(asset.url, asset.sha256);
-      // Persist the verified download path BEFORE opening the file manager so
-      // an opener failure still lets the user retry "再次打开".
-      setDownloaded(file.path);
-      await revealUpdate(file.path);
+      // Persist the verified download path BEFORE opening the file manager or
+      // Android package installer so a handoff failure still allows retrying.
+      setDownloaded({ version: latest.version, path: file.path });
+      if (isAndroidApk) {
+        setBusy("install");
+        await installApk(file.path);
+        setInstallerOpened(true);
+      } else {
+        await revealUpdate(file.path);
+      }
     } catch (error) {
-      setProblem(message(error));
+      if (!isCancelledError(error)) {
+        setProblem(message(error));
+      }
     } finally {
       unlisten?.();
-      setDownloading(false);
+      setBusy(null);
+      setCancelling(false);
       setProgress(null);
     }
+  };
+
+  const cancelDownload = async () => {
+    setCancelling(true);
+    await cancelUpdateDownload().catch(() => false);
   };
 
   // The bar is determinate only when the server announced a total size;
   // otherwise daisyUI renders it indeterminate.
   const ratio =
-    downloading && progress !== null && progress.total > 0
+    busy === "download" && progress !== null && progress.total > 0
       ? Math.min(1, progress.received / progress.total)
       : null;
   const noteBlocks = latest !== null ? parseReleaseNotes(latest.notes) : [];
@@ -146,7 +238,7 @@ export function UpdateSection({
         <button
           type="button"
           className="btn btn-ghost btn-sm"
-          disabled={checking}
+          disabled={checking || isBusy}
           onClick={() => void check()}
         >
           {checking && <span className="loading loading-spinner loading-xs" />}
@@ -189,15 +281,37 @@ export function UpdateSection({
               </p>
             </div>
             {asset !== null ? (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={downloading}
-                onClick={() => void download()}
-              >
-                {downloading && <span className="loading loading-spinner loading-xs" />}
-                {downloading ? "下载中…" : "下载"}
-              </button>
+              busy === "download" ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  aria-label="取消下载安装包"
+                  disabled={cancelling}
+                  onClick={() => void cancelDownload()}
+                >
+                  {cancelling ? (
+                    <span className="loading loading-spinner loading-xs" />
+                  ) : (
+                    "取消"
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={isBusy}
+                  onClick={() => void download()}
+                >
+                  {busy === "install" && <span className="loading loading-spinner loading-xs" />}
+                  {busy === "install"
+                    ? "安装中…"
+                    : isAndroidApk
+                      ? downloadedPath !== null
+                        ? "再次安装"
+                        : "下载并安装"
+                      : "下载"}
+                </button>
+              )
             ) : (
               <button type="button" className="btn btn-sm" onClick={() => void openReleases()}>
                 到发布页下载
@@ -205,7 +319,7 @@ export function UpdateSection({
             )}
           </div>
 
-          {downloading && (
+          {busy === "download" && (
             <div className="mt-3">
               <progress
                 className="progress progress-primary w-full"
@@ -221,17 +335,33 @@ export function UpdateSection({
             </div>
           )}
 
-          {downloaded !== null && (
+          {isAndroidApk && installerOpened && (
+            <p className="mt-2 text-xs text-base-content/55">
+              安装包已通过 SHA-256 校验，请在系统安装器中确认安装。
+            </p>
+          )}
+
+          {!isAndroidApk && downloadedPath !== null && (
             <p className="mt-2 text-xs text-base-content/55">
               安装包已下载并通过 SHA-256 校验，已在文件管理器中显示。
               <button
                 type="button"
                 className="btn btn-link btn-xs px-1 align-baseline"
-                onClick={() => void reveal(downloaded)}
+                onClick={() => void reveal(downloadedPath)}
               >
                 再次打开
               </button>
             </p>
+          )}
+
+          {needsPermission && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm mt-2"
+              onClick={() => void openPermissionSettings()}
+            >
+              打开安装授权设置
+            </button>
           )}
 
           {problem !== null && (
