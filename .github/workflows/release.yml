@@ -78,6 +78,9 @@ jobs:
           cache: yarn
           cache-dependency-path: yarn.lock
 
+      - name: Verify release notes
+        run: node scripts/check-release-notes.mjs
+
       - name: Pin Yarn Classic
         run: corepack enable && corepack prepare yarn@1.22.22 --activate
 
@@ -527,6 +530,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$APP_VERSION"
+          notes_sha=$(sha256sum release-notes.md | cut -d' ' -f1)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
@@ -536,7 +540,7 @@ jobs:
               exit 1
             fi
           else
-            git tag -a "$tag" -m "BioCN $tag (build $GITHUB_RUN_NUMBER)" "$GITHUB_SHA"
+            git tag -a "$tag" -m "BioCN $tag (build $GITHUB_RUN_NUMBER, notes $notes_sha)" "$GITHUB_SHA"
             git push origin "refs/tags/$tag"
           fi
 
@@ -553,20 +557,43 @@ jobs:
             exit 0
           fi
 
+          # 以根目录 release-notes.md 为唯一更新说明来源，并在末尾自动补齐
+          # 上一版本到当前 tag 的 Full Changelog 对比链接。
+          prev_tag=$(git tag --merged "$GITHUB_SHA" --sort=-v:refname 'v*' | grep -vxF "$tag" | head -n1 || true)
+          if [ -z "$prev_tag" ]; then
+            prev_tag=$(git tag --sort=-v:refname 'v*' | grep -vxF "$tag" | head -n1 || true)
+          fi
+          body_file="$RUNNER_TEMP/release-body.md"
+          python3 - "$body_file" "$GITHUB_REPOSITORY" "$prev_tag" "$tag" <<'PY'
+          import pathlib, re, sys
+          out, repo, prev_tag, tag = sys.argv[1:5]
+          body = pathlib.Path("release-notes.md").read_text(encoding="utf-8").strip()
+          if prev_tag and not re.search(r"Full Changelog", body, re.IGNORECASE):
+              body = f"{body}\n\n**Full Changelog**: https://github.com/{repo}/compare/{prev_tag}...{tag}"
+          pathlib.Path(out).write_text(body + "\n", encoding="utf-8")
+          PY
+
           # 直接走 API 建草稿：响应里就带 ID。gh release create 只回 URL，
           # 事后查列表会撞最终一致性空窗（run 7 踩过：创建后 1 秒内查不到）。
           # tag 已在上面打好并校验指向，API 会把 release 挂到这个 tag 上。
-          draft_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-            -f tag_name="$tag" -f name="BioCN v$APP_VERSION" \
-            -F draft=true -F generate_release_notes=true --jq .id)
+          draft_id=$(jq -n \
+            --arg tag "$tag" \
+            --arg name "BioCN v$APP_VERSION" \
+            --rawfile body "$body_file" \
+            '{tag_name: $tag, name: $name, body: $body, draft: true}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/releases" --input - --jq .id)
 
-          # 草稿按 ID 直接上传附件。
+          # 草稿按 ID 直接上传附件（安装包、校验清单以及 release-notes.md）。
           for file in release-artifacts/*; do
             gh api --method POST \
               -H "Content-Type: application/octet-stream" \
               --input "$file" \
               "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$draft_id/assets?name=$(basename "$file")" > /dev/null
           done
+          gh api --method POST \
+            -H "Content-Type: text/markdown; charset=utf-8" \
+            --input release-notes.md \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$draft_id/assets?name=release-notes.md" > /dev/null
 
           # 附件上传后逐一回验摘要，防止 GitHub 侧的静默损坏。
           # digest 是 GitHub 异步计算的：上传完立刻查可能还没有（run 9 踩过，
@@ -600,6 +627,11 @@ jobs:
               exit 1
             fi
           done <<< "$expected_list"
+          notes_digest=$(jq -r '.assets[] | select(.name == "release-notes.md") | .digest // empty' <<< "$asset_json")
+          if [ "$notes_digest" != "sha256:$notes_sha" ]; then
+            echo "::error::Release 附件摘要不一致：release-notes.md $notes_digest != sha256:$notes_sha"
+            exit 1
+          fi
 
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$draft_id" \
             -f draft=false -F make_latest=true > /dev/null

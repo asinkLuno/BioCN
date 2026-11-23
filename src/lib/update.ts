@@ -75,21 +75,71 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+export type ReleaseNoteBlock =
+  | { kind: "heading"; text: string }
+  | { kind: "list"; items: string[] }
+  | { kind: "text"; text: string }
+  | { kind: "changelog"; label: string; url: string };
+
+const VERSION_TITLE_RE = /^(?:✨\s*)?v?\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?\s*更新内容$/;
+const FULL_CHANGELOG_RE =
+  /^\*{0,2}Full Changelog\*{0,2}\s*:\s*(?:\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/\S+))$/i;
+
+function inlineText(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .trim();
+}
+
 /**
- * Release 说明 → 逐行纯文本：剥掉标题井号与链接、加粗、行内代码等标记，
- * 条目保留 `- ` 前缀。GitHub 自动生成的说明（Full Changelog 一类）也能读。
+ * 把 Release Markdown 解析为可分层展示的段落块：
+ * - 跳过与外层卡片重复的 `## ✨ vX.Y.Z 更新内容` 标题行；
+ * - 将 `###` 小节标题识别为 heading，连续的 `- ` / `* ` 条目合并为 list；
+ * - 识别末尾 GitHub `Full Changelog` 对比链接（仅接受 https://github.com/）。
  */
-export function plainNotes(markdown: string): string[] {
-  return markdown
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) =>
-      line
-        .replace(/^#{1,6}\s+/, "")
-        .replace(/^[-*]\s+/, "- ")
-        .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-        .replace(/\*\*([^*]+)\*\*/g, "$1")
-        .replace(/`([^`]*)`/g, "$1"),
-    );
+export function parseReleaseNotes(markdown: string): ReleaseNoteBlock[] {
+  const blocks: ReleaseNoteBlock[] = [];
+  for (const raw of markdown.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const changelog = FULL_CHANGELOG_RE.exec(line);
+    if (changelog) {
+      const url = changelog[2] ?? changelog[3];
+      if (url?.startsWith("https://github.com/")) {
+        blocks.push({ kind: "changelog", label: "查看完整变更对比", url });
+        continue;
+      }
+    }
+
+    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    if (heading) {
+      const text = inlineText(heading[1]);
+      if (text && !VERSION_TITLE_RE.test(text)) {
+        blocks.push({ kind: "heading", text });
+      }
+      continue;
+    }
+
+    const item = /^[-*]\s+(.*)$/.exec(line);
+    if (item) {
+      const text = inlineText(item[1]);
+      if (!text) continue;
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === "list") {
+        last.items.push(text);
+      } else {
+        blocks.push({ kind: "list", items: [text] });
+      }
+      continue;
+    }
+
+    const text = inlineText(line);
+    if (text) {
+      blocks.push({ kind: "text", text });
+    }
+  }
+  return blocks;
 }

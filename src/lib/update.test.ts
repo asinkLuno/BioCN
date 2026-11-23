@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareVersions, plainNotes } from "./update";
+import { compareVersions, parseReleaseNotes } from "./update";
 
 describe("compareVersions", () => {
   it("orders versions by each numeric segment", () => {
@@ -22,24 +22,53 @@ describe("compareVersions", () => {
   });
 });
 
-describe("plainNotes", () => {
-  it("strips markdown markup and keeps list items as lines", () => {
-    expect(
-      plainNotes("### 修复\n- **阅读器**：翻页不丢位置\n见 [说明](https://example.com)"),
-    ).toEqual(["修复", "- 阅读器：翻页不丢位置", "见 说明"]);
+describe("parseReleaseNotes", () => {
+  it("skips the redundant version header and groups headings, bullets, and baseline text", () => {
+    const md = [
+      "## ✨ v0.5.0 更新内容",
+      "",
+      "更新基线：在 v0.4.1 基础上重构阅读器。",
+      "",
+      "### 新功能",
+      "- **阅读器**：支持 `EPUB` 脚注浮层",
+      "- 见 [说明](https://example.com)",
+      "",
+      "**Full Changelog**: https://github.com/asinkLuno/BioCN/compare/v0.4.1...v0.5.0",
+    ].join("\n");
+
+    expect(parseReleaseNotes(md)).toEqual([
+      { kind: "text", text: "更新基线：在 v0.4.1 基础上重构阅读器。" },
+      { kind: "heading", text: "新功能" },
+      { kind: "list", items: ["阅读器：支持 EPUB 脚注浮层", "见 说明"] },
+      {
+        kind: "changelog",
+        label: "查看完整变更对比",
+        url: "https://github.com/asinkLuno/BioCN/compare/v0.4.1...v0.5.0",
+      },
+    ]);
   });
 
-  it("drops blank lines but keeps inline code readable", () => {
-    expect(plainNotes("新增\n\n支持 `EPUB` 导入\n")).toEqual(["新增", "支持 EPUB 导入"]);
+  it("handles legacy auto-generated Full Changelog notes", () => {
+    expect(
+      parseReleaseNotes(
+        "**Full Changelog**: https://github.com/asinkLuno/BioCN/compare/v0.1.0...v0.2.0",
+      ),
+    ).toEqual([
+      {
+        kind: "changelog",
+        label: "查看完整变更对比",
+        url: "https://github.com/asinkLuno/BioCN/compare/v0.1.0...v0.2.0",
+      },
+    ]);
   });
 
-  it("keeps the Full Changelog line the release bot generates", () => {
-    expect(
-      plainNotes("**Full Changelog**: https://github.com/asinkLuno/bioCN/compare/v0.1.0...v0.2.0"),
-    ).toEqual(["Full Changelog: https://github.com/asinkLuno/bioCN/compare/v0.1.0...v0.2.0"]);
+  it("does not turn non-GitHub URLs into changelog links", () => {
+    expect(parseReleaseNotes("**Full Changelog**: https://evil.example/compare/a...b")).toEqual([
+      { kind: "text", text: "Full Changelog: https://evil.example/compare/a...b" },
+    ]);
   });
 
   it("returns nothing for empty notes", () => {
-    expect(plainNotes("")).toEqual([]);
+    expect(parseReleaseNotes("")).toEqual([]);
   });
 });

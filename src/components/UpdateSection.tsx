@@ -7,8 +7,9 @@ import {
   formatSize,
   onUpdateProgress,
   openReleasePage,
-  plainNotes,
+  parseReleaseNotes,
   revealUpdate,
+  type ReleaseNoteBlock,
   type UpdateProgress,
   type UpdateStatus,
 } from "../lib/update";
@@ -130,7 +131,11 @@ export function UpdateSection({
     downloading && progress !== null && progress.total > 0
       ? Math.min(1, progress.received / progress.total)
       : null;
-  const notes = latest !== null ? plainNotes(latest.notes) : [];
+  const noteBlocks = latest !== null ? parseReleaseNotes(latest.notes) : [];
+  const hasStructuredNotes = noteBlocks.some((block) => block.kind !== "changelog");
+  const visibleNoteBlocks = hasStructuredNotes
+    ? noteBlocks.filter((block) => block.kind !== "changelog")
+    : noteBlocks;
 
   return (
     <section aria-labelledby="update-title" className="mt-5 border-t border-base-content/10 pt-4">
@@ -235,14 +240,49 @@ export function UpdateSection({
             </div>
           )}
 
-          {notes.length > 0 && (
+          {visibleNoteBlocks.length > 0 && (
             <details className="mt-2">
               <summary className="cursor-pointer text-xs text-base-content/60">更新内容</summary>
-              <ul className="mt-1 space-y-0.5 text-xs leading-relaxed text-base-content/65">
-                {keyedLines(notes).map(({ key, text }) => (
-                  <li key={key}>{text}</li>
-                ))}
-              </ul>
+              <div className="mt-1.5 space-y-1.5">
+                {keyedBlocks(visibleNoteBlocks).map(({ key, block }) => {
+                  if (block.kind === "heading") {
+                    return (
+                      <p key={key} className="pt-1 first:pt-0 text-xs font-semibold text-base-content/80">
+                        {block.text}
+                      </p>
+                    );
+                  }
+                  if (block.kind === "list") {
+                    return (
+                      <ul
+                        key={key}
+                        className="list-disc space-y-0.5 pl-4 text-xs leading-relaxed text-base-content/65"
+                      >
+                        {keyedLines(block.items).map(({ key: itemKey, text }) => (
+                          <li key={itemKey}>{text}</li>
+                        ))}
+                      </ul>
+                    );
+                  }
+                  if (block.kind === "changelog") {
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        className="btn btn-link btn-xs h-auto min-h-0 px-0 text-xs font-normal"
+                        onClick={() => void openReleases()}
+                      >
+                        前往发布页查看完整变更
+                      </button>
+                    );
+                  }
+                  return (
+                    <p key={key} className="text-xs leading-relaxed text-base-content/65">
+                      {block.text}
+                    </p>
+                  );
+                })}
+              </div>
             </details>
           )}
         </div>
@@ -257,6 +297,23 @@ export function UpdateSection({
       )}
     </section>
   );
+}
+
+function keyedBlocks(
+  blocks: readonly ReleaseNoteBlock[],
+): { key: string; block: ReleaseNoteBlock }[] {
+  const counts = new Map<string, number>();
+  return blocks.map((block) => {
+    const base =
+      block.kind === "list"
+        ? `list:${block.items.join("|")}`
+        : block.kind === "changelog"
+          ? `changelog:${block.url}`
+          : `${block.kind}:${block.text}`;
+    const count = counts.get(base) ?? 0;
+    counts.set(base, count + 1);
+    return { key: count === 0 ? base : `${base}#${count}`, block };
+  });
 }
 
 function keyedLines(lines: readonly string[]): { key: string; text: string }[] {

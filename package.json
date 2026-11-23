@@ -1,7 +1,7 @@
 {
   "name": "biocn",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "release:notes:draft": "node scripts/draft-release-notes.mjs",
+    "release:notes:check": "node scripts/check-release-notes.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

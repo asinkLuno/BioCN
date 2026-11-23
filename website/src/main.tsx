@@ -407,6 +407,123 @@ function ThemeToggle({ theme, onChange }: { theme: Theme; onChange: (next: Theme
   );
 }
 
+type ReleaseNoteBlock =
+  | { kind: 'heading'; text: string }
+  | { kind: 'list'; items: string[] }
+  | { kind: 'text'; text: string }
+  | { kind: 'changelog'; label: string; url: string };
+
+const versionTitleRe = /^(?:✨\s*)?v?\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?\s*更新内容$/;
+const fullChangelogRe =
+  /^\*{0,2}Full Changelog\*{0,2}\s*:\s*(?:\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/\S+))$/i;
+
+function inlineNoteText(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]*)`/g, '$1')
+    .trim();
+}
+
+function parseReleaseNotes(markdown: string): ReleaseNoteBlock[] {
+  const blocks: ReleaseNoteBlock[] = [];
+  for (const raw of markdown.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const changelog = fullChangelogRe.exec(line);
+    if (changelog) {
+      const url = changelog[2] ?? changelog[3];
+      if (url?.startsWith('https://github.com/')) {
+        blocks.push({ kind: 'changelog', label: '查看完整变更对比', url });
+        continue;
+      }
+    }
+
+    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    if (heading) {
+      const text = inlineNoteText(heading[1]);
+      if (text && !versionTitleRe.test(text)) {
+        blocks.push({ kind: 'heading', text });
+      }
+      continue;
+    }
+
+    const item = /^[-*]\s+(.*)$/.exec(line);
+    if (item) {
+      const text = inlineNoteText(item[1]);
+      if (!text) continue;
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === 'list') {
+        last.items.push(text);
+      } else {
+        blocks.push({ kind: 'list', items: [text] });
+      }
+      continue;
+    }
+
+    const text = inlineNoteText(line);
+    if (text) {
+      blocks.push({ kind: 'text', text });
+    }
+  }
+  return blocks;
+}
+
+function ReleaseNotesView({ notes }: { notes: string }) {
+  const blocks = parseReleaseNotes(notes);
+  if (blocks.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {blocks.map((block, index) => {
+        if (block.kind === 'heading') {
+          return (
+            <h3 key={`h-${index}`} className="pt-2 first:pt-0 text-sm font-medium text-base-content/90">
+              {block.text}
+            </h3>
+          );
+        }
+        if (block.kind === 'list') {
+          return (
+            <ul
+              key={`l-${index}`}
+              className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-base-content/70"
+            >
+              {block.items.map((item, itemIndex) => (
+                <li key={`i-${itemIndex}`} className="[overflow-wrap:anywhere]">
+                  {item}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        if (block.kind === 'changelog') {
+          return (
+            <p key={`c-${index}`} className="pt-1 text-xs text-base-content/60">
+              <a
+                className="link link-hover text-primary"
+                href={block.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {block.label}
+              </a>
+            </p>
+          );
+        }
+        return (
+          <p
+            key={`t-${index}`}
+            className="text-sm leading-relaxed [overflow-wrap:anywhere] text-base-content/70"
+          >
+            {block.text}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function App() {
   const [release, setRelease] = useState<Release | null>(null);
   const [history, setHistory] = useState<Release[]>([]);
@@ -626,12 +743,9 @@ function App() {
               ) : null}
 
               {release?.notes ? (
-                <div className="space-y-2 border-t border-base-content/8 pt-4">
+                <div id="release-notes" className="space-y-2.5 border-t border-base-content/8 pt-4">
                   <p className="text-sm font-medium">v{release.version} 更新内容</p>
-                  {/* notes 来自 Release 说明，可能带长链接；anywhere 保证 token 内也能断行，不撑破移动端。 */}
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-base-content/70">
-                    {release.notes.replace(/^#{1,6} /gm, '')}
-                  </p>
+                  <ReleaseNotesView notes={release.notes} />
                 </div>
               ) : null}
             </div>
