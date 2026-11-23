@@ -413,6 +413,34 @@
     }
   }
 
+  function reloadSerifFont() {
+    var id = "biocn-serif-reload";
+    var existing = document.getElementById(id);
+    if (existing && existing.parentNode) {
+      existing.parentNode.removeChild(existing);
+    }
+    var style = document.createElement("style");
+    style.id = id;
+    style.textContent =
+      '@font-face { font-family: "BioCN Source Han Serif"; font-style: normal; font-weight: 400; font-display: swap; src: url("/__biocn__/fonts/SourceHanSerifSC-Regular.woff2?v=' +
+      Date.now() +
+      '") format("woff2"); }';
+    (document.head || document.documentElement).appendChild(style);
+    if (document.fonts && typeof document.fonts.load === "function") {
+      document.fonts
+        .load('16px "BioCN Source Han Serif"')
+        .then(function () {
+          if (state.mode === "paginated") {
+            var p = state.lastParagraph !== null ? state.lastParagraph : findVisibleParagraph();
+            layoutPaginated();
+            if (p !== null) scrollToParagraph(p);
+            reportProgress();
+          }
+        })
+        .catch(function () {});
+    }
+  }
+
   // Host → Iframe commands
   window.addEventListener("message", function (event) {
     if (event.source && event.source !== window.parent) return;
@@ -465,6 +493,9 @@
         if (typeof data.requestId === "number" && data.href && data.anchor) {
           resolveRemoteFootnoteRequest(data.requestId, data.href, data.anchor);
         }
+        break;
+      case "font-ready":
+        reloadSerifFont();
         break;
     }
   });

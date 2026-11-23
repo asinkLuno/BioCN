@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod analyzer;
 pub mod cache;
 pub mod export;
+pub mod fonts;
 pub mod library;
 pub mod models;
 pub(crate) mod net;
@@ -76,6 +77,9 @@ pub fn run() {
             models::models_install,
             models::models_remove,
             models::models_activate,
+            fonts::font_status,
+            fonts::font_install,
+            fonts::font_remove,
             reading::book_open,
             reading::book_chapter_colorize,
             reading::book_chapter_prefetch,

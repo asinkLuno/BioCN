@@ -31,8 +31,7 @@ use crate::reading::ReadingState;
 
 const READER_CSS: &str = include_str!("reader.css");
 const BRIDGE_JS: &str = include_str!("bridge.js");
-const EMBEDDED_SERIF_ROUTE: &str = "/__biocn__/fonts/SourceHanSerifSC-Regular.woff2";
-const EMBEDDED_SERIF_ASSET: &str = "fonts/SourceHanSerifSC-Regular.woff2";
+const SERIF_FONT_ROUTE: &str = "/__biocn__/fonts/SourceHanSerifSC-Regular.woff2";
 
 /// Entry point registered with `tauri::Builder::register_asynchronous_uri_scheme_protocol("book", ...)`.
 pub fn handle<R: Runtime>(
@@ -54,8 +53,8 @@ fn serve<R: Runtime>(
     uri_path: &str,
     query: Option<&str>,
 ) -> Response<Vec<u8>> {
-    if uri_path == EMBEDDED_SERIF_ROUTE {
-        return serve_embedded_font(app);
+    if uri_path == SERIF_FONT_ROUTE {
+        return serve_serif_font(app);
     }
 
     let Some((book_id, resource_path)) = parse_book_uri_path(uri_path) else {
@@ -128,25 +127,11 @@ fn serve<R: Runtime>(
     }
 }
 
-fn serve_embedded_font<R: Runtime>(app: &AppHandle<R>) -> Response<Vec<u8>> {
-    let bytes = app
-        .asset_resolver()
-        .get(EMBEDDED_SERIF_ASSET.to_owned())
-        .map(|asset| asset.bytes)
-        .or_else(|| {
-            #[cfg(debug_assertions)]
-            {
-                let dev_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../public")
-                    .join(EMBEDDED_SERIF_ASSET);
-                std::fs::read(dev_path).ok()
-            }
-            #[cfg(not(debug_assertions))]
-            {
-                None
-            }
-        });
+fn serve_serif_font<R: Runtime>(app: &AppHandle<R>) -> Response<Vec<u8>> {
+    serif_font_response(crate::fonts::read_installed_serif_font(app))
+}
 
+fn serif_font_response(bytes: Option<Vec<u8>>) -> Response<Vec<u8>> {
     match bytes {
         Some(bytes) => Response::builder()
             .status(StatusCode::OK)
@@ -155,7 +140,14 @@ fn serve_embedded_font<R: Runtime>(app: &AppHandle<R>) -> Response<Vec<u8>> {
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             .body(bytes)
             .unwrap_or_else(|_| text_response(StatusCode::INTERNAL_SERVER_ERROR, "response build error")),
-        None => text_response(StatusCode::NOT_FOUND, "embedded font not found"),
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            // Never cache 404 so downloading the font on demand takes effect immediately.
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(b"serif font not downloaded".to_vec())
+            .expect("valid plain response"),
     }
 }
 
@@ -630,12 +622,27 @@ mod tests {
     }
 
     #[test]
-    fn embedded_source_han_serif_font_is_valid_woff2_and_wired_in_reader_css() {
-        assert!(READER_CSS.contains(EMBEDDED_SERIF_ROUTE));
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../public")
-            .join(EMBEDDED_SERIF_ASSET);
-        let bytes = std::fs::read(&path).expect("embedded SourceHanSerifSC-Regular.woff2 present");
-        assert!(bytes.starts_with(b"wOF2"), "expected WOFF2 header");
+    fn serif_font_route_is_wired_and_never_caches_404() {
+        assert!(READER_CSS.contains(SERIF_FONT_ROUTE));
+
+        let missing = serif_font_response(None);
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            missing
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
+
+        let present = serif_font_response(Some(b"wOF2data".to_vec()));
+        assert_eq!(present.status(), StatusCode::OK);
+        assert_eq!(
+            present
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("font/woff2")
+        );
     }
 }

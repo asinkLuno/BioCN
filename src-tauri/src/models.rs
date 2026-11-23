@@ -34,7 +34,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use crate::analyzer::AnalyzerState;
 
 /// Repository on ModelScope (upstream's `tools/publish_models.py` uploads it).
-const REPO: &str = "starmountain1997/biocn";
+pub(crate) const REPO: &str = "starmountain1997/biocn";
 /// Commit sha, not `master`: weights must not change under a released app.
 const REVISION: &str = "a226e0cfeee17a29ce8a2225717626dc2db0ac9c";
 
@@ -276,8 +276,12 @@ fn parse_manifest(body: &str) -> Result<Manifest> {
     Ok(manifest)
 }
 
+pub(crate) fn modelscope_url(revision: &str, path: &str) -> String {
+    format!("https://modelscope.cn/api/v1/models/{REPO}/repo?Revision={revision}&FilePath={path}")
+}
+
 fn file_url(path: &str) -> String {
-    format!("https://modelscope.cn/api/v1/models/{REPO}/repo?Revision={REVISION}&FilePath={path}")
+    modelscope_url(REVISION, path)
 }
 
 /// A manifest path is only ever used as `<variant>/<basename>`: no separators
@@ -313,7 +317,7 @@ struct Progress {
 /// `Range` is what makes a 21 MB download survive a dropped connection; a
 /// server that ignores it answers 200 and the part file is truncated rather than
 /// appended, so the two cases cannot interleave into a corrupt file.
-async fn download(
+pub(crate) async fn download(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
@@ -371,7 +375,7 @@ async fn download(
     Ok(())
 }
 
-fn part_path(dest: &Path) -> PathBuf {
+pub(crate) fn part_path(dest: &Path) -> PathBuf {
     let mut name = dest
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -380,7 +384,7 @@ fn part_path(dest: &Path) -> PathBuf {
     dest.with_file_name(name)
 }
 
-fn sha256(path: &Path) -> Result<String> {
+pub(crate) fn sha256(path: &Path) -> Result<String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(err)?;
     let mut hasher = Sha256::new();

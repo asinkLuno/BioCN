@@ -81,9 +81,10 @@ body {
   word-break: break-word;
 }
 
-/* Embedded full Source Han Serif SC (OFL-1.1), served directly over book://
-   so it works offline across desktop & Android without CORS or system install.
-   Browsers fetch this lazily only when `data-font="serif"` is active. */
+/* On-demand Source Han Serif SC (OFL-1.1), downloaded to app data from
+   ModelScope and served over book:// so it works offline across desktop &
+   Android without bloating installers. Browsers fetch this lazily only when
+   `data-font="serif"` is active (and fall back to system serif if absent). */
 @font-face {
   font-family: "BioCN Source Han Serif";
   font-style: normal;
