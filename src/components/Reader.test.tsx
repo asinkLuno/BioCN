@@ -419,10 +419,11 @@ describe("reader", () => {
     );
     const remotePopover = screen.getByRole("region", { name: /注释/ });
     expect(within(remotePopover).getByText("跨章尾注正文")).toBeInTheDocument();
+    expect(within(remotePopover).queryByRole("button", { name: "关闭注释" })).not.toBeInTheDocument();
     expect(screen.queryByTitle("Two")).not.toBeInTheDocument();
 
-    // Clicking "关闭注释" dismisses popover without closing the reader.
-    await user.click(within(remotePopover).getByRole("button", { name: "关闭注释" }));
+    // Tapping the page dismisses the floating popover without closing the reader.
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "tap" }));
     expect(screen.queryByRole("region", { name: /注释/ })).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });

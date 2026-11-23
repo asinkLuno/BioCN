@@ -325,25 +325,15 @@ export function ReaderFootnotePopover({
             <span className="badge badge-soft badge-primary badge-xs shrink-0">注释</span>
             {showLabel && <span className="truncate opacity-70">{footnote.label}</span>}
           </h3>
-          <div className="flex shrink-0 items-center gap-1">
-            {canJump && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs font-normal opacity-70 hover:opacity-100"
-                onClick={onJumpToTarget}
-              >
-                跳转到注释处
-              </button>
-            )}
+          {canJump && (
             <button
               type="button"
-              className="btn btn-ghost btn-xs btn-circle"
-              aria-label="关闭注释"
-              onClick={onClose}
+              className="btn btn-ghost btn-xs shrink-0 font-normal opacity-70 hover:opacity-100"
+              onClick={onJumpToTarget}
             >
-              ✕
+              跳转到注释处
             </button>
-          </div>
+          )}
         </div>
 
         <div className="overflow-y-auto break-words pr-1" style={bodyStyle}>

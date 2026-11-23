@@ -77,6 +77,7 @@ describe("ReaderFootnotePopover", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const region = screen.getByRole("region", { name: /注释/ });
     expect(region).toHaveTextContent("注释正文内容");
+    expect(screen.queryByRole("button", { name: "关闭注释" })).not.toBeInTheDocument();
 
     await user.hover(region);
     expect(onPointerEnter).toHaveBeenCalledTimes(1);
