@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { type AppTheme, applyAppTheme, loadAppTheme, saveAppTheme } from "../lib/appTheme";
 import {
   formatBytes,
+  isCancelledError,
   type ModelProgress,
   type ModelStatus,
   modelsActivate,
+  modelsCancel,
   modelsInstall,
   modelsRemove,
   modelsStatus,
@@ -43,7 +45,7 @@ interface Props {
  * every byte already finished. The Rust side emits one event per chunk.
  */
 type Operation =
-  | { kind: "install"; variant: VariantId; progress: ModelProgress | null }
+  | { kind: "install"; variant: VariantId; progress: ModelProgress | null; cancelling: boolean }
   | { kind: "activate"; variant: VariantId }
   | { kind: "remove"; variant: VariantId };
 
@@ -90,7 +92,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
   }, [open]);
 
   const install = async (variant: VariantId) => {
-    setOp({ kind: "install", variant, progress: null });
+    setOp({ kind: "install", variant, progress: null, cancelling: false });
     setProblem(null);
     // Everything from the subscription on is guarded: if listening fails,
     // `op` still clears, or every button in the sheet would stay disabled.
@@ -108,15 +110,22 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
       setStatus(await modelsInstall(variant));
       onChange();
     } catch (error) {
-      setProblem(message(error));
-      // A failed download keeps its partial file; re-reading the status puts
-      // the resume size on screen without wiping previous status on error.
+      if (!isCancelledError(error)) {
+        setProblem(message(error));
+      }
+      // A failed or cancelled download keeps its partial file; re-reading the
+      // status puts the resume size on screen without wiping previous status.
       const refreshed = await modelsStatus().catch(() => null);
       if (refreshed !== null) setStatus(refreshed);
     } finally {
       unlisten?.();
       setOp(null);
     }
+  };
+
+  const cancelInstall = async () => {
+    setOp((prev) => (prev?.kind === "install" ? { ...prev, cancelling: true } : prev));
+    await modelsCancel().catch(() => false);
   };
 
   const activate = async (variant: VariantId) => {
@@ -241,6 +250,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                 const isInstalled = status.installed.includes(variant.id);
                 const isActive = status.active === variant.id;
                 const isDownloading = op?.kind === "install" && op.variant === variant.id;
+                const isCancelling = isDownloading && op.cancelling;
                 const isActivating = op?.kind === "activate" && op.variant === variant.id;
                 const isRemoving = op?.kind === "remove" && op.variant === variant.id;
                 const progress = isDownloading ? op.progress : null;
@@ -306,6 +316,20 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                                   )}
                                 </button>
                               </>
+                            ) : isDownloading ? (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                aria-label={`取消下载 ${variant.label}`}
+                                disabled={isCancelling}
+                                onClick={() => void cancelInstall()}
+                              >
+                                {isCancelling ? (
+                                  <span className="loading loading-spinner loading-xs" />
+                                ) : (
+                                  "取消"
+                                )}
+                              </button>
                             ) : (
                               <button
                                 type="button"
@@ -313,13 +337,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
                                 disabled={op !== null}
                                 onClick={() => void install(variant.id)}
                               >
-                                {isDownloading ? (
-                                  <span className="loading loading-spinner loading-xs" />
-                                ) : variant.partial > 0 ? (
-                                  "继续下载"
-                                ) : (
-                                  "下载"
-                                )}
+                                {variant.partial > 0 ? "继续下载" : "下载"}
                               </button>
                             )}
                           </div>

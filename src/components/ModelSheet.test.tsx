@@ -10,11 +10,13 @@ import { resetUpdateCacheForTests } from "./UpdateSection";
 const mocks = vi.hoisted(() => ({
   modelsStatus: vi.fn(),
   modelsInstall: vi.fn(),
+  modelsCancel: vi.fn(),
   modelsActivate: vi.fn(),
   modelsRemove: vi.fn(),
   onModelProgress: vi.fn(),
   fontStatus: vi.fn(),
   fontInstall: vi.fn(),
+  fontCancel: vi.fn(),
   fontRemove: vi.fn(),
   onFontProgress: vi.fn(),
   checkUpdate: vi.fn(),
@@ -30,6 +32,7 @@ vi.mock("../lib/fonts", async (importOriginal) => {
     ...actual,
     fontStatus: mocks.fontStatus,
     fontInstall: mocks.fontInstall,
+    fontCancel: mocks.fontCancel,
     fontRemove: mocks.fontRemove,
     onFontProgress: mocks.onFontProgress,
   };
@@ -41,6 +44,7 @@ vi.mock("../lib/models", async (importOriginal) => {
     ...actual,
     modelsStatus: mocks.modelsStatus,
     modelsInstall: mocks.modelsInstall,
+    modelsCancel: mocks.modelsCancel,
     modelsActivate: mocks.modelsActivate,
     modelsRemove: mocks.modelsRemove,
     onModelProgress: mocks.onModelProgress,
@@ -120,6 +124,7 @@ describe("ModelSheet & UpdateSection", () => {
     resetUpdateCacheForTests();
     mocks.modelsStatus.mockReset();
     mocks.modelsInstall.mockReset();
+    mocks.modelsCancel.mockReset().mockResolvedValue(true);
     mocks.modelsActivate.mockReset();
     mocks.modelsRemove.mockReset();
     mocks.onModelProgress.mockReset().mockResolvedValue(() => {});
@@ -130,6 +135,7 @@ describe("ModelSheet & UpdateSection", () => {
       partial: 0,
     } satisfies FontStatus);
     mocks.fontInstall.mockReset();
+    mocks.fontCancel.mockReset().mockResolvedValue(true);
     mocks.fontRemove.mockReset();
     mocks.onFontProgress.mockReset().mockResolvedValue(() => {});
     mocks.checkUpdate.mockReset().mockResolvedValue({
@@ -307,5 +313,69 @@ describe("ModelSheet & UpdateSection", () => {
     await user.click(screen.getByRole("button", { name: "移除字体" }));
     expect(await screen.findByRole("button", { name: "下载字体" })).toBeInTheDocument();
     expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels model and font downloads cleanly without an error alert and shows resume state", async () => {
+    const initialModels = makeModelStatus({ manifestError: null });
+    const partialModels = makeModelStatus({
+      manifestError: null,
+      variants: [
+        initialModels.variants[0],
+        { ...initialModels.variants[1], bytes: 78 * 1024 * 1024, partial: 12 * 1024 * 1024 },
+      ],
+    });
+    mocks.modelsStatus.mockResolvedValueOnce(initialModels).mockResolvedValueOnce(partialModels);
+
+    let rejectModelInstall!: (reason?: unknown) => void;
+    mocks.modelsInstall.mockImplementation(
+      () =>
+        new Promise<ModelStatus>((_resolve, reject) => {
+          rejectModelInstall = reject;
+        }),
+    );
+
+    mocks.fontStatus
+      .mockResolvedValueOnce({
+        installed: false,
+        bytes: 16_708_168,
+        size: 0,
+        partial: 0,
+      })
+      .mockResolvedValueOnce({
+        installed: false,
+        bytes: 16_708_168,
+        size: 0,
+        partial: 5 * 1024 * 1024,
+      });
+    let rejectFontInstall!: (reason?: unknown) => void;
+    mocks.fontInstall.mockImplementation(
+      () =>
+        new Promise<FontStatus>((_resolve, reject) => {
+          rejectFontInstall = reject;
+        }),
+    );
+
+    const user = userEvent.setup();
+    render(<ModelSheet open onClose={() => {}} />);
+
+    // Cancel model download
+    await user.click(await screen.findByRole("button", { name: "下载" }));
+    await user.click(await screen.findByRole("button", { name: "取消下载 高精度模式" }));
+    expect(mocks.modelsCancel).toHaveBeenCalledTimes(1);
+    rejectModelInstall("cancelled: 下载已取消");
+
+    expect(await screen.findByRole("button", { name: "继续下载" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "完成" })).toBeEnabled());
+
+    // Cancel serif font download
+    await user.click(screen.getByRole("button", { name: "下载字体" }));
+    await user.click(await screen.findByRole("button", { name: "取消下载思源宋体" }));
+    expect(mocks.fontCancel).toHaveBeenCalledTimes(1);
+    rejectFontInstall("cancelled: 下载已取消");
+
+    expect(await screen.findByRole("button", { name: "继续下载字体" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "完成" })).toBeEnabled());
   });
 });

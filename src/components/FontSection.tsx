@@ -12,7 +12,7 @@ interface Props {
  * 设置 → 阅读字体：按需从魔搭下载 / 移除思源宋体（Source Han Serif SC）。
  */
 export function FontSection({ open, onBusyChange, onChange }: Props) {
-  const { status, op, progress, error, install, remove } = useSerifFont(open);
+  const { status, op, cancelling, progress, error, install, cancel, remove } = useSerifFont(open);
   const busy = op !== null;
 
   useEffect(() => {
@@ -92,6 +92,16 @@ export function FontSection({ open, onBusyChange, onChange }: Props) {
                       "移除字体"
                     )}
                   </button>
+                ) : isDownloading ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    aria-label="取消下载思源宋体"
+                    disabled={cancelling}
+                    onClick={() => void cancel()}
+                  >
+                    {cancelling ? <span className="loading loading-spinner loading-xs" /> : "取消"}
+                  </button>
                 ) : (
                   <button
                     type="button"
@@ -99,13 +109,7 @@ export function FontSection({ open, onBusyChange, onChange }: Props) {
                     disabled={busy}
                     onClick={() => void handleInstall()}
                   >
-                    {isDownloading ? (
-                      <span className="loading loading-spinner loading-xs" />
-                    ) : status.partial > 0 ? (
-                      "继续下载字体"
-                    ) : (
-                      "下载字体"
-                    )}
+                    {status.partial > 0 ? "继续下载字体" : "下载字体"}
                   </button>
                 )}
               </div>

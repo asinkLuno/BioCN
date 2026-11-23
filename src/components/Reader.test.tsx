@@ -24,6 +24,7 @@ vi.mock("../lib/fonts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/fonts")>()),
   fontStatus: vi.fn(),
   fontInstall: vi.fn(),
+  fontCancel: vi.fn(),
   fontRemove: vi.fn(),
   onFontProgress: vi.fn(),
 }));
@@ -47,6 +48,7 @@ const onPatchMock = vi.mocked(reading.onChapterColorPatch);
 const openUrlMock = vi.mocked(openUrl);
 const fontStatusMock = vi.mocked(fonts.fontStatus);
 const fontInstallMock = vi.mocked(fonts.fontInstall);
+const fontCancelMock = vi.mocked(fonts.fontCancel);
 const onFontProgressMock = vi.mocked(fonts.onFontProgress);
 
 let emitPatch: (patch: reading.ChapterColorPatch) => void = () => {};
@@ -120,6 +122,7 @@ describe("reader", () => {
       size: 16_708_168,
       partial: 0,
     });
+    fontCancelMock.mockResolvedValue(true);
     onFontProgressMock.mockResolvedValue(() => {});
   });
 
@@ -604,5 +607,55 @@ describe("reader", () => {
         "*",
       );
     });
+  });
+
+  it("allows cancelling an in-flight serif font download in the appearance popover and resumes from partial bytes", async () => {
+    fontStatusMock
+      .mockResolvedValueOnce({
+        installed: false,
+        bytes: 16_708_168,
+        size: 0,
+        partial: 0,
+      })
+      .mockResolvedValueOnce({
+        installed: false,
+        bytes: 16_708_168,
+        size: 0,
+        partial: 4 * 1024 * 1024,
+      });
+    let rejectInstall!: (reason?: unknown) => void;
+    fontInstallMock.mockImplementation(
+      () =>
+        new Promise<fonts.FontStatus>((_resolve, reject) => {
+          rejectInstall = reject;
+        }),
+    );
+
+    const user = userEvent.setup();
+    renderReader();
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    const postSpy = vi.spyOn(frame.contentWindow!, "postMessage");
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+    postSpy.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "阅读设置" }));
+    await user.click(screen.getByRole("button", { name: "思源宋体" }));
+
+    const cancelBtn = await screen.findByRole("button", { name: "取消下载思源宋体" });
+    await user.click(cancelBtn);
+    expect(fontCancelMock).toHaveBeenCalledTimes(1);
+
+    rejectInstall("cancelled: 下载已取消");
+
+    expect(await screen.findByText(/思源宋体未下完.*4\.0 MB.*点击继续/)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(postSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "biocn-host",
+        type: "prefs",
+        prefs: expect.objectContaining({ fontFamily: "serif" }),
+      }),
+      "*",
+    );
   });
 });

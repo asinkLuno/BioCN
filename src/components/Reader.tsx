@@ -376,11 +376,23 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
     () => ({
       status: serifFont.status,
       downloading: serifFont.op === "install",
+      cancelling: serifFont.cancelling,
       progress: serifFont.progress,
       error: serifFont.error,
       onSelect: handleSelectSerif,
+      onCancel: () => {
+        void serifFont.cancel();
+      },
     }),
-    [serifFont.status, serifFont.op, serifFont.progress, serifFont.error, handleSelectSerif],
+    [
+      serifFont.status,
+      serifFont.op,
+      serifFont.cancelling,
+      serifFont.progress,
+      serifFont.error,
+      handleSelectSerif,
+      serifFont.cancel,
+    ],
   );
 
   // Close appearance popover on outside pointerdown.

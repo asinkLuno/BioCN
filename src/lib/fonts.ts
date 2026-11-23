@@ -23,6 +23,8 @@ export const fontStatus = () => invoke<FontStatus>("font_status");
 
 export const fontInstall = () => invoke<FontStatus>("font_install");
 
+export const fontCancel = () => invoke<boolean>("font_cancel");
+
 export const fontRemove = () => invoke<FontStatus>("font_remove");
 
 /**

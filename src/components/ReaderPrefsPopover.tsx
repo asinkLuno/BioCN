@@ -18,9 +18,11 @@ import {
 export interface SerifFontView {
   status: FontStatus | null;
   downloading: boolean;
+  cancelling: boolean;
   progress: FontProgress | null;
   error: string | null;
   onSelect: () => void;
+  onCancel: () => void;
 }
 
 interface Props {
@@ -62,6 +64,7 @@ export const ReaderPrefsPopover = memo(function ReaderPrefsPopover({
         : "light";
   const serifInstalled = serifFont?.status?.installed ?? true;
   const serifDownloading = serifFont?.downloading ?? false;
+  const serifCancelling = serifFont?.cancelling ?? false;
   const serifTotal = serifFont?.progress?.total || serifFont?.status?.bytes || 0;
   const serifRatio =
     serifDownloading && serifFont?.progress && serifTotal > 0
@@ -178,11 +181,24 @@ export const ReaderPrefsPopover = memo(function ReaderPrefsPopover({
                 max={1}
                 aria-label="正在下载思源宋体"
               />
-              <p className="text-xs tabular-nums text-base-content/60">
-                {serifFont?.progress
-                  ? `正在下载思源宋体 · ${Math.round(serifRatio * 100)}%`
-                  : "正在下载思源宋体…"}
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs tabular-nums text-base-content/60">
+                  {serifFont?.progress
+                    ? `正在下载思源宋体 · ${Math.round(serifRatio * 100)}%`
+                    : "正在下载思源宋体…"}
+                </p>
+                {serifFont && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs h-6 min-h-6 px-1.5 text-base-content/70"
+                    aria-label="取消下载思源宋体"
+                    disabled={serifCancelling}
+                    onClick={serifFont.onCancel}
+                  >
+                    {serifCancelling ? "取消中…" : "取消"}
+                  </button>
+                )}
+              </div>
             </div>
           )}
           {!serifDownloading && serifFont?.error && (

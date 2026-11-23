@@ -8,6 +8,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { message } from "./reading";
 
 /** The two published weight sets. `int8` is small, `fp16` is accurate. */
 export type VariantId = "int8" | "fp16";
@@ -53,8 +54,15 @@ export const modelsStatus = () => invoke<ModelStatus>("models_status");
 export const modelsInstall = (variant: VariantId) =>
   invoke<ModelStatus>("models_install", { variant });
 
+export const modelsCancel = () => invoke<boolean>("models_cancel");
+
 export const modelsRemove = (variant: VariantId) =>
   invoke<ModelStatus>("models_remove", { variant });
+
+/** True when a Rust download command exited because the user cancelled it. */
+export function isCancelledError(error: unknown): boolean {
+  return message(error).startsWith("cancelled:");
+}
 
 /** Points the reader at an installed variant; the next analysis loads it. */
 export const modelsActivate = (variant: VariantId) =>

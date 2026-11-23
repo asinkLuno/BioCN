@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type FontProgress,
   type FontStatus,
+  fontCancel,
   fontInstall,
   fontRemove,
   fontStatus,
   onFontProgress,
 } from "../lib/fonts";
+import { isCancelledError } from "../lib/models";
 import { message } from "../lib/reading";
 
 export type FontOp = "install" | "remove" | null;
@@ -14,10 +16,12 @@ export type FontOp = "install" | "remove" | null;
 export interface SerifFontState {
   status: FontStatus | null;
   op: FontOp;
+  cancelling: boolean;
   progress: FontProgress | null;
   error: string | null;
   refresh: () => Promise<FontStatus | null>;
   install: () => Promise<FontStatus | null>;
+  cancel: () => Promise<void>;
   remove: () => Promise<FontStatus | null>;
 }
 
@@ -36,6 +40,7 @@ function isFontStatus(value: unknown): value is FontStatus {
 export function useSerifFont(enabled = true): SerifFontState {
   const [status, setStatus] = useState<FontStatus | null>(null);
   const [op, setOp] = useState<FontOp>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState<FontProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
@@ -72,6 +77,7 @@ export function useSerifFont(enabled = true): SerifFontState {
     busyRef.current = true;
     if (mountedRef.current) {
       setOp("install");
+      setCancelling(false);
       setProgress(null);
       setError(null);
     }
@@ -85,7 +91,9 @@ export function useSerifFont(enabled = true): SerifFontState {
       if (mountedRef.current) setStatus(next);
       return next;
     } catch (err) {
-      if (mountedRef.current) setError(message(err));
+      if (mountedRef.current && !isCancelledError(err)) {
+        setError(message(err));
+      }
       const refreshed = await fontStatus().catch(() => null);
       if (mountedRef.current && isFontStatus(refreshed)) setStatus(refreshed);
       return null;
@@ -94,9 +102,16 @@ export function useSerifFont(enabled = true): SerifFontState {
       busyRef.current = false;
       if (mountedRef.current) {
         setOp(null);
+        setCancelling(false);
         setProgress(null);
       }
     }
+  }, []);
+
+  const cancel = useCallback(async (): Promise<void> => {
+    if (!busyRef.current) return;
+    if (mountedRef.current) setCancelling(true);
+    await fontCancel().catch(() => false);
   }, []);
 
   const remove = useCallback(async (): Promise<FontStatus | null> => {
@@ -120,5 +135,5 @@ export function useSerifFont(enabled = true): SerifFontState {
     }
   }, []);
 
-  return { status, op, progress, error, refresh, install, remove };
+  return { status, op, cancelling, progress, error, refresh, install, cancel, remove };
 }
