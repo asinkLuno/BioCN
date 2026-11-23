@@ -7,6 +7,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fonts from "../lib/fonts";
 import * as reading from "../lib/reading";
 import { Reader } from "./Reader";
 
@@ -17,6 +18,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../lib/fonts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/fonts")>()),
+  fontStatus: vi.fn(),
+  fontInstall: vi.fn(),
+  fontRemove: vi.fn(),
+  onFontProgress: vi.fn(),
 }));
 
 vi.mock("../lib/reading", async (importOriginal) => ({
@@ -36,6 +45,9 @@ const cancelStreamMock = vi.mocked(reading.bookChapterCancelStream);
 const progressSaveMock = vi.mocked(reading.bookProgressSave);
 const onPatchMock = vi.mocked(reading.onChapterColorPatch);
 const openUrlMock = vi.mocked(openUrl);
+const fontStatusMock = vi.mocked(fonts.fontStatus);
+const fontInstallMock = vi.mocked(fonts.fontInstall);
+const onFontProgressMock = vi.mocked(fonts.onFontProgress);
 
 let emitPatch: (patch: reading.ChapterColorPatch) => void = () => {};
 
@@ -96,6 +108,19 @@ describe("reader", () => {
       emitPatch = handler;
       return () => {};
     });
+    fontStatusMock.mockResolvedValue({
+      installed: true,
+      bytes: 16_708_168,
+      size: 16_708_168,
+      partial: 0,
+    });
+    fontInstallMock.mockResolvedValue({
+      installed: true,
+      bytes: 16_708_168,
+      size: 16_708_168,
+      partial: 0,
+    });
+    onFontProgressMock.mockResolvedValue(() => {});
   });
 
   it("opens directly at initialChapter via book:// URL without frontend EPUB parsing", async () => {
@@ -357,7 +382,9 @@ describe("reader", () => {
 
     // Moving out of the hovercard auto-closes it after the grace delay.
     await user.unhover(popover);
-    await waitFor(() => expect(screen.queryByRole("region", { name: /注释/ })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: /注释/ })).not.toBeInTheDocument(),
+    );
 
     // Clicking a footnote pins the popover, supports jumping on demand, and closes cleanly.
     act(() =>
@@ -419,7 +446,9 @@ describe("reader", () => {
     );
     const remotePopover = screen.getByRole("region", { name: /注释/ });
     expect(within(remotePopover).getByText("跨章尾注正文")).toBeInTheDocument();
-    expect(within(remotePopover).queryByRole("button", { name: "关闭注释" })).not.toBeInTheDocument();
+    expect(
+      within(remotePopover).queryByRole("button", { name: "关闭注释" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTitle("Two")).not.toBeInTheDocument();
 
     // Tapping the page dismisses the floating popover without closing the reader.
@@ -508,5 +537,72 @@ describe("reader", () => {
       expect(screen.queryByRole("region", { name: /注释/ })).not.toBeInTheDocument(),
     );
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("downloads Source Han Serif SC on demand when selected in appearance popover and refreshes iframe font", async () => {
+    fontStatusMock.mockResolvedValue({
+      installed: false,
+      bytes: 16_708_168,
+      size: 0,
+      partial: 0,
+    });
+    let emitFontProgress: ((p: fonts.FontProgress) => void) | null = null;
+    onFontProgressMock.mockImplementation(async (cb) => {
+      emitFontProgress = cb;
+      return () => {};
+    });
+    let resolveInstall!: (s: fonts.FontStatus) => void;
+    fontInstallMock.mockImplementation(
+      () =>
+        new Promise<fonts.FontStatus>((resolve) => {
+          resolveInstall = resolve;
+        }),
+    );
+
+    const user = userEvent.setup();
+    renderReader();
+    const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
+    const postSpy = vi.spyOn(frame.contentWindow!, "postMessage");
+    act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
+    postSpy.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "阅读设置" }));
+    expect(await screen.findByText(/首次使用需下载思源宋体/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "思源宋体" }));
+    await waitFor(() => expect(emitFontProgress).not.toBeNull());
+
+    act(() => {
+      emitFontProgress!({ done: 8_354_084, total: 16_708_168 });
+    });
+    expect(await screen.findByText(/正在下载思源宋体 · 50%/)).toBeInTheDocument();
+    // Should not switch to serif before the download finishes and verifies.
+    expect(postSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "biocn-host",
+        type: "prefs",
+        prefs: expect.objectContaining({ fontFamily: "serif" }),
+      }),
+      "*",
+    );
+
+    resolveInstall({
+      installed: true,
+      bytes: 16_708_168,
+      size: 16_708_168,
+      partial: 0,
+    });
+
+    await waitFor(() => {
+      expect(postSpy).toHaveBeenCalledWith({ source: "biocn-host", type: "font-ready" }, "*");
+      expect(postSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "biocn-host",
+          type: "prefs",
+          prefs: expect.objectContaining({ fontFamily: "serif" }),
+        }),
+        "*",
+      );
+    });
   });
 });

@@ -13,6 +13,19 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../lib/fonts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/fonts")>()),
+  fontStatus: vi.fn().mockResolvedValue({
+    installed: true,
+    bytes: 16_708_168,
+    size: 16_708_168,
+    partial: 0,
+  }),
+  fontInstall: vi.fn(),
+  fontRemove: vi.fn(),
+  onFontProgress: vi.fn().mockResolvedValue(() => {}),
+}));
+
 vi.mock("../lib/reading", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/reading")>()),
   bookOpen: vi.fn(),

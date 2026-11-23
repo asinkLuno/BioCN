@@ -14,6 +14,7 @@ import {
 import { message } from "../lib/reading";
 import { useHistoryOverlay } from "../lib/router";
 import { ModalBackdrop, useDialog } from "./dialog";
+import { FontSection } from "./FontSection";
 import { UpdateSection } from "./UpdateSection";
 
 const THEME_OPTIONS: readonly [AppTheme, string][] = [
@@ -50,11 +51,12 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [op, setOp] = useState<Operation | null>(null);
+  const [fontBusy, setFontBusy] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [theme, setTheme] = useState<AppTheme>(() => loadAppTheme());
   const dialog = useRef<HTMLDialogElement>(null);
 
-  const isBusy = op !== null || updateBusy;
+  const isBusy = op !== null || fontBusy || updateBusy;
 
   useHistoryOverlay(open, onClose, !isBusy);
 
@@ -351,6 +353,8 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
               : "两个版本都在本机运行，不会上传任何内容。"}
           </p>
         </section>
+
+        <FontSection open={open} onBusyChange={setFontBusy} onChange={onChange} />
 
         <UpdateSection open={open} onBusyChange={setUpdateBusy} />
 

@@ -234,6 +234,18 @@ describe("reader iframe bridge.js", () => {
       .querySelector("p")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, clientX: 500 }));
     expect(posted).toContainEqual({ source: "biocn-reader", type: "tap" });
+
+    // `font-ready` injects a cache-busted @font-face style so newly downloaded serif takes effect immediately.
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { source: "biocn-host", type: "font-ready" },
+      }),
+    );
+    const reloadStyle = document.getElementById("biocn-serif-reload");
+    expect(reloadStyle).not.toBeNull();
+    expect(reloadStyle?.textContent).toContain(
+      "/__biocn__/fonts/SourceHanSerifSC-Regular.woff2?v=",
+    );
   });
 
   it("supports 1:1 touch drag-follow and swipe page turning in paginated mode", () => {
@@ -424,7 +436,9 @@ describe("reader iframe bridge.js", () => {
       posted = [];
       ref1.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
       vi.advanceTimersByTime(50);
-      ref1.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }));
+      ref1.dispatchEvent(
+        new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }),
+      );
       vi.advanceTimersByTime(200);
       expect(posted.some((m) => (m as { type?: string }).type === "footnote")).toBe(false);
 
@@ -447,7 +461,9 @@ describe("reader iframe bridge.js", () => {
 
       // Moving the cursor off the footnote link emits footnote-leave so host can start grace close.
       posted = [];
-      ref1.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }));
+      ref1.dispatchEvent(
+        new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }),
+      );
       expect(posted).toContainEqual({
         source: "biocn-reader",
         type: "footnote-leave",

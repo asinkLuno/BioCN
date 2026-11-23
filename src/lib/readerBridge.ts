@@ -35,7 +35,8 @@ export type HostToFrameMessage =
       requestId: number;
       href: string;
       anchor: string;
-    };
+    }
+  | { source: "biocn-host"; type: "font-ready" };
 
 export type FrameToHostMessage =
   | { source: "biocn-reader"; type: "ready" }

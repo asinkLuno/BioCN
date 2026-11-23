@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FontProgress, FontStatus } from "../lib/fonts";
 import { formatBytes, type ModelProgress, type ModelStatus } from "../lib/models";
 import type { UpdateStatus } from "../lib/update";
 import { ModelSheet } from "./ModelSheet";
@@ -12,12 +13,27 @@ const mocks = vi.hoisted(() => ({
   modelsActivate: vi.fn(),
   modelsRemove: vi.fn(),
   onModelProgress: vi.fn(),
+  fontStatus: vi.fn(),
+  fontInstall: vi.fn(),
+  fontRemove: vi.fn(),
+  onFontProgress: vi.fn(),
   checkUpdate: vi.fn(),
   downloadUpdate: vi.fn(),
   onUpdateProgress: vi.fn(),
   revealUpdate: vi.fn(),
   openReleasePage: vi.fn(),
 }));
+
+vi.mock("../lib/fonts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/fonts")>();
+  return {
+    ...actual,
+    fontStatus: mocks.fontStatus,
+    fontInstall: mocks.fontInstall,
+    fontRemove: mocks.fontRemove,
+    onFontProgress: mocks.onFontProgress,
+  };
+});
 
 vi.mock("../lib/models", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/models")>();
@@ -107,6 +123,15 @@ describe("ModelSheet & UpdateSection", () => {
     mocks.modelsActivate.mockReset();
     mocks.modelsRemove.mockReset();
     mocks.onModelProgress.mockReset().mockResolvedValue(() => {});
+    mocks.fontStatus.mockReset().mockResolvedValue({
+      installed: false,
+      bytes: 16_708_168,
+      size: 0,
+      partial: 0,
+    } satisfies FontStatus);
+    mocks.fontInstall.mockReset();
+    mocks.fontRemove.mockReset();
+    mocks.onFontProgress.mockReset().mockResolvedValue(() => {});
     mocks.checkUpdate.mockReset().mockResolvedValue({
       currentVersion: "0.4.1",
       latest: null,
@@ -231,5 +256,56 @@ describe("ModelSheet & UpdateSection", () => {
     const openBtn = await screen.findByRole("button", { name: "到发布页下载" });
     await user.click(openBtn);
     expect(await screen.findByText(/no browser/)).toBeInTheDocument();
+  });
+
+  it("downloads and removes Source Han Serif SC in Settings and locks closing during download", async () => {
+    mocks.modelsStatus.mockResolvedValue(makeModelStatus());
+    let emitFontProgress: ((event: FontProgress) => void) | null = null;
+    mocks.onFontProgress.mockImplementation(async (cb: (event: FontProgress) => void) => {
+      emitFontProgress = cb;
+      return () => {};
+    });
+
+    let resolveFontInstall!: (s: FontStatus) => void;
+    mocks.fontInstall.mockImplementation(
+      () =>
+        new Promise<FontStatus>((resolve) => {
+          resolveFontInstall = resolve;
+        }),
+    );
+    mocks.fontRemove.mockResolvedValue({
+      installed: false,
+      bytes: 16_708_168,
+      size: 0,
+      partial: 0,
+    } satisfies FontStatus);
+
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ModelSheet open onClose={() => {}} onChange={onChange} />);
+
+    const downloadBtn = await screen.findByRole("button", { name: "下载字体" });
+    await user.click(downloadBtn);
+    await waitFor(() => expect(emitFontProgress).not.toBeNull());
+    expect(screen.getByRole("button", { name: "处理中…" })).toBeDisabled();
+
+    act(() => {
+      emitFontProgress!({ done: 8_354_084, total: 16_708_168 });
+    });
+    expect(await screen.findByText(/50%/)).toBeInTheDocument();
+
+    resolveFontInstall({
+      installed: true,
+      bytes: 16_708_168,
+      size: 16_708_168,
+      partial: 0,
+    });
+    expect(await screen.findByText("已下载")).toBeInTheDocument();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByRole("button", { name: "完成" })).toBeEnabled());
+
+    await user.click(screen.getByRole("button", { name: "移除字体" }));
+    expect(await screen.findByRole("button", { name: "下载字体" })).toBeInTheDocument();
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 });

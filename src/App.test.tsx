@@ -67,6 +67,19 @@ vi.mock("./lib/models", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("./lib/fonts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lib/fonts")>()),
+  fontStatus: vi.fn().mockResolvedValue({
+    installed: false,
+    bytes: 16_708_168,
+    size: 0,
+    partial: 0,
+  }),
+  fontInstall: vi.fn(),
+  fontRemove: vi.fn(),
+  onFontProgress: vi.fn().mockResolvedValue(() => {}),
+}));
+
 vi.mock("./lib/update", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./lib/update")>()),
   checkUpdate: vi.fn().mockResolvedValue(null),

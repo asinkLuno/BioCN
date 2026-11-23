@@ -16,6 +16,7 @@
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSerifFont } from "../hooks/useSerifFont";
 import { type AppTheme, loadAppTheme, onAppThemeChange } from "../lib/appTheme";
 import { bookResourceUrl, resolveRelativeHref } from "../lib/bookProtocol";
 import {
@@ -50,7 +51,7 @@ import {
 } from "../lib/reading";
 import { useHistoryOverlay } from "../lib/router";
 import { type FootnoteView, ReaderFootnotePopover } from "./ReaderFootnotePopover";
-import { ReaderPrefsPopover } from "./ReaderPrefsPopover";
+import { ReaderPrefsPopover, type SerifFontView } from "./ReaderPrefsPopover";
 import { ReaderTocDrawer } from "./ReaderTocDrawer";
 
 function toHostRect(
@@ -327,6 +328,60 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
   const updatePrefs = useCallback((patch: Partial<ReaderPrefs>) => {
     setPrefs((prev) => ({ ...prev, ...patch }));
   }, []);
+
+  const serifFont = useSerifFont(true);
+  const prevFontInstalledRef = useRef<boolean | null>(null);
+  if (serifFont.status !== null && prevFontInstalledRef.current === null) {
+    prevFontInstalledRef.current = serifFont.status.installed;
+  }
+
+  const notifyFontReady = useCallback(() => {
+    for (const slot of [0, 1] as const) {
+      if (slotReadyRef.current[slot]) {
+        postToFrame(slotRefs.current[slot], { source: "biocn-host", type: "font-ready" });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (modelRevision === 0) return;
+    void serifFont.refresh().then((next) => {
+      if (!next) return;
+      if (
+        next.installed &&
+        prevFontInstalledRef.current === false &&
+        prefsRef.current.fontFamily === "serif"
+      ) {
+        notifyFontReady();
+      }
+      prevFontInstalledRef.current = next.installed;
+    });
+  }, [modelRevision, serifFont.refresh, notifyFontReady]);
+
+  const handleSelectSerif = useCallback(() => {
+    if (serifFont.status?.installed) {
+      updatePrefs({ fontFamily: "serif" });
+      return;
+    }
+    void serifFont.install().then((next) => {
+      if (next?.installed) {
+        prevFontInstalledRef.current = true;
+        updatePrefs({ fontFamily: "serif" });
+        notifyFontReady();
+      }
+    });
+  }, [serifFont.status?.installed, serifFont.install, updatePrefs, notifyFontReady]);
+
+  const serifFontView = useMemo<SerifFontView>(
+    () => ({
+      status: serifFont.status,
+      downloading: serifFont.op === "install",
+      progress: serifFont.progress,
+      error: serifFont.error,
+      onSelect: handleSelectSerif,
+    }),
+    [serifFont.status, serifFont.op, serifFont.progress, serifFont.error, handleSelectSerif],
+  );
 
   // Close appearance popover on outside pointerdown.
   useEffect(() => {
@@ -1203,6 +1258,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
                   prefs={prefs}
                   effectiveTheme={effectiveTheme}
                   onUpdate={updatePrefs}
+                  serifFont={serifFontView}
                 />
               )}
             </div>

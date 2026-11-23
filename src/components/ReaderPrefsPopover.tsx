@@ -1,11 +1,12 @@
 import { memo, useEffect, useState } from "react";
+import type { FontProgress, FontStatus } from "../lib/fonts";
+import { formatBytes } from "../lib/models";
 import {
   DEFAULT_SVO_COLORS,
   DEFAULT_SVO_OVERRIDES,
   hasCustomSvoColors,
   READER_PREFS_BOUNDS,
   type ReaderColumns,
-  type ReaderFontFamily,
   type ReaderPageMargin,
   type ReaderPrefs,
   type ReaderTextAlign,
@@ -14,10 +15,19 @@ import {
   type SvoRole,
 } from "../lib/readerPrefs";
 
+export interface SerifFontView {
+  status: FontStatus | null;
+  downloading: boolean;
+  progress: FontProgress | null;
+  error: string | null;
+  onSelect: () => void;
+}
+
 interface Props {
   prefs: ReaderPrefs;
   effectiveTheme: ReaderTheme;
   onUpdate: (patch: Partial<ReaderPrefs>) => void;
+  serifFont?: SerifFontView;
 }
 
 function useSystemDark(): boolean {
@@ -41,6 +51,7 @@ export const ReaderPrefsPopover = memo(function ReaderPrefsPopover({
   prefs,
   effectiveTheme,
   onUpdate,
+  serifFont,
 }: Props) {
   const systemDark = useSystemDark();
   const resolvedPaper: "light" | "sepia" | "dark" =
@@ -49,6 +60,13 @@ export const ReaderPrefsPopover = memo(function ReaderPrefsPopover({
       : effectiveTheme === "dark" || (effectiveTheme === "auto" && systemDark)
         ? "dark"
         : "light";
+  const serifInstalled = serifFont?.status?.installed ?? true;
+  const serifDownloading = serifFont?.downloading ?? false;
+  const serifTotal = serifFont?.progress?.total || serifFont?.status?.bytes || 0;
+  const serifRatio =
+    serifDownloading && serifFont?.progress && serifTotal > 0
+      ? Math.min(1, serifFont.progress.done / serifTotal)
+      : 0;
 
   return (
     <div className="dropdown-content card z-30 mt-2 max-h-[calc(100dvh-5rem)] w-72 overflow-y-auto bg-base-100 shadow-xl ring-1 ring-base-content/10">
@@ -121,25 +139,67 @@ export const ReaderPrefsPopover = memo(function ReaderPrefsPopover({
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-base-content/70">字体</span>
-          <div className="join">
-            {(
-              [
-                ["default", "默认"],
-                ["serif", "思源宋体"],
-              ] as [ReaderFontFamily, string][]
-            ).map(([fontFamily, label]) => (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-base-content/70">字体</span>
+            <div className="join">
               <button
-                key={fontFamily}
                 type="button"
-                className={`btn btn-xs join-item ${prefs.fontFamily === fontFamily ? "btn-primary" : "btn-ghost"}`}
-                onClick={() => onUpdate({ fontFamily })}
+                className={`btn btn-xs join-item ${prefs.fontFamily === "default" ? "btn-primary" : "btn-ghost"}`}
+                onClick={() => onUpdate({ fontFamily: "default" })}
               >
-                {label}
+                默认
               </button>
-            ))}
+              <button
+                type="button"
+                className={`btn btn-xs join-item ${prefs.fontFamily === "serif" && serifInstalled ? "btn-primary" : "btn-ghost"}`}
+                disabled={serifDownloading}
+                onClick={() => {
+                  if (serifFont) serifFont.onSelect();
+                  else onUpdate({ fontFamily: "serif" });
+                }}
+              >
+                {serifDownloading ? (
+                  <>
+                    <span className="loading loading-spinner loading-xs" />
+                    <span>下载中</span>
+                  </>
+                ) : (
+                  "思源宋体"
+                )}
+              </button>
+            </div>
           </div>
+          {serifDownloading && (
+            <div className="space-y-1">
+              <progress
+                className="progress progress-primary w-full"
+                value={serifRatio}
+                max={1}
+                aria-label="正在下载思源宋体"
+              />
+              <p className="text-xs tabular-nums text-base-content/60">
+                {serifFont?.progress
+                  ? `正在下载思源宋体 · ${Math.round(serifRatio * 100)}%`
+                  : "正在下载思源宋体…"}
+              </p>
+            </div>
+          )}
+          {!serifDownloading && serifFont?.error && (
+            <p role="alert" className="text-xs break-words text-error">
+              思源宋体下载失败：{serifFont.error}
+            </p>
+          )}
+          {!serifDownloading &&
+            !serifFont?.error &&
+            serifFont?.status &&
+            !serifFont.status.installed && (
+              <p className="text-xs text-base-content/55">
+                {serifFont.status.partial > 0
+                  ? `思源宋体未下完（已下载 ${formatBytes(serifFont.status.partial)} / ${formatBytes(serifFont.status.bytes)}），点击继续`
+                  : `首次使用需下载思源宋体（${formatBytes(serifFont.status.bytes)}）`}
+              </p>
+            )}
         </div>
 
         <div className="space-y-1">
