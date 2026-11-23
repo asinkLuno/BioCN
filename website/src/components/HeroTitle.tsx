@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -377,5 +378,52 @@ export function HeroBrandLockup({ children }: { children: ReactNode }) {
 
       {children}
     </div>
+  );
+}
+
+/** 静态版双螺旋标识，与 HeroHelix 共用几何路径与主题色变量，供海报/品牌锁排复用。 */
+export function HelixMark({ className = 'size-12' }: { className?: string }) {
+  const uid = useId().replace(/:/g, '');
+  const overMidId = `biocn-over-mid-${uid}`;
+  const gradOId = `biocn-grad-o-${uid}`;
+  const gradGId = `biocn-grad-g-${uid}`;
+
+  return (
+    <svg viewBox="0 0 100 100" className={className} aria-hidden="true">
+      <defs>
+        <clipPath id={overMidId}>
+          <rect x="34" y="40" width="32" height="20" />
+        </clipPath>
+        <linearGradient id={gradOId} gradientUnits="userSpaceOnUse" x1="0" y1="89.9" x2="0" y2="10.1">
+          <stop offset="0%" style={{ stopColor: 'var(--biocn-hero-o)' }} />
+          <stop offset="6.1%" style={{ stopColor: 'var(--biocn-hero-o)' }} />
+          <stop offset="11.1%" style={{ stopColor: 'var(--biocn-hero-o-shade)' }} />
+          <stop offset="16.1%" style={{ stopColor: 'var(--biocn-hero-o)' }} />
+          <stop offset="83.9%" style={{ stopColor: 'var(--biocn-hero-o)' }} />
+          <stop offset="88.9%" style={{ stopColor: 'var(--biocn-hero-o-shade)' }} />
+          <stop offset="93.9%" style={{ stopColor: 'var(--biocn-hero-o)' }} />
+          <stop offset="100%" style={{ stopColor: 'var(--biocn-hero-o)' }} />
+        </linearGradient>
+        <linearGradient id={gradGId} gradientUnits="userSpaceOnUse" x1="0" y1="89.9" x2="0" y2="10.1">
+          <stop offset="0%" style={{ stopColor: 'var(--biocn-hero-g)' }} />
+          <stop offset="45%" style={{ stopColor: 'var(--biocn-hero-g)' }} />
+          <stop offset="50%" style={{ stopColor: 'var(--biocn-hero-g-shade)' }} />
+          <stop offset="55%" style={{ stopColor: 'var(--biocn-hero-g)' }} />
+          <stop offset="100%" style={{ stopColor: 'var(--biocn-hero-g)' }} />
+        </linearGradient>
+      </defs>
+      <line x1="28" y1="65.5" x2="72" y2="65.5" stroke="var(--biocn-hero-p)" strokeWidth="3.8" strokeLinecap="round" />
+      <line x1="72" y1="34.5" x2="28" y2="34.5" stroke="var(--biocn-hero-p)" strokeWidth="3.8" strokeLinecap="round" />
+      <path d={STRAND_O} fill="none" stroke={`url(#${gradOId})`} strokeWidth="5.6" strokeLinecap="round" />
+      <path d={STRAND_G} fill="none" stroke={`url(#${gradGId})`} strokeWidth="5.6" strokeLinecap="round" />
+      <path
+        d={STRAND_O}
+        fill="none"
+        stroke={`url(#${gradOId})`}
+        strokeWidth="5.6"
+        strokeLinecap="round"
+        clipPath={`url(#${overMidId})`}
+      />
+    </svg>
   );
 }

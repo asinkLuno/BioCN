@@ -1,0 +1,33 @@
+/*
+ * 仅用于开发期海报预览/渲染子页面（posters.html -> src/posters.tsx），
+ * 不被 index.html 引用，因此不会进入生产构建产物。
+ * 仅保留 daisyUI 无等价类的 3:4 画布背景与正文段距规则。
+ */
+
+:root {
+  --font-serif: 'Noto Serif SC', 'Noto Serif CJK SC', 'Source Han Serif SC', ui-serif, Georgia, serif;
+}
+
+.poster-canvas {
+  position: relative;
+  width: 900px;
+  height: 1200px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 90% 45% at 15% 0%, color-mix(in oklch, var(--color-primary) 5%, transparent), transparent 62%),
+    radial-gradient(ellipse 70% 40% at 92% 100%, color-mix(in oklch, var(--color-secondary) 4.5%, transparent), transparent 60%),
+    var(--color-base-100);
+}
+
+.poster-reading.demo-heti.heti p {
+  margin-block: 0.34em;
+  text-indent: 2em;
+}
+
+.poster-reading.demo-heti.heti p:first-child {
+  margin-top: 0;
+}
+
+.poster-reading.demo-heti.heti p:last-child {
+  margin-bottom: 0;
+}

@@ -22,7 +22,7 @@ import subsetFont from 'subset-font';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const SRC = path.join(ROOT, 'src/main.tsx');
+const SRC = path.join(ROOT, 'src/showcase.tsx');
 const OUT_WOFF2 = path.join(ROOT, 'public/fonts/shs-demo.woff2');
 const OUT_CSS = path.join(ROOT, 'src/fonts/shs-demo.css');
 const FONT_SRC = path.join(ROOT, 'node_modules/.font-source/SourceHanSerifSC-Regular.otf');
