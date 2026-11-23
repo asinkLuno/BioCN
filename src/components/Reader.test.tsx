@@ -209,20 +209,11 @@ describe("reader", () => {
     act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
     postSpy.mockClear();
 
-    const toggleBtn = screen.getByRole("button", { name: "着色" });
-    expect(toggleBtn).toHaveAttribute("aria-pressed", "true");
-    await user.click(toggleBtn);
-    expect(toggleBtn).toHaveAttribute("aria-pressed", "false");
-    expect(postSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: "biocn-host",
-        type: "prefs",
-        prefs: expect.objectContaining({ coloringEnabled: false }),
-      }),
-      "*",
-    );
+    expect(screen.queryByRole("button", { name: "着色" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "阅读设置" }));
+    expect(screen.queryByRole("checkbox", { name: "主谓宾着色开关" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("主语颜色")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "分页" }));
     expect(postSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -460,7 +451,7 @@ describe("reader", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("cancels active coloring and skips coloring future chapters when the 着色 button is off", async () => {
+  it("keeps coloring permanently enabled across chapter navigation", async () => {
     const user = userEvent.setup();
     colorizeMock.mockResolvedValue({
       index: 1,
@@ -473,28 +464,15 @@ describe("reader", () => {
     const frame = (await screen.findByTitle("One")) as HTMLIFrameElement;
     act(() => sendFromFrame(frame, { source: "biocn-reader", type: "ready" }));
 
-    // Active coloring indicator is visible while enabled.
     expect(await screen.findByRole("status", { name: "本章着色进度" })).toHaveTextContent(
       "着色 20%",
     );
+    expect(screen.queryByRole("button", { name: "着色" })).not.toBeInTheDocument();
 
-    const toggleBtn = screen.getByRole("button", { name: "着色" });
-    await user.click(toggleBtn);
-    expect(toggleBtn).toHaveAttribute("aria-pressed", "false");
-    expect(document.activeElement).not.toBe(toggleBtn);
-    expect(cancelStreamMock).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("status", { name: "本章着色进度" })).not.toBeInTheDocument();
-
-    // Navigating to chapter 2 while coloring is off must NOT trigger coloring.
     colorizeMock.mockClear();
     await user.click(screen.getByRole("button", { name: "下一章" }));
     const ch2Frame = (await screen.findByTitle("Two")) as HTMLIFrameElement;
-    expect(ch2Frame.getAttribute("src")).toContain("biocn=off");
-    expect(colorizeMock).not.toHaveBeenCalled();
-
-    // Turning coloring back on starts coloring for chapter 2 immediately.
-    await user.click(toggleBtn);
-    expect(toggleBtn).toHaveAttribute("aria-pressed", "true");
+    expect(ch2Frame.getAttribute("src")).not.toContain("biocn=");
     await waitFor(() => expect(colorizeMock).toHaveBeenCalledWith("dune", 2));
   });
 

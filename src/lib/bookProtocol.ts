@@ -44,7 +44,6 @@ export function bookResourceUrl(
   if (initialPrefs) {
     params.push(`theme=${initialPrefs.theme}`);
     params.push(`mode=${initialPrefs.viewMode}`);
-    params.push(`biocn=${initialPrefs.coloringEnabled ? "on" : "off"}`);
     params.push(`font=${initialPrefs.fontFamily}`);
     params.push(`margin=${initialPrefs.pageMargin}`);
     params.push(`align=${initialPrefs.textAlign}`);

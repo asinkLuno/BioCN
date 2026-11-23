@@ -37,7 +37,6 @@ export interface ReaderPrefs {
   textAlign: ReaderTextAlign;
   pageAnimation: boolean;
   dimImagesInDark: boolean;
-  coloringEnabled: boolean;
   svoColors: SvoColors;
   columns: ReaderColumns;
 }
@@ -66,7 +65,6 @@ export const DEFAULT_READER_PREFS: ReaderPrefs = {
   textAlign: "default",
   pageAnimation: true,
   dimImagesInDark: true,
-  coloringEnabled: true,
   svoColors: DEFAULT_SVO_OVERRIDES,
   columns: "auto",
 };
@@ -155,10 +153,6 @@ function normalizePrefs(raw: unknown): ReaderPrefs {
           ),
         )
       : DEFAULT_READER_PREFS.paragraphSpacing;
-  const coloringEnabled =
-    typeof input.coloringEnabled === "boolean"
-      ? input.coloringEnabled
-      : DEFAULT_READER_PREFS.coloringEnabled;
 
   return {
     viewMode,
@@ -171,7 +165,6 @@ function normalizePrefs(raw: unknown): ReaderPrefs {
     textAlign,
     pageAnimation,
     dimImagesInDark,
-    coloringEnabled,
     svoColors,
     columns,
   };

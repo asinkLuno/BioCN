@@ -11,7 +11,7 @@
  *   or shifting scroll position.
  * - The viewport iframe fills `flex-1` natively and supports both vertical
  *   scrolled reading and CSS multi-column paginated reading (1 or 2 columns),
- *   plus live theme / typography / SVO coloring toggles and saved progress.
+ *   plus live theme / typography / SVO palette customization and saved progress.
  */
 
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -206,9 +206,6 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
   prefsRef.current = effectivePrefs;
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
-  const colorActiveRef = useRef(false);
-  colorActiveRef.current = colorState.active;
-  const needsReloadOnColorOnRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<{
     bookId: string;
@@ -414,7 +411,6 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
     flushProgress();
     clearPendingFootnoteRequest();
     closeFootnote();
-    needsReloadOnColorOnRef.current = false;
     lastSavedRef.current = null;
     setBook(null);
     setIndex(null);
@@ -615,28 +611,9 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
   const loadedBookId = book?.id ?? null;
 
   // Trigger P0 progressive coloring for the active chapter and subscribe to patches.
-  // Respect `prefs.coloringEnabled`: when turned off, cancel any running stream
-  // and skip analysis/prefetch instead of continuing to color in the background.
   useEffect(() => {
     void chapterRevision;
     if (index === null || loadedBookId !== id) return;
-    if (!prefs.coloringEnabled) {
-      if (colorActiveRef.current) {
-        needsReloadOnColorOnRef.current = true;
-      }
-      setColorState(INITIAL_COLOR_STATE);
-      void bookChapterCancelStream().catch(() => {});
-      return;
-    }
-    if (needsReloadOnColorOnRef.current) {
-      needsReloadOnColorOnRef.current = false;
-      pendingTargetRef.current = {
-        paragraphIndex: viewportRef.current.paragraphIndex,
-        ratio: viewportRef.current.ratio,
-      };
-      setReloadNonce((n) => n + 1);
-      return;
-    }
     let cancelled = false;
     let receivedPatch = false;
     let unlisten: (() => void) | undefined;
@@ -730,19 +707,19 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
       cancelled = true;
       unlisten?.();
     };
-  }, [id, index, loadedBookId, chapterRevision, prefs.coloringEnabled, getCurrentFrame]);
+  }, [id, index, loadedBookId, chapterRevision, getCurrentFrame]);
 
   // Quietly prefetch (P2) the next chapter once the user settles on the current chapter.
   useEffect(() => {
     const nextChapter = position?.next;
-    if (!prefs.coloringEnabled || !nextChapter || nextChapter.colored || colorState.missingModel) {
+    if (!nextChapter || nextChapter.colored || colorState.missingModel) {
       return;
     }
     const timer = setTimeout(() => {
       void bookChapterPrefetch(id, nextChapter.index).catch(() => {});
     }, 1200);
     return () => clearTimeout(timer);
-  }, [id, position?.next, colorState.missingModel, prefs.coloringEnabled]);
+  }, [id, position?.next, colorState.missingModel]);
 
   const navigateToChapter = useCallback(
     (targetIndex: number, target: ChapterTarget = {}) => {
@@ -759,7 +736,6 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
       }
       clearPendingFootnoteRequest();
       closeFootnote();
-      needsReloadOnColorOnRef.current = false;
       pendingTargetRef.current = target;
       setIndex(targetIndex);
     },
@@ -1154,10 +1130,9 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
       ? viewport.page < viewport.totalPages - 1 || Boolean(position?.next)
       : Boolean(position?.next);
 
-  const visibleColorState = prefs.coloringEnabled ? colorState : INITIAL_COLOR_STATE;
   const colorPercent =
-    visibleColorState.total > 0
-      ? Math.min(100, Math.round((visibleColorState.done / visibleColorState.total) * 100))
+    colorState.total > 0
+      ? Math.min(100, Math.round((colorState.done / colorState.total) * 100))
       : 0;
 
   // Keep chrome visible while loading or showing an error so the user always
@@ -1215,7 +1190,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
                 {position?.current.title && (
                   <span className="truncate">{position.current.title}</span>
                 )}
-                {visibleColorState.active && (
+                {colorState.active && (
                   <span
                     role="status"
                     aria-label="本章着色进度"
@@ -1225,7 +1200,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
                     着色 {colorPercent}%
                   </span>
                 )}
-                {visibleColorState.missingModel && (
+                {colorState.missingModel && (
                   <button
                     type="button"
                     className="badge badge-soft badge-warning badge-xs shrink-0 cursor-pointer hover:badge-warning"
@@ -1236,21 +1211,6 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
                 )}
               </div>
             </div>
-
-            <button
-              type="button"
-              className={`btn btn-sm ${prefs.coloringEnabled ? "btn-soft btn-primary" : "btn-ghost"}`}
-              aria-pressed={prefs.coloringEnabled}
-              title={prefs.coloringEnabled ? "关闭主谓宾着色" : "开启主谓宾着色"}
-              onClick={(event) => {
-                // Release pointer/touch focus so Android WebView doesn't keep a
-                // sticky highlight on the ghost button after toggling off.
-                if (event.detail > 0) event.currentTarget.blur();
-                updatePrefs({ coloringEnabled: !prefs.coloringEnabled });
-              }}
-            >
-              着色
-            </button>
 
             <div
               ref={prefsMenuRef}
@@ -1284,20 +1244,20 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
               目录
             </button>
           </div>
-          {visibleColorState.active && (
+          {colorState.active && (
             <progress
               className="progress progress-primary block h-0.5 w-full rounded-none"
-              value={visibleColorState.done}
-              max={Math.max(visibleColorState.total, 1)}
+              value={colorState.done}
+              max={Math.max(colorState.total, 1)}
             />
           )}
         </header>
 
-        {visibleColorState.error && (
+        {colorState.error && (
           <div className="absolute inset-x-0 top-14 z-10 mx-auto w-full max-w-3xl px-4">
             <div role="alert" className="alert alert-warning alert-soft py-2 text-xs shadow">
               <span className="flex-1 break-words">
-                本章着色暂时失败（仍可阅读原文）：{visibleColorState.error}
+                本章着色暂时失败（仍可阅读原文）：{colorState.error}
               </span>
               <button
                 type="button"

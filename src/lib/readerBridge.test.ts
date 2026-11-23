@@ -104,7 +104,6 @@ describe("reader iframe bridge.js", () => {
     delete (window as unknown as { __biocnBridge?: boolean }).__biocnBridge;
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-mode");
-    document.documentElement.removeAttribute("data-biocn");
     document.documentElement.removeAttribute("data-font");
     document.documentElement.removeAttribute("data-margin");
     document.documentElement.removeAttribute("data-align");
@@ -149,7 +148,6 @@ describe("reader iframe bridge.js", () => {
     );
 
     expect(document.documentElement.getAttribute("data-theme")).toBe("sepia");
-    expect(document.documentElement.getAttribute("data-biocn")).toBe("on");
     expect(document.documentElement.getAttribute("data-font")).toBe("serif");
     expect(document.documentElement.getAttribute("data-margin")).toBe("wide");
     expect(document.documentElement.getAttribute("data-align")).toBe("justify");
@@ -199,18 +197,6 @@ describe("reader iframe bridge.js", () => {
     expect(document.documentElement.style.getPropertyValue("--svo-subject")).toBe("");
     expect(document.querySelector(".svo-predicate")?.textContent).toBe("走");
     expect(document.querySelector("p")?.textContent).toBe("他走了。");
-
-    // Toggle coloring off live.
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        data: {
-          source: "biocn-host",
-          type: "prefs",
-          prefs: { ...DEFAULT_READER_PREFS, coloringEnabled: false },
-        },
-      }),
-    );
-    expect(document.documentElement.getAttribute("data-biocn")).toBe("off");
 
     // Internal relative link & external link interception.
     document.getElementById("rel")!.click();

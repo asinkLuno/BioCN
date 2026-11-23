@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { bookResourceUrl, resolveRelativeHref } from "./bookProtocol";
+import { DEFAULT_READER_PREFS } from "./readerPrefs";
 
 vi.mock("@tauri-apps/api/core", () => ({
   isTauri: vi.fn(() => true),
@@ -14,6 +15,9 @@ describe("bookProtocol", () => {
     expect(bookResourceUrl("abc123", "OEBPS/ch1.xhtml", 2)).toBe(
       "book://localhost/abc123/OEBPS/ch1.xhtml?v=2",
     );
+    const styled = bookResourceUrl("abc123", "OEBPS/ch1.xhtml", 1, DEFAULT_READER_PREFS);
+    expect(styled).toContain("theme=auto");
+    expect(styled).not.toContain("biocn=");
   });
 
   it("resolves relative EPUB chapter links and anchors", () => {

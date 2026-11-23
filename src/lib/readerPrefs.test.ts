@@ -22,7 +22,6 @@ describe("readerPrefs", () => {
       textAlign: "justify",
       pageAnimation: false,
       dimImagesInDark: false,
-      coloringEnabled: false,
       svoColors: { subject: "#D95F02", predicate: "bad", object: null },
       columns: 2,
     });
@@ -38,9 +37,18 @@ describe("readerPrefs", () => {
       textAlign: "justify",
       pageAnimation: false,
       dimImagesInDark: false,
-      coloringEnabled: false,
       svoColors: { subject: "#d95f02", predicate: null, object: null },
       columns: 2,
     });
+  });
+
+  it("ignores legacy coloringEnabled flags stored by older versions", () => {
+    window.localStorage.setItem(
+      "biocn:reader-prefs:v1",
+      JSON.stringify({ ...DEFAULT_READER_PREFS, coloringEnabled: false }),
+    );
+    const loaded = loadReaderPrefs();
+    expect(loaded).toEqual(DEFAULT_READER_PREFS);
+    expect("coloringEnabled" in loaded).toBe(false);
   });
 });

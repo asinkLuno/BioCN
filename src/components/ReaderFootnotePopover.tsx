@@ -194,9 +194,9 @@ function renderNodes(nodes: FootnoteNode[], handlers: RenderHandlers, prefix: st
           />
         );
       case "svo": {
-        const style: CSSProperties | undefined = handlers.prefs.coloringEnabled
-          ? { color: svoColorFor(node.role, handlers.prefs, handlers.effectiveTheme) }
-          : undefined;
+        const style: CSSProperties = {
+          color: svoColorFor(node.role, handlers.prefs, handlers.effectiveTheme),
+        };
         return (
           <span key={key} style={style}>
             {renderNodes(node.children, handlers, key)}

@@ -340,71 +340,58 @@ export const ReaderPrefsPopover = memo(function ReaderPrefsPopover({
 
         <div className="divider my-0" />
 
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium text-base-content/70">主谓宾着色</span>
-          <input
-            type="checkbox"
-            aria-label="主谓宾着色开关"
-            className="toggle toggle-primary toggle-sm"
-            checked={prefs.coloringEnabled}
-            onChange={(event) => onUpdate({ coloringEnabled: event.target.checked })}
-          />
-        </div>
-
-        {prefs.coloringEnabled && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-base-content/70">颜色</span>
-              {hasCustomSvoColors(prefs.svoColors) && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs h-6 min-h-6 px-1.5 text-base-content/60"
-                  onClick={() => onUpdate({ svoColors: DEFAULT_SVO_OVERRIDES })}
-                >
-                  恢复默认
-                </button>
-              )}
-            </div>
-            <div className="grid grid-cols-3 gap-1.5">
-              {(
-                [
-                  ["subject", "主语"],
-                  ["predicate", "谓语"],
-                  ["object", "宾语"],
-                ] as [SvoRole, string][]
-              ).map(([role, label]) => {
-                const color = prefs.svoColors[role] ?? DEFAULT_SVO_COLORS[resolvedPaper][role];
-                return (
-                  <label
-                    key={role}
-                    className="btn btn-xs btn-ghost relative h-7 min-h-7 justify-center gap-1.5 border border-base-content/15 font-normal"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="size-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: color }}
-                    />
-                    <span>{label}</span>
-                    <input
-                      type="color"
-                      aria-label={`${label}颜色`}
-                      value={color}
-                      onChange={(event) =>
-                        onUpdate({
-                          svoColors: {
-                            ...prefs.svoColors,
-                            [role]: event.target.value,
-                          },
-                        })
-                      }
-                      className="sr-only"
-                    />
-                  </label>
-                );
-              })}
-            </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-base-content/70">主谓宾配色</span>
+            {hasCustomSvoColors(prefs.svoColors) && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs h-6 min-h-6 px-1.5 text-base-content/60"
+                onClick={() => onUpdate({ svoColors: DEFAULT_SVO_OVERRIDES })}
+              >
+                恢复默认
+              </button>
+            )}
           </div>
-        )}
+          <div className="grid grid-cols-3 gap-1.5">
+            {(
+              [
+                ["subject", "主语"],
+                ["predicate", "谓语"],
+                ["object", "宾语"],
+              ] as [SvoRole, string][]
+            ).map(([role, label]) => {
+              const color = prefs.svoColors[role] ?? DEFAULT_SVO_COLORS[resolvedPaper][role];
+              return (
+                <label
+                  key={role}
+                  className="btn btn-xs btn-ghost relative h-7 min-h-7 justify-center gap-1.5 border border-base-content/15 font-normal"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="size-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: color }}
+                  />
+                  <span>{label}</span>
+                  <input
+                    type="color"
+                    aria-label={`${label}颜色`}
+                    value={color}
+                    onChange={(event) =>
+                      onUpdate({
+                        svoColors: {
+                          ...prefs.svoColors,
+                          [role]: event.target.value,
+                        },
+                      })
+                    }
+                    className="sr-only"
+                  />
+                </label>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );

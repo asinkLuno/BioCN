@@ -257,12 +257,7 @@ span[data-bp] {
   line-height: 0;
 }
 
-/* 主谓宾 SVO coloring — only applied while coloring is enabled; off-state rule
-   also neutralizes any pre-styled .svo classes from exported BioCN EPUBs. */
-html:not([data-biocn="off"]) .svo.svo-subject { color: var(--svo-subject) !important; }
-html:not([data-biocn="off"]) .svo.svo-predicate { color: var(--svo-predicate) !important; }
-html:not([data-biocn="off"]) .svo.svo-object { color: var(--svo-object) !important; }
-
-html[data-biocn="off"] .svo {
-  color: inherit !important;
-}
+/* 主谓宾 SVO coloring — always active inside the reader. */
+.svo.svo-subject { color: var(--svo-subject) !important; }
+.svo.svo-predicate { color: var(--svo-predicate) !important; }
+.svo.svo-object { color: var(--svo-object) !important; }

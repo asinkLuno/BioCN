@@ -67,7 +67,6 @@
 
     root.setAttribute("data-theme", prefs.theme || "auto");
     root.setAttribute("data-mode", prefs.viewMode || "scrolled");
-    root.setAttribute("data-biocn", prefs.coloringEnabled === false ? "off" : "on");
     root.setAttribute("data-font", prefs.fontFamily === "serif" ? "serif" : "default");
     root.setAttribute(
       "data-margin",
