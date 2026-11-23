@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * 启动本地 Vite 开发服务器访问 /posters.html?poster=1..3，
- * 调用系统 Chrome 无头渲染 3 张 3:4 高清 PNG（1800×2400 @2x）到 design/posters/。
+ * 启动本地 Vite 开发服务器访问 /posters.html?poster=1..2，
+ * 调用系统 Chrome 无头渲染 2 张 3:4 高清 PNG（1800×2400 @2x）到 design/posters/。
  *
  * 用法（在 website/ 目录下）：yarn posters:render
  */
@@ -21,8 +21,7 @@ const OUT_DIR = path.resolve(WEBSITE_ROOT, '../design/posters');
 
 const POSTERS = [
   { id: '1', file: '01-cover.png' },
-  { id: '2', file: '02-why-biocn.png' },
-  { id: '3', file: '03-benchmark-download.png' },
+  { id: '2', file: '02-why-and-benchmark.png' },
 ];
 
 function findChrome() {
