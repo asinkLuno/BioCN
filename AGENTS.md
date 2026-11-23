@@ -33,3 +33,9 @@ Cross-platform desktop app: Tauri 2 (Rust, `src-tauri/`) + React 19 + TypeScript
   - Baseline summary line: `更新基线：在 v<previous> 基础上……`.
   - One or more `### <功能分组>` sections with user-facing `- ` bullet points (no raw commit hashes or CI build numbers).
 - Run `yarn release:notes:draft` to group commits since the previous tag as a starting point, refine the wording for end users, and verify with `yarn release:notes:check` (`release.yml`'s `guard` job enforces this check).
+
+## Bug Tracking
+
+- Use `https://github.com/asinkLuno/BioCN/issues/1` as the central bug-tracking checklist (keep the issue open).
+- Whenever pushing bug fixes to GitHub, update issue `#1` to track the fix: move resolved items into「已修复」with `- [x]`, attach the commit hash and a brief fix summary, and post a short update comment.
+- If `gh issue edit` / `gh issue comment` fails against GraphQL, update via the REST API (`gh api --method PATCH repos/asinkLuno/BioCN/issues/1` and `POST repos/asinkLuno/BioCN/issues/1/comments`).
