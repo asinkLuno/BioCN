@@ -273,22 +273,16 @@ span[data-bp] {
    Heti's container-level `max-width`, `::before/::after { display: table }`
    and hard-coded dark palette are deliberately omitted so pagination column
    metrics, #biocn-page-tail and the four `data-theme` palettes stay in charge.
-   Pure CSS (no heti-addon.js) keeps span[data-bp] / span[data-br] untouched. */
+   WebViews missing text-spacing-trim / text-autospace get the same look from
+   the DOM fallback further down (injected by bridge.js), which never touches
+   span[data-bp] / span[data-br]. Alignment, font and indent stay under the
+   user's own 对齐 / 字体 preferences. */
 html[data-typography="heti-modern"] body,
 html[data-typography="heti-classic"] body {
   line-break: strict;
   text-spacing-trim: space-all;
   text-autospace: normal;
   text-justify: inter-ideograph;
-}
-
-html[data-typography="heti-modern"] body p:not([align]),
-html[data-typography="heti-modern"] body li,
-html[data-typography="heti-modern"] body blockquote,
-html[data-typography="heti-classic"] body p:not([align]),
-html[data-typography="heti-classic"] body li,
-html[data-typography="heti-classic"] body blockquote {
-  text-align: justify !important;
 }
 
 html[data-typography="heti-modern"] body h1,
@@ -342,19 +336,22 @@ html[data-typography="heti-classic"] body hr {
   margin: 2em auto !important;
 }
 
-/* 「传统书刊」: Songti body plus the classic two-character first-line indent.
-   shortcut: indented via :not([align]) only, so centred poems/titles that use a
-   class or inline style instead of the align attribute keep their own layout. */
-html[data-typography="heti-classic"] body,
-html[data-typography="heti-classic"] body *:not(code):not(pre):not(kbd):not(samp) {
-  font-family: "BioCN Source Han Serif", "Source Han Serif SC", "Noto Serif SC",
-    "Songti SC", "STSong", "SimSun", Georgia, serif !important;
-}
-
-html[data-typography="heti-classic"] body p:not([align]):not([style*="center"]) {
+/* shortcut: centre/right paragraphs are detected by align attribute, class name
+   and inline style only; an exotic EPUB selector still gets the indent. */
+html[data-typography="heti-classic"] body p:not([align]):not([class*="center"]):not([class*="right"]):not([style*="center"]):not([style*="right"]) {
   text-indent: 2em !important;
 }
 
+/* 插图段落不留首行缩进,否则满宽图片会被推出右缘。 */
+@supports selector(:has(*)) {
+  html[data-typography="heti-classic"] body p:has(> img:only-child),
+  html[data-typography="heti-classic"] body p:has(> figure:only-child) {
+    text-indent: 0 !important;
+  }
+}
+
+/* 命名沿用赫蹏:包裹的是汉字时 start/end 指汉字那一侧;这里包裹的是整段西文,
+   所以 heti-spacing-start 缩右侧、heti-spacing-end 缩左侧,读起来正好相反。 */
 /* Old-WebView fallback wrappers injected by bridge.js (Heti's class names, same
    0.25em / -0.5em / -0.25em contract). Gated on data-typography so switching back
    to 「原书」 leaves any leftover wrappers visually inert. */
