@@ -158,9 +158,10 @@ export const ReaderPrefsPopover = memo(function ReaderPrefsPopover({
                 type="button"
                 className={`btn btn-xs join-item ${prefs.typography === typography ? "btn-primary" : "btn-ghost"}`}
                 onClick={() =>
-                  // 「书刊」排版就是宋体:顺带选中字体,让下载/热刷新只有一条通路。
+                  // 「书刊」排版就是宋体:已安装时顺带选中;未安装时不硬切,
+                  // 否则「默认」「思源宋体」两个按钮会同时不亮。
                   onUpdate(
-                    typography === "heti-classic"
+                    typography === "heti-classic" && serifInstalled
                       ? { typography, fontFamily: "serif" }
                       : { typography },
                   )
