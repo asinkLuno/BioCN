@@ -1,7 +1,35 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import bridgeSource from "../../src-tauri/src/protocol/bridge.js?raw";
 import { isFrameMessage } from "./readerBridge";
 import { DEFAULT_READER_PREFS } from "./readerPrefs";
+
+// 每个用例都重新注入一遍 bridge,旧实例的监听不会自动退场,留着会按旧的支持矩阵
+// 再改一遍 DOM。拦住 addEventListener 记下句柄,用例之间统一摘掉。
+const spawned: { target: EventTarget; type: string; fn: EventListenerOrEventListenerObject }[] = [];
+
+beforeEach(() => {
+  // jsdom 的 window 自己实现了 addEventListener,不在 EventTarget.prototype 上。
+  const addWindow = window.addEventListener.bind(window);
+  const addProto = EventTarget.prototype.addEventListener;
+  vi.spyOn(window, "addEventListener").mockImplementation((type, fn, options) => {
+    if (fn) spawned.push({ target: window, type, fn });
+    addWindow(type, fn, options);
+  });
+  vi.spyOn(EventTarget.prototype, "addEventListener").mockImplementation(function (
+    this: EventTarget,
+    type: string,
+    fn: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ) {
+    if (fn) spawned.push({ target: this, type, fn });
+    return addProto.call(this, type, fn, options);
+  });
+});
+
+afterEach(() => {
+  for (const { target, type, fn } of spawned.splice(0)) target.removeEventListener(type, fn);
+  vi.restoreAllMocks();
+});
 
 describe("isFrameMessage boundary validation", () => {
   it("accepts valid messages and rejects malformed payloads or unsafe external schemes", () => {
@@ -93,6 +121,46 @@ describe("isFrameMessage boundary validation", () => {
         html: "<p>尾注内容</p>",
       }),
     ).toBe(true);
+  });
+});
+
+describe("reader iframe bridge.js on a WebView with native text-spacing", () => {
+  // supports 在 boot 时固化,而老实例的监听不会退场:本组必须排在文件最前面,
+  // 后面 DOM 兜底实例才不会污染"没有注入包裹"的断言。
+  beforeEach(() => {
+    delete (window as unknown as { __biocnBridge?: boolean }).__biocnBridge;
+    document.body.innerHTML = `<p id="plain">中文abc中文。「测试」</p>`;
+    vi.spyOn(window.parent, "postMessage").mockImplementation(() => {});
+    bootBridge(() => true);
+  });
+
+  function bootBridge(supports: (prop: string, value?: string) => boolean) {
+    delete (window as unknown as { __biocnBridge?: boolean }).__biocnBridge;
+    vi.spyOn(CSS, "supports").mockImplementation(supports as never);
+    new Function(bridgeSource)();
+  }
+
+  function dispatchPrefs(overrides: Record<string, unknown>) {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { source: "biocn-host", type: "prefs", prefs: { ...DEFAULT_READER_PREFS, ...overrides } },
+      }),
+    );
+  }
+
+  it("leaves native CJK spacing alone", () => {
+    dispatchPrefs({ typography: "heti-modern" });
+
+    expect(document.querySelector("heti-spacing")).toBeNull();
+    expect(document.querySelector("heti-adjacent")).toBeNull();
+  });
+
+  it("adds the gap but never squeezes when only text-spacing-trim is available", () => {
+    bootBridge((prop) => prop === "text-spacing-trim");
+    dispatchPrefs({ typography: "heti-modern" });
+
+    expect(document.querySelector("heti-spacing")?.textContent).toBe("abc");
+    expect(document.querySelector("heti-adjacent")).toBeNull();
   });
 });
 
@@ -604,6 +672,12 @@ describe("reader iframe bridge.js", () => {
     );
   }
 
+  function dispatchPatch(patches: { key: string; html: string }[]) {
+    window.dispatchEvent(
+      new MessageEvent("message", { data: { source: "biocn-host", type: "patch", patches } }),
+    );
+  }
+
   it("adds CJK/Latin gaps and squeezes punctuation when the WebView lacks text-spacing-trim", () => {
     document.body.innerHTML = `
       <p id="plain">中文abc中文。「测试」</p>
@@ -633,6 +707,46 @@ describe("reader iframe bridge.js", () => {
 
     expect(document.querySelector("heti-spacing")).toBeNull();
     expect(document.querySelector("heti-adjacent")).toBeNull();
+  });
+
+  it("does not bridge gaps across sibling blocks", () => {
+    document.body.innerHTML = `<blockquote><p>中文</p><p>abc</p></blockquote>`;
+    dispatchPrefs({ typography: "heti-modern" });
+
+    // 外层 blockquote 自己也是一段:第二段行首的 abc 不能借用上一段末尾的"文"。
+    expect(document.querySelectorAll("blockquote heti-spacing")).toHaveLength(0);
+  });
+
+  it("squeezes the half-width gap between adjacent punctuation", () => {
+    document.body.innerHTML = `<p id="punct">「甲」，乙。《丙》《丁》</p>`;
+    dispatchPrefs({ typography: "heti-modern" });
+
+    expect(
+      Array.from(document.querySelectorAll("#punct heti-adjacent")).map((el) => el.textContent),
+    ).toEqual(["」", "。", "》"]);
+  });
+
+  it("adds the gap when a patched run sits inside an inline element", () => {
+    document.body.innerHTML = `<p>中文<em id="em"><span data-br="0-1">abc</span></em>中文</p>`;
+    dispatchPrefs({ typography: "heti-modern" });
+
+    dispatchPatch([{ key: "0-1", html: '<span class="svo svo-subject">abc</span>' }]);
+
+    // 补丁后的行内元素不该挡住两侧的汉字。
+    expect(document.querySelector("#em heti-spacing")?.className).toBe(
+      "heti-spacing-end heti-spacing-start",
+    );
+  });
+
+  it("re-runs the fallback after switching back from 原书 following a patch", () => {
+    document.body.innerHTML = `<p><span data-bp="0"></span><span data-br="0-0">中文abc</span></p>`;
+    dispatchPrefs({ typography: "book" });
+    dispatchPatch([{ key: "0-0", html: "中文abc" }]);
+    expect(document.querySelector("heti-spacing")).toBeNull();
+
+    dispatchPrefs({ typography: "heti-modern" });
+
+    expect(document.querySelector("heti-spacing")?.textContent).toBe("abc");
   });
 
   it("re-spacifies patched runs and re-paginates without losing the reading anchor", async () => {
