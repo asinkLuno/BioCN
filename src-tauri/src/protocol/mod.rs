@@ -332,7 +332,7 @@ impl InitialStyle {
                     if let Ok(n) = v.parse::<f32>()
                         && n.is_finite()
                     {
-                        style.line_height = n.clamp(1.4, 2.4);
+                        style.line_height = n.clamp(1.4, 5.0);
                     }
                 }
                 "ps" => {

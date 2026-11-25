@@ -50,7 +50,7 @@ export const DEFAULT_SVO_OVERRIDES: SvoColors = {
 /** Single source of truth for slider & normalization limits. */
 export const READER_PREFS_BOUNDS = {
   fontSize: { min: 13, max: 28, step: 1 },
-  lineHeight: { min: 1.4, max: 2.4, step: 0.1 },
+  lineHeight: { min: 1.4, max: 5.0, step: 0.1 },
   paragraphSpacing: { min: 0.4, max: 2.0, step: 0.1 },
 } as const;
 
