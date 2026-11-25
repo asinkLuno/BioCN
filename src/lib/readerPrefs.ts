@@ -7,6 +7,7 @@
 
 export type ReaderViewMode = "scrolled" | "paginated";
 export type ReaderTheme = "auto" | "light" | "sepia" | "dark";
+export type ReaderTypography = "book" | "heti-modern" | "heti-classic";
 export type ReaderColumns = "auto" | 1 | 2;
 export type ReaderFontFamily = "default" | "serif";
 export type ReaderPageMargin = "compact" | "normal" | "wide";
@@ -29,6 +30,7 @@ export const DEFAULT_SVO_COLORS: Record<"light" | "sepia" | "dark", Record<SvoRo
 export interface ReaderPrefs {
   viewMode: ReaderViewMode;
   theme: ReaderTheme;
+  typography: ReaderTypography;
   fontFamily: ReaderFontFamily;
   fontSize: number;
   lineHeight: number;
@@ -57,6 +59,7 @@ export const READER_PREFS_BOUNDS = {
 export const DEFAULT_READER_PREFS: ReaderPrefs = {
   viewMode: "scrolled",
   theme: "auto",
+  typography: "book",
   fontFamily: "default",
   fontSize: 17,
   lineHeight: 1.9,
@@ -108,6 +111,10 @@ function normalizePrefs(raw: unknown): ReaderPrefs {
     input.theme === "light" || input.theme === "sepia" || input.theme === "dark"
       ? input.theme
       : "auto";
+  const typography: ReaderTypography =
+    input.typography === "heti-modern" || input.typography === "heti-classic"
+      ? input.typography
+      : "book";
   const fontFamily: ReaderFontFamily = input.fontFamily === "serif" ? "serif" : "default";
   const pageMargin: ReaderPageMargin =
     input.pageMargin === "compact" || input.pageMargin === "wide" ? input.pageMargin : "normal";
@@ -157,6 +164,7 @@ function normalizePrefs(raw: unknown): ReaderPrefs {
   return {
     viewMode,
     theme,
+    typography,
     fontFamily,
     fontSize,
     lineHeight,
