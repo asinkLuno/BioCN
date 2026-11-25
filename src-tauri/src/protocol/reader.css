@@ -111,6 +111,20 @@ body p {
   margin-bottom: var(--reader-para-spacing) !important;
 }
 
+/* Line spacing is a reading preference, so it must beat the book's own
+   per-chapter line-height rules (`p {}`, `div {}`, classed paragraphs) —
+   inheriting from `body` alone only reaches chapters whose CSS leaves it
+   unset, which looks like the slider "only works in the current chapter".
+   The heading rules lower down win on specificity, and the media reset is its
+   own rule so WebViews without `:has` (e.g. Ubuntu 22.04) still get the fix. */
+body :where(*:not(pre):not(pre *):not(code):not(kbd):not(samp):not(svg):not(img):not(video):not(sub):not(sup)) {
+  line-height: var(--reader-line-height) !important;
+}
+
+body :where(:has(> img, > picture, > video, > svg)) {
+  line-height: normal !important;
+}
+
 /* Optional justified alignment. */
 html[data-align="justify"] body p,
 html[data-align="justify"] body li,
