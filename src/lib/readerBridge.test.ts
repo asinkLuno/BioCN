@@ -128,10 +128,8 @@ describe("reader iframe bridge.js on a WebView with native text-spacing", () => 
   // supports 在 boot 时固化,而老实例的监听不会退场:本组必须排在文件最前面,
   // 后面 DOM 兜底实例才不会污染"没有注入包裹"的断言。
   beforeEach(() => {
-    delete (window as unknown as { __biocnBridge?: boolean }).__biocnBridge;
     document.body.innerHTML = `<p id="plain">中文abc中文。「测试」</p>`;
     vi.spyOn(window.parent, "postMessage").mockImplementation(() => {});
-    bootBridge(() => true);
   });
 
   function bootBridge(supports: (prop: string, value?: string) => boolean) {
@@ -149,6 +147,7 @@ describe("reader iframe bridge.js on a WebView with native text-spacing", () => 
   }
 
   it("leaves native CJK spacing alone", () => {
+    bootBridge(() => true);
     dispatchPrefs({ typography: "heti-modern" });
 
     expect(document.querySelector("heti-spacing")).toBeNull();
@@ -161,6 +160,8 @@ describe("reader iframe bridge.js on a WebView with native text-spacing", () => 
 
     expect(document.querySelector("heti-spacing")?.textContent).toBe("abc");
     expect(document.querySelector("heti-adjacent")).toBeNull();
+    // 只补空隙时正文必须原样留下,不能因为跳过挤压把中文切片丢掉。
+    expect(document.getElementById("plain")?.textContent).toBe("中文abc中文。「测试」");
   });
 });
 
@@ -740,6 +741,8 @@ describe("reader iframe bridge.js", () => {
 
   it("re-runs the fallback after switching back from 原书 following a patch", () => {
     document.body.innerHTML = `<p><span data-bp="0"></span><span data-br="0-0">中文abc</span></p>`;
+    // 先在中文排版下跑过一次(spacified === true),再切回原书,补丁才算「原书期间到达」。
+    dispatchPrefs({ typography: "heti-modern" });
     dispatchPrefs({ typography: "book" });
     dispatchPatch([{ key: "0-0", html: "中文abc" }]);
     expect(document.querySelector("heti-spacing")).toBeNull();

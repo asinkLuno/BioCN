@@ -233,6 +233,14 @@
     return changed;
   }
 
+  // 补空隙之外的文本原样留下:只缺挤压时不挤压,但也绝不吞字。
+  function appendPlain(frag, text) {
+    if (!text) return false;
+    if (trimFallback) return appendAdjacent(frag, text);
+    frag.appendChild(document.createTextNode(text));
+    return false;
+  }
+
   // 中西文加空:整段西文(字母/数字)前后是汉字时包一层,两侧分别是两种外边距。
   // outer(dir) 取本节点之外的相邻字符,用来覆盖「中文<em>abc</em>中文」这种整段
   // 西文被行内元素包住的常见排法。
@@ -243,24 +251,21 @@
     var changed = false;
     var m;
     LATIN_RUN_RE.lastIndex = 0;
-    while ((m = LATIN_RUN_RE.exec(text))) {
+    // 只缺挤压时不看西文 run,整段交给下面的标点挤压。
+    while (autospaceFallback && (m = LATIN_RUN_RE.exec(text))) {
       var end = m.index + m[0].length;
       var cls = "";
-      if (autospaceFallback) {
-        var before = m.index > 0 ? text.charAt(m.index - 1) : outer(-1);
-        var after = end < text.length ? text.charAt(end) : outer(1);
-        if (CJK_RE.test(before)) cls += " heti-spacing-end";
-        if (CJK_RE.test(after)) cls += " heti-spacing-start";
-      }
+      var before = m.index > 0 ? text.charAt(m.index - 1) : outer(-1);
+      var after = end < text.length ? text.charAt(end) : outer(1);
+      if (CJK_RE.test(before)) cls += " heti-spacing-end";
+      if (CJK_RE.test(after)) cls += " heti-spacing-start";
       if (!cls) continue;
-      if (m.index > last && trimFallback && appendAdjacent(frag, text.slice(last, m.index))) {
-        changed = true;
-      }
+      if (m.index > last && appendPlain(frag, text.slice(last, m.index))) changed = true;
       frag.appendChild(spacingElement("heti-spacing", cls.slice(1), m[0]));
       changed = true;
       last = end;
     }
-    if (trimFallback && appendAdjacent(frag, text.slice(last))) changed = true;
+    if (appendPlain(frag, text.slice(last))) changed = true;
     return changed ? frag : null;
   }
 
