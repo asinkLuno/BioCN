@@ -17,6 +17,8 @@
     lastParagraph: null,
     slideRaf: 0,
     suppressClickUntil: 0,
+    typography: "book",
+    spacified: false,
   };
 
   function cancelSlide() {
@@ -60,6 +62,214 @@
     }
   }
 
+  // 「现代中文」/「传统书刊」的老 WebView 兜底(issue #2):不认 CSS 的
+  // text-spacing-trim / text-autospace 时,用与赫蹏同名的行内包裹元素补上
+  // 中西文之间的空隙和全角标点挤压,样式见 reader.css 里受 data-typography 门控的规则。
+  // shortcut: 两条属性共用一个检测(text-spacing-trim);只支持挤压、不支持自动加空的
+  // WebView 会两样都拿不到,真遇到了再分开检测。
+  var CJK_RE =
+    /[\u2e80-\u2eff\u2f00-\u2fdf\u3040-\u309f\u30a0-\u30fa\u30fc-\u30ff\u3100-\u312f\u3200-\u32ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+  var LATIN_RUN_RE = /[A-Za-z0-9\u00c0-\u00ff\u0370-\u03ff]+/g;
+  var PUNCT_STOP = "。．，、：；！？⁇‼";
+  var PUNCT_OPEN = "「『（《〈【〖〔［｛";
+  var PUNCT_CLOSE = "」』）》〉】〗〕］｝";
+  var PUNCT_SEP = "·・‧";
+  var PUNCT_QUOTE = "“‘”’";
+  var SPACING_SKIP_TAGS = {
+    script: 1,
+    style: 1,
+    code: 1,
+    pre: 1,
+    kbd: 1,
+    samp: 1,
+    textarea: 1,
+    svg: 1,
+    math: 1,
+    "heti-spacing": 1,
+    "heti-adjacent": 1,
+  };
+  var SPACING_BLOCKS = "p, li, dd, dt, blockquote, td, th, figcaption, h1, h2, h3, h4, h5, h6";
+  var SHOW_TEXT = 4;
+  var FILTER_ACCEPT = 1;
+  var FILTER_REJECT = 2;
+  var spacingFallback = false;
+  try {
+    spacingFallback = !(
+      window.CSS &&
+      typeof window.CSS.supports === "function" &&
+      window.CSS.supports("text-spacing-trim", "space-all")
+    );
+  } catch (_) {
+    spacingFallback = true;
+  }
+
+  function spacingElement(tag, className, text) {
+    var el = document.createElement(tag);
+    el.className = className;
+    el.appendChild(document.createTextNode(text));
+    return el;
+  }
+
+  function adjacentClass(a, b) {
+    var open = PUNCT_OPEN.indexOf(b) >= 0;
+    var close = PUNCT_CLOSE.indexOf(b) >= 0;
+    if (
+      (PUNCT_STOP.indexOf(a) >= 0 && (open || close)) ||
+      (PUNCT_OPEN.indexOf(a) >= 0 && open) ||
+      (PUNCT_CLOSE.indexOf(a) >= 0 && close)
+    ) {
+      return "heti-adjacent-half";
+    }
+    if (
+      (PUNCT_SEP.indexOf(a) >= 0 && open) ||
+      (PUNCT_CLOSE.indexOf(a) >= 0 && PUNCT_SEP.indexOf(b) >= 0)
+    ) {
+      return "heti-adjacent-quarter";
+    }
+    if (
+      (PUNCT_STOP.indexOf(a) >= 0 && PUNCT_QUOTE.indexOf(b) >= 0) ||
+      (a === "“" && open)
+    ) {
+      return "heti-adjacent-quarter";
+    }
+    return "";
+  }
+
+  // 不进也不穿透:脚本样式等,以及渐进着色/进度锚点(靠属性定位,内容不能动)。
+  function skippedForSpacing(el) {
+    if (SPACING_SKIP_TAGS[(el.nodeName || "").toLowerCase()]) return true;
+    return !!(
+      el.getAttribute &&
+      (el.getAttribute("data-br") !== null || el.getAttribute("data-bp") !== null)
+    );
+  }
+
+  // 取元素某一侧最外层的可见字符,空文本节点往下顺延。
+  function edgeChar(el, dir) {
+    if (el.nodeType === 3) {
+      var value = el.nodeValue;
+      if (!value) return "";
+      return dir < 0 ? value.slice(-1) : value.charAt(0);
+    }
+    if (el.nodeType !== 1 || skippedForSpacing(el)) return "";
+    var node = el;
+    while (node) {
+      node = dir < 0 ? node.lastChild : node.firstChild;
+      if (!node) return "";
+      if (node.nodeType === 3) return edgeChar(node, dir);
+      if (node.nodeType !== 1 || skippedForSpacing(node)) return "";
+    }
+    return "";
+  }
+
+  // 跨行内元素找紧邻的字符,碰到所属块级容器就停(不跨段落加空)。
+  function outerChars(node, block) {
+    return function (dir) {
+      var cur = node;
+      while (cur && cur !== block) {
+        var sib = dir < 0 ? cur.previousSibling : cur.nextSibling;
+        while (sib) {
+          var ch = edgeChar(sib, dir);
+          if (ch) return ch;
+          sib = dir < 0 ? sib.previousSibling : sib.nextSibling;
+        }
+        cur = cur.parentNode;
+      }
+      return "";
+    };
+  }
+
+  // 相邻全角标点挤压:把前一个标点单独包起来,靠负外边距收回半个字宽。
+  function appendAdjacent(frag, text) {
+    var last = 0;
+    var changed = false;
+    for (var i = 0; i < text.length - 1; i++) {
+      var cls = adjacentClass(text.charAt(i), text.charAt(i + 1));
+      if (!cls) continue;
+      if (i > last) frag.appendChild(document.createTextNode(text.slice(last, i)));
+      frag.appendChild(spacingElement("heti-adjacent", cls, text.charAt(i)));
+      last = i + 1;
+      changed = true;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    return changed;
+  }
+
+  // 中西文加空:整段西文(字母/数字)前后是汉字时包一层,两侧分别是两种外边距。
+  // outer(dir) 取本节点之外的相邻字符,用来覆盖「中文<em>abc</em>中文」这种整段
+  // 西文被行内元素包住的常见排法。
+  function spacifyText(text, outer) {
+    if (!text) return null;
+    var frag = document.createDocumentFragment();
+    var last = 0;
+    var changed = false;
+    var m;
+    LATIN_RUN_RE.lastIndex = 0;
+    while ((m = LATIN_RUN_RE.exec(text))) {
+      var end = m.index + m[0].length;
+      var before = m.index > 0 ? text.charAt(m.index - 1) : outer(-1);
+      var after = end < text.length ? text.charAt(end) : outer(1);
+      var cls = "";
+      if (CJK_RE.test(before)) cls += " heti-spacing-end";
+      if (CJK_RE.test(after)) cls += " heti-spacing-start";
+      if (!cls) continue;
+      if (m.index > last && appendAdjacent(frag, text.slice(last, m.index))) changed = true;
+      frag.appendChild(spacingElement("heti-spacing", cls.slice(1), m[0]));
+      changed = true;
+      last = end;
+    }
+    if (appendAdjacent(frag, text.slice(last))) changed = true;
+    return changed ? frag : null;
+  }
+
+  function spacifyBlock(block) {
+    if (!block) return false;
+    var nodes = [];
+    var walker = document.createTreeWalker(block, SHOW_TEXT, {
+      acceptNode: function (node) {
+        var p = node.parentNode;
+        while (p && p !== block) {
+          if (skippedForSpacing(p)) return FILTER_REJECT;
+          p = p.parentNode;
+        }
+        return FILTER_ACCEPT;
+      },
+    });
+    var n;
+    while ((n = walker.nextNode())) nodes.push(n);
+    var changed = false;
+    for (var i = 0; i < nodes.length; i++) {
+      var frag = spacifyText(nodes[i].nodeValue, outerChars(nodes[i], block));
+      if (!frag) continue;
+      nodes[i].parentNode.replaceChild(frag, nodes[i]);
+      changed = true;
+    }
+    return changed;
+  }
+
+  function spacifyBlocks(blocks) {
+    if (!spacingFallback || state.typography === "book") return false;
+    var changed = false;
+    for (var i = 0; i < blocks.length; i++) {
+      if (spacifyBlock(blocks[i])) changed = true;
+    }
+    return changed;
+  }
+
+  // 补了空隙等于改了行宽:分页下要重算列高,并保住当前段落不跳。
+  var pendingLayout = 0;
+  function scheduleLayout() {
+    if (pendingLayout) return;
+    pendingLayout = requestAnimationFrame(function () {
+      pendingLayout = 0;
+      if (state.mode !== "paginated") return;
+      var p = state.lastParagraph !== null ? state.lastParagraph : findVisibleParagraph();
+      layoutPaginated();
+      if (p !== null) scrollToParagraph(p);
+      reportProgress();
+    });
+  }
+
   function applyPrefs(prefs) {
     if (!prefs) return;
     var anchorBefore = state.initialized ? findVisibleParagraph() : null;
@@ -67,6 +277,11 @@
 
     root.setAttribute("data-theme", prefs.theme || "auto");
     root.setAttribute("data-mode", prefs.viewMode || "scrolled");
+    var typography =
+      prefs.typography === "heti-modern" || prefs.typography === "heti-classic"
+        ? prefs.typography
+        : "book";
+    root.setAttribute("data-typography", typography);
     root.setAttribute("data-font", prefs.fontFamily === "serif" ? "serif" : "default");
     root.setAttribute(
       "data-margin",
@@ -104,6 +319,13 @@
     state.margin =
       prefs.pageMargin === "compact" || prefs.pageMargin === "wide" ? prefs.pageMargin : "normal";
     state.pageAnimation = prefs.pageAnimation !== false;
+    state.typography = typography;
+
+    // 只在首次切到中文排版时全量补一次(幂等),字号滑块重绘不再重走 DOM。
+    if (spacingFallback && !state.spacified && typography !== "book") {
+      spacifyBlocks(document.querySelectorAll(SPACING_BLOCKS));
+      state.spacified = true;
+    }
 
     if (state.mode === "paginated") {
       layoutPaginated();
@@ -402,14 +624,20 @@
     if (!Array.isArray(patches) || !patches.length) return;
     var keyRe = /^\d+-\d+$/;
     var tpl = document.createElement("template");
+    var touched = [];
     for (var i = 0; i < patches.length; i++) {
       var item = patches[i];
       if (!item || typeof item.key !== "string" || !keyRe.test(item.key)) continue;
       var el = document.querySelector('span[data-br="' + item.key + '"]');
       if (!el) continue;
+      var host = el.parentNode;
+      if (!host) continue;
       tpl.innerHTML = item.html;
-      el.replaceWith(tpl.content);
+      host.replaceChild(tpl.content, el);
+      if (touched.indexOf(host) < 0) touched.push(host);
     }
+    // 补进去的空隙会改变行宽,分页下要重算并保住当前位置。
+    if (spacifyBlocks(touched)) scheduleLayout();
   }
 
   function reloadSerifFont() {

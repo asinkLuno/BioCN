@@ -104,6 +104,7 @@ describe("reader iframe bridge.js", () => {
     delete (window as unknown as { __biocnBridge?: boolean }).__biocnBridge;
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-mode");
+    document.documentElement.removeAttribute("data-typography");
     document.documentElement.removeAttribute("data-font");
     document.documentElement.removeAttribute("data-margin");
     document.documentElement.removeAttribute("data-align");
@@ -119,6 +120,9 @@ describe("reader iframe bridge.js", () => {
     vi.spyOn(window.parent, "postMessage").mockImplementation((msg: unknown) => {
       posted.push(msg);
     });
+    // 老 WebView 不认 text-spacing-trim:jsdom 的 CSS.supports 一律返回 true,
+    // 显式报不支持,让整套用例都跑在 DOM 兜底路径上。
+    vi.spyOn(CSS, "supports").mockReturnValue(false);
     // Execute bridge script as injected into the chapter document.
     new Function(bridgeSource)();
   });
@@ -138,6 +142,7 @@ describe("reader iframe bridge.js", () => {
             fontSize: 20,
             paragraphSpacing: 1.2,
             pageMargin: "wide",
+            typography: "heti-classic",
             textAlign: "justify",
             dimImagesInDark: false,
             svoColors: { subject: "#b03a2e", predicate: null, object: "#4a4e91" },
@@ -148,6 +153,7 @@ describe("reader iframe bridge.js", () => {
     );
 
     expect(document.documentElement.getAttribute("data-theme")).toBe("sepia");
+    expect(document.documentElement.getAttribute("data-typography")).toBe("heti-classic");
     expect(document.documentElement.getAttribute("data-font")).toBe("serif");
     expect(document.documentElement.getAttribute("data-margin")).toBe("wide");
     expect(document.documentElement.getAttribute("data-align")).toBe("justify");
@@ -588,5 +594,69 @@ describe("reader iframe bridge.js", () => {
       }),
     );
     expect(document.getElementById("biocn-page-tail")).toBeNull();
+  });
+
+  function dispatchPrefs(overrides: Record<string, unknown>) {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { source: "biocn-host", type: "prefs", prefs: { ...DEFAULT_READER_PREFS, ...overrides } },
+      }),
+    );
+  }
+
+  it("adds CJK/Latin gaps and squeezes punctuation when the WebView lacks text-spacing-trim", () => {
+    document.body.innerHTML = `
+      <p id="plain">中文abc中文。「测试」</p>
+      <p id="em">中文<em>abc</em>中文</p>
+      <p id="runs"><span data-bp="9"></span><span data-br="9-0">中文abc</span></p>
+    `;
+    dispatchPrefs({ typography: "heti-modern" });
+
+    const plain = document.getElementById("plain")!;
+    const spacing = plain.querySelector("heti-spacing");
+    expect(spacing?.textContent).toBe("abc");
+    expect(spacing?.className).toBe("heti-spacing-end heti-spacing-start");
+    expect(plain.querySelector("heti-adjacent")?.className).toBe("heti-adjacent-half");
+    // 包裹元素不改文字内容,复制/朗读仍拿到原文
+    expect(plain.textContent).toBe("中文abc中文。「测试」");
+    // 整段西文被行内元素包住时,汉字在兄弟节点上也要能加空
+    expect(document.querySelector("#em em heti-spacing")?.className).toBe(
+      "heti-spacing-end heti-spacing-start",
+    );
+    // 渐进着色锚点内的 HTML 一律不动,否则补丁查不到 data-br
+    expect(document.querySelector('[data-br="9-0"]')?.innerHTML).toBe("中文abc");
+  });
+
+  it("keeps 原书 typography free of injected wrappers", () => {
+    document.body.innerHTML = `<p id="plain">中文abc中文。「测试」</p>`;
+    dispatchPrefs({ typography: "book" });
+
+    expect(document.querySelector("heti-spacing")).toBeNull();
+    expect(document.querySelector("heti-adjacent")).toBeNull();
+  });
+
+  it("re-spacifies patched runs and re-paginates without losing the reading anchor", async () => {
+    document.body.innerHTML = `<p><span data-bp="0"></span><span data-br="0-0">中文abc</span></p>`;
+    dispatchPrefs({ typography: "heti-modern", viewMode: "paginated" });
+    posted.length = 0;
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          source: "biocn-host",
+          type: "patch",
+          patches: [{ key: "0-0", html: '<span class="svo svo-subject">中文abc</span>' }],
+        },
+      }),
+    );
+
+    // 补丁带来新的中西文边界:补空隙后分页必须重算并回报进度。
+    expect(document.querySelector("heti-spacing")?.textContent).toBe("abc");
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    expect(
+      posted.some(
+        (msg) => (msg as { type: string; mode?: string }).type === "progress" && (msg as { mode?: string }).mode === "paginated",
+      ),
+    ).toBe(true);
   });
 });

@@ -11,6 +11,7 @@ import {
   type ReaderPrefs,
   type ReaderTextAlign,
   type ReaderTheme,
+  type ReaderTypography,
   type ReaderViewMode,
   type SvoRole,
 } from "../lib/readerPrefs";
@@ -135,6 +136,28 @@ export const ReaderPrefsPopover = memo(function ReaderPrefsPopover({
                 type="button"
                 className={`btn btn-xs join-item ${prefs.theme === theme ? "btn-primary" : "btn-ghost"}`}
                 onClick={() => onUpdate({ theme })}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-base-content/70">中文排版</span>
+          <div className="join">
+            {(
+              [
+                ["book", "原书"],
+                ["heti-modern", "现代"],
+                ["heti-classic", "书刊"],
+              ] as [ReaderTypography, string][]
+            ).map(([typography, label]) => (
+              <button
+                key={typography}
+                type="button"
+                className={`btn btn-xs join-item ${prefs.typography === typography ? "btn-primary" : "btn-ghost"}`}
+                onClick={() => onUpdate({ typography })}
               >
                 {label}
               </button>

@@ -228,6 +228,7 @@ fn make_nonce() -> String {
 pub struct InitialStyle {
     pub theme: &'static str,
     pub mode: &'static str,
+    pub typography: &'static str,
     pub font: &'static str,
     pub margin: &'static str,
     pub align: &'static str,
@@ -245,6 +246,7 @@ impl Default for InitialStyle {
         Self {
             theme: "auto",
             mode: "scrolled",
+            typography: "book",
             font: "default",
             margin: "normal",
             align: "default",
@@ -287,6 +289,13 @@ impl InitialStyle {
                     style.mode = match v {
                         "paginated" => "paginated",
                         _ => "scrolled",
+                    };
+                }
+                "typo" => {
+                    style.typography = match v {
+                        "heti-modern" => "heti-modern",
+                        "heti-classic" => "heti-classic",
+                        _ => "book",
                     };
                 }
                 "font" => {
@@ -396,9 +405,10 @@ pub fn prepare_chapter_document_with_style(
 
 fn stamp_html_attributes(html: &str, initial: &InitialStyle) -> String {
     let attrs = format!(
-        " data-theme=\"{}\" data-mode=\"{}\" data-font=\"{}\" data-margin=\"{}\" data-align=\"{}\" data-dim-images=\"{}\"",
+        " data-theme=\"{}\" data-mode=\"{}\" data-typography=\"{}\" data-font=\"{}\" data-margin=\"{}\" data-align=\"{}\" data-dim-images=\"{}\"",
         initial.theme,
         initial.mode,
+        initial.typography,
         initial.font,
         initial.margin,
         initial.align,
@@ -582,10 +592,11 @@ mod tests {
     #[test]
     fn stamps_initial_theme_and_mode_from_query_before_first_paint() {
         let initial = InitialStyle::from_query(
-            "v=2&theme=dark&mode=paginated&font=serif&margin=wide&align=justify&dim=off&cs=B03A2E&co=invalid&fs=20&lh=2.1&ps=1.4",
+            "v=2&theme=dark&mode=paginated&typo=heti-classic&font=serif&margin=wide&align=justify&dim=off&cs=B03A2E&co=invalid&fs=20&lh=2.1&ps=1.4",
         );
         assert_eq!(initial.theme, "dark");
         assert_eq!(initial.mode, "paginated");
+        assert_eq!(initial.typography, "heti-classic");
         assert_eq!(initial.font, "serif");
         assert_eq!(initial.margin, "wide");
         assert_eq!(initial.align, "justify");
@@ -598,7 +609,7 @@ mod tests {
 
         let out = prepare_chapter_document_with_style("<html><head></head><body><p>字</p></body></html>", "n1", &initial);
         assert!(
-            out.contains(r#"<html data-theme="dark" data-mode="paginated" data-font="serif" data-margin="wide" data-align="justify" data-dim-images="off">"#),
+            out.contains(r#"<html data-theme="dark" data-mode="paginated" data-typography="heti-classic" data-font="serif" data-margin="wide" data-align="justify" data-dim-images="off">"#),
             "{out}"
         );
         assert!(

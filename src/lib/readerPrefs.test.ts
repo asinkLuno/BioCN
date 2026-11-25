@@ -14,6 +14,7 @@ describe("readerPrefs", () => {
     saveReaderPrefs({
       viewMode: "paginated",
       theme: "sepia",
+      typography: "heti-classic",
       fontFamily: "serif",
       fontSize: 40,
       lineHeight: 1.0,
@@ -29,6 +30,7 @@ describe("readerPrefs", () => {
     expect(loadReaderPrefs()).toEqual({
       viewMode: "paginated",
       theme: "sepia",
+      typography: "heti-classic",
       fontFamily: "serif",
       fontSize: 28,
       lineHeight: 1.4,
@@ -50,5 +52,13 @@ describe("readerPrefs", () => {
     const loaded = loadReaderPrefs();
     expect(loaded).toEqual(DEFAULT_READER_PREFS);
     expect("coloringEnabled" in loaded).toBe(false);
+  });
+
+  it("falls back to book typography for unknown values", () => {
+    window.localStorage.setItem(
+      "biocn:reader-prefs:v1",
+      JSON.stringify({ ...DEFAULT_READER_PREFS, typography: "serif-ultra" }),
+    );
+    expect(loadReaderPrefs().typography).toBe("book");
   });
 });
