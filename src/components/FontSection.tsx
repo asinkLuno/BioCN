@@ -49,7 +49,7 @@ export function FontSection({ open, onBusyChange, onChange }: Props) {
 
       {error && (
         <div role="alert" className="alert alert-error mt-3 text-sm">
-          <span className="break-words">{error}</span>
+          <span className="min-w-0 wrap-anywhere">{error}</span>
         </div>
       )}
 

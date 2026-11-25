@@ -221,7 +221,7 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
 
           {status?.manifestError && (
             <div role="alert" className="alert alert-warning mt-4 text-sm">
-              <span>
+              <span className="min-w-0 wrap-anywhere">
                 无法读取下载大小（{status.manifestError}）。你仍可安装模型，只是无法提前知道 大小。
               </span>
             </div>
@@ -229,13 +229,13 @@ export function ModelSheet({ open, onClose, onChange = noop }: Props) {
 
           {problem && (
             <div role="alert" className="alert alert-error mt-4 text-sm">
-              <span className="break-words">{problem}</span>
+              <span className="min-w-0 wrap-anywhere">{problem}</span>
             </div>
           )}
 
           {status?.warning && (
             <div role="status" className="alert alert-warning mt-4 text-sm">
-              <span className="break-words">{status.warning}</span>
+              <span className="min-w-0 wrap-anywhere">{status.warning}</span>
             </div>
           )}
 

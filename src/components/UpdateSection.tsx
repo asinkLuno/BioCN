@@ -252,7 +252,7 @@ export function UpdateSection({
       {checkError !== null && (
         <>
           <div role="alert" className="alert alert-error alert-soft mt-3 text-sm">
-            <span className="min-w-0 break-words">检查更新失败：{checkError}</span>
+            <span className="min-w-0 wrap-anywhere">检查更新失败：{checkError}</span>
           </div>
           <button
             type="button"
@@ -263,7 +263,7 @@ export function UpdateSection({
           </button>
           {problem !== null && (
             <div role="alert" className="alert alert-error alert-soft mt-2 text-sm">
-              <span className="min-w-0 break-words">{problem}</span>
+              <span className="min-w-0 wrap-anywhere">{problem}</span>
             </div>
           )}
         </>
@@ -366,7 +366,7 @@ export function UpdateSection({
 
           {problem !== null && (
             <div role="alert" className="alert alert-error alert-soft mt-3 text-sm">
-              <span className="min-w-0 break-words">{problem}</span>
+              <span className="min-w-0 wrap-anywhere">{problem}</span>
             </div>
           )}
 
