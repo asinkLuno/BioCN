@@ -347,7 +347,7 @@ export function Reader({ id, onClose, onOpenSettings, modelsOpen, modelRevision 
       if (
         next.installed &&
         prevFontInstalledRef.current === false &&
-        (prefsRef.current.fontFamily === "serif" || prefsRef.current.typography === "heti-classic")
+        prefsRef.current.fontFamily === "serif"
       ) {
         notifyFontReady();
       }

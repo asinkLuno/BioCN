@@ -17,7 +17,6 @@
     lastParagraph: null,
     slideRaf: 0,
     suppressClickUntil: 0,
-    typography: "book",
     spacified: false,
   };
 
@@ -62,12 +61,12 @@
     }
   }
 
-  // 「现代中文」/「传统书刊」的老 WebView 兜底(issue #2):不认 CSS 的
-  // text-spacing-trim / text-autospace 时,用与赫蹏同名的行内包裹元素补上
-  // 中西文之间的空隙和全角标点挤压,样式见 reader.css 里受 data-typography 门控的规则。
-  // 两条属性分别检测:Chromium 123–139 认挤压(text-spacing-trim)、但直到 140 才认
-  // 自动加空(text-autospace),单门控会让这批 Windows WebView2 / Android WebView
-  // 两样都拿不到,所以各补各的。
+  // 赫蹏中文排版行内增强(issue #2):
+  // - 中西文/数字加空统一走 <heti-spacing>(reader.css 显式关掉原生 text-autospace),
+  //   规避 WebKitGTK 2.54.x HarfBuzz 原生 text-autospace 导致"2004"等数字与相邻汉字重叠的 bug,
+  //   同时保证各平台间距一致。
+  // - 全角标点挤压在支持 CSS text-spacing-trim: normal 的现代 WebView 上走原生,
+  //   不支持的 WebView(如 WebKitGTK)回退到 <heti-adjacent>。
   var CJK_RE =
     /[\u2e80-\u2eff\u2f00-\u2fdf\u3040-\u309f\u30a0-\u30fa\u30fc-\u30ff\u3100-\u312f\u3200-\u32ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
   var LATIN_RUN_RE = /[A-Za-z0-9\u00c0-\u00ff\u0370-\u03ff]+/g;
@@ -135,8 +134,8 @@
     }
   }
 
-  var trimFallback = !hasCss("text-spacing-trim", "space-all");
-  var autospaceFallback = !hasCss("text-autospace", "normal");
+  var trimFallback = !hasCss("text-spacing-trim", "normal");
+  var autospaceFallback = true;
   var spacingFallback = trimFallback || autospaceFallback;
 
   function spacingElement(tag, className, text) {
@@ -308,7 +307,7 @@
   }
 
   function spacifyBlocks(blocks) {
-    if (!spacingFallback || state.typography === "book") return false;
+    if (!spacingFallback) return false;
     var changed = false;
     for (var i = 0; i < blocks.length; i++) {
       if (spacifyBlock(blocks[i])) changed = true;
@@ -337,11 +336,6 @@
 
     root.setAttribute("data-theme", prefs.theme || "auto");
     root.setAttribute("data-mode", prefs.viewMode || "scrolled");
-    var typography =
-      prefs.typography === "heti-modern" || prefs.typography === "heti-classic"
-        ? prefs.typography
-        : "book";
-    root.setAttribute("data-typography", typography);
     root.setAttribute("data-font", prefs.fontFamily === "serif" ? "serif" : "default");
     root.setAttribute(
       "data-margin",
@@ -379,10 +373,9 @@
     state.margin =
       prefs.pageMargin === "compact" || prefs.pageMargin === "wide" ? prefs.pageMargin : "normal";
     state.pageAnimation = prefs.pageAnimation !== false;
-    state.typography = typography;
 
-    // 只在首次切到中文排版时全量补一次(幂等),字号滑块重绘不再重走 DOM。
-    if (spacingFallback && !state.spacified && typography !== "book") {
+    // 只在首次初始化时全量补一次(幂等),字号滑块重绘不再重走 DOM。
+    if (spacingFallback && !state.spacified) {
       spacifyBlocks(document.querySelectorAll(SPACING_BLOCKS));
       state.spacified = true;
     }
@@ -700,11 +693,6 @@
     }
     if (!touched.length) return;
     // 补进去的空隙会改变行宽,分页下要重算并保住当前位置。
-    // 「原书」期间到达的补丁不补跑,但复位标记,让切回中文排版时整体重做一次。
-    if (state.typography === "book") {
-      state.spacified = false;
-      return;
-    }
     if (spacifyBlocks(touched)) scheduleLayout();
   }
 

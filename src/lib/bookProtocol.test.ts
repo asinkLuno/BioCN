@@ -17,7 +17,7 @@ describe("bookProtocol", () => {
     );
     const styled = bookResourceUrl("abc123", "OEBPS/ch1.xhtml", 1, DEFAULT_READER_PREFS);
     expect(styled).toContain("theme=auto");
-    expect(styled).toContain("typo=book");
+    expect(styled).not.toContain("typo=");
     expect(styled).not.toContain("biocn=");
   });
 

@@ -267,118 +267,87 @@ span[data-bp] {
 .svo.svo-predicate { color: var(--svo-predicate) !important; }
 .svo.svo-object { color: var(--svo-object) !important; }
 
-/* Optional CJK editorial typography (issue #2): 「现代中文」/「传统书刊」.
-   Heti-inspired rules reduced to what survives inside an EPUB iframe: block
-   typography, strict line breaking and native punctuation trimming only.
-   Heti's container-level `max-width`, `::before/::after { display: table }`
-   and hard-coded dark palette are deliberately omitted so pagination column
-   metrics, #biocn-page-tail and the four `data-theme` palettes stay in charge.
+/* Built-in CJK editorial typography (issue #2, Heti-inspired).
+   Reduced to what survives inside an EPUB iframe: block typography, strict
+   line breaking and native punctuation trimming. Heti's container-level
+   `max-width`, `::before/::after { display: table }` and hard-coded dark
+   palette are deliberately omitted so pagination column metrics,
+   #biocn-page-tail and the four `data-theme` palettes stay in charge.
    WebViews missing text-spacing-trim / text-autospace get the same look from
    the DOM fallback further down (injected by bridge.js), which never touches
-   span[data-bp] / span[data-br]. Alignment, font and indent stay under the
-   user's own 对齐 / 字体 preferences. */
-html[data-typography="heti-modern"] body,
-html[data-typography="heti-classic"] body {
+   span[data-bp] / span[data-br]. Alignment, font and paragraph indent stay
+   under the user's preferences and the book's own layout. */
+body {
   line-break: strict;
-  text-spacing-trim: space-all;
-  text-autospace: normal;
+  text-spacing-trim: normal;
+  /* Disable native text-autospace: WebKitGTK 2.54.x's HarfBuzz implementation
+     miscomputes glyph positions on CJK+digit runs (e.g. "在2004年"), causing
+     digits and adjacent CJK glyphs to overlap. bridge.js handles CJK/Latin/digit
+     spacing consistently via <heti-spacing> across all WebViews instead. */
+  text-autospace: no-autospace;
   text-justify: inter-ideograph;
 }
 
-html[data-typography="heti-modern"] body h1,
-html[data-typography="heti-modern"] body h2,
-html[data-typography="heti-modern"] body h3,
-html[data-typography="heti-modern"] body h4,
-html[data-typography="heti-modern"] body h5,
-html[data-typography="heti-modern"] body h6,
-html[data-typography="heti-classic"] body h1,
-html[data-typography="heti-classic"] body h2,
-html[data-typography="heti-classic"] body h3,
-html[data-typography="heti-classic"] body h4,
-html[data-typography="heti-classic"] body h5,
-html[data-typography="heti-classic"] body h6 {
+body h1,
+body h2,
+body h3,
+body h4,
+body h5,
+body h6 {
   line-height: 1.45 !important;
   margin: 1.5em 0 0.6em !important;
 }
 
-html[data-typography="heti-modern"] body blockquote,
-html[data-typography="heti-classic"] body blockquote {
+body blockquote {
   margin: 1.2em 0 !important;
   padding: 0.2em 0 0.2em 1em !important;
   border-inline-start: 3px solid var(--reader-rule) !important;
 }
 
-html[data-typography="heti-modern"] body ul,
-html[data-typography="heti-modern"] body ol,
-html[data-typography="heti-classic"] body ul,
-html[data-typography="heti-classic"] body ol {
+body ul,
+body ol {
   padding-inline-start: 1.5em !important;
 }
 
-html[data-typography="heti-modern"] body table,
-html[data-typography="heti-classic"] body table {
+body table {
   border-collapse: collapse !important;
   margin: 1.2em 0 !important;
 }
 
-html[data-typography="heti-modern"] body th,
-html[data-typography="heti-modern"] body td,
-html[data-typography="heti-classic"] body th,
-html[data-typography="heti-classic"] body td {
+body th,
+body td {
   border: 1px solid var(--reader-rule) !important;
   padding: 0.35em 0.6em !important;
 }
 
-html[data-typography="heti-modern"] body hr,
-html[data-typography="heti-classic"] body hr {
+body hr {
   border: 0 !important;
   border-block-start: 1px solid var(--reader-rule) !important;
   margin: 2em auto !important;
 }
 
-/* shortcut: centre/right paragraphs are detected by align attribute, class name
-   and inline style only; an exotic EPUB selector still gets the indent. */
-html[data-typography="heti-classic"] body p:not([align]):not([class*="center"]):not([class*="right"]):not([style*="center"]):not([style*="right"]) {
-  text-indent: 2em !important;
-}
-
-/* 插图段落不留首行缩进,否则满宽图片会被推出右缘。 */
-@supports selector(:has(*)) {
-  html[data-typography="heti-classic"] body p:has(> img:only-child),
-  html[data-typography="heti-classic"] body p:has(> figure:only-child) {
-    text-indent: 0 !important;
-  }
-}
-
 /* 命名沿用赫蹏:包裹的是汉字时 start/end 指汉字那一侧;这里包裹的是整段西文,
    所以 heti-spacing-start 缩右侧、heti-spacing-end 缩左侧,读起来正好相反。 */
 /* Old-WebView fallback wrappers injected by bridge.js (Heti's class names, same
-   0.25em / -0.5em / -0.25em contract). Gated on data-typography so switching back
-   to 「原书」 leaves any leftover wrappers visually inert. */
-html[data-typography="heti-modern"] heti-spacing,
-html[data-typography="heti-classic"] heti-spacing,
-html[data-typography="heti-modern"] heti-adjacent,
-html[data-typography="heti-classic"] heti-adjacent {
+   0.25em / -0.5em / -0.25em contract). */
+heti-spacing,
+heti-adjacent {
   display: inline;
   unicode-bidi: isolate;
 }
 
-html[data-typography="heti-modern"] .heti-spacing-start,
-html[data-typography="heti-classic"] .heti-spacing-start {
+.heti-spacing-start {
   margin-inline-end: 0.25em;
 }
 
-html[data-typography="heti-modern"] .heti-spacing-end,
-html[data-typography="heti-classic"] .heti-spacing-end {
+.heti-spacing-end {
   margin-inline-start: 0.25em;
 }
 
-html[data-typography="heti-modern"] .heti-adjacent-half,
-html[data-typography="heti-classic"] .heti-adjacent-half {
+.heti-adjacent-half {
   margin-inline-end: -0.5em;
 }
 
-html[data-typography="heti-modern"] .heti-adjacent-quarter,
-html[data-typography="heti-classic"] .heti-adjacent-quarter {
+.heti-adjacent-quarter {
   margin-inline-end: -0.25em;
 }

@@ -17,6 +17,45 @@
 
 
 
+## 本地构建
+
+需要 Node.js、Rust stable，以及 Tauri 2 的平台依赖（Linux 见 [Tauri 前置条件](https://v2.tauri.app/start/prerequisites/)）。
+
+```sh
+yarn install
+yarn tauri dev     # 开发运行
+yarn tauri build   # 打包安装包
+```
+
+`yarn build`（`tsc && vite build`）只产出前端，不碰 Rust。
+
+### 先备好 libonnxruntime
+
+`src-tauri/ort/<platform>/` 被 `.gitignore` 忽略，发布时由 CI 现场编译（`tools/build_ort_desktop.py`），所以新 clone 下来直接打包会在这里停下：
+
+```
+resource path `ort/linux/libonnxruntime.so` doesn't exist
+```
+
+这个库是 `tauri.<os>.conf.json` 里声明的资源（打包进 `res/`，运行时由 `ORT_DYLIB_PATH` 加载）。两种补法，产物都不会进版本库：
+
+**A. 与发布版一致的 minimal 构建**（需要 `cmake` 与 `ninja`，首次约半小时）：
+
+```sh
+uv run --with flatbuffers python -m tools.build_ort_desktop build --platform linux
+```
+
+`--platform` 可选 `linux` / `macos` / `windows` / `android`，产物直接落到 `src-tauri/ort/<platform>/`（Android 是 `android/arm64-v8a/`）。
+
+**B. 只想本地跑起来**：从 PyPI 的 `onnxruntime` wheel 里拿一份现成的库（full build，约 34 MB，多带 ExecutionProvider，勿用于发布）：
+
+```sh
+uvx --from onnxruntime python -c "import onnxruntime, os; print(os.path.dirname(onnxruntime.__file__))"
+cp <上面输出的目录>/capi/libonnxruntime.so.1.32.0 src-tauri/ort/linux/libonnxruntime.so
+```
+
+macOS 用 `libonnxruntime.dylib`，Windows 用 `libonnxruntime.dll`。
+
 ## 致谢
 
 * 本项目的核心中文分词、词性标注与依存句法分析能力均**基于 [HanLP](https://github.com/hankcs/HanLP) 进行二次开发**（导出并量化为本地 ONNX 模型运行）。衷心感谢原作者 [@hankcs](https://github.com/hankcs) 及 HanLP 社区在中文自然语言处理领域的长期开源贡献，让轻量、高精度的离线中文句法分析成为可能。

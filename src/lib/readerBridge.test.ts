@@ -146,17 +146,9 @@ describe("reader iframe bridge.js on a WebView with native text-spacing", () => 
     );
   }
 
-  it("leaves native CJK spacing alone", () => {
-    bootBridge(() => true);
-    dispatchPrefs({ typography: "heti-modern" });
-
-    expect(document.querySelector("heti-spacing")).toBeNull();
-    expect(document.querySelector("heti-adjacent")).toBeNull();
-  });
-
-  it("adds the gap but never squeezes when only text-spacing-trim is available", () => {
+  it("skips punctuation wrappers when native text-spacing-trim is available, while still adding CJK/Latin gaps", () => {
     bootBridge((prop) => prop === "text-spacing-trim");
-    dispatchPrefs({ typography: "heti-modern" });
+    dispatchPrefs({});
 
     expect(document.querySelector("heti-spacing")?.textContent).toBe("abc");
     expect(document.querySelector("heti-adjacent")).toBeNull();
@@ -173,7 +165,6 @@ describe("reader iframe bridge.js", () => {
     delete (window as unknown as { __biocnBridge?: boolean }).__biocnBridge;
     document.documentElement.removeAttribute("data-theme");
     document.documentElement.removeAttribute("data-mode");
-    document.documentElement.removeAttribute("data-typography");
     document.documentElement.removeAttribute("data-font");
     document.documentElement.removeAttribute("data-margin");
     document.documentElement.removeAttribute("data-align");
@@ -211,7 +202,6 @@ describe("reader iframe bridge.js", () => {
             fontSize: 20,
             paragraphSpacing: 1.2,
             pageMargin: "wide",
-            typography: "heti-classic",
             textAlign: "justify",
             dimImagesInDark: false,
             svoColors: { subject: "#b03a2e", predicate: null, object: "#4a4e91" },
@@ -222,7 +212,6 @@ describe("reader iframe bridge.js", () => {
     );
 
     expect(document.documentElement.getAttribute("data-theme")).toBe("sepia");
-    expect(document.documentElement.getAttribute("data-typography")).toBe("heti-classic");
     expect(document.documentElement.getAttribute("data-font")).toBe("serif");
     expect(document.documentElement.getAttribute("data-margin")).toBe("wide");
     expect(document.documentElement.getAttribute("data-align")).toBe("justify");
@@ -685,7 +674,7 @@ describe("reader iframe bridge.js", () => {
       <p id="em">中文<em>abc</em>中文</p>
       <p id="runs"><span data-bp="9"></span><span data-br="9-0">中文abc</span></p>
     `;
-    dispatchPrefs({ typography: "heti-modern" });
+    dispatchPrefs({});
 
     const plain = document.getElementById("plain")!;
     const spacing = plain.querySelector("heti-spacing");
@@ -702,17 +691,9 @@ describe("reader iframe bridge.js", () => {
     expect(document.querySelector('[data-br="9-0"]')?.innerHTML).toBe("中文abc");
   });
 
-  it("keeps 原书 typography free of injected wrappers", () => {
-    document.body.innerHTML = `<p id="plain">中文abc中文。「测试」</p>`;
-    dispatchPrefs({ typography: "book" });
-
-    expect(document.querySelector("heti-spacing")).toBeNull();
-    expect(document.querySelector("heti-adjacent")).toBeNull();
-  });
-
   it("does not bridge gaps across sibling blocks", () => {
     document.body.innerHTML = `<blockquote><p>中文</p><p>abc</p></blockquote>`;
-    dispatchPrefs({ typography: "heti-modern" });
+    dispatchPrefs({});
 
     // 外层 blockquote 自己也是一段:第二段行首的 abc 不能借用上一段末尾的"文"。
     expect(document.querySelectorAll("blockquote heti-spacing")).toHaveLength(0);
@@ -720,7 +701,7 @@ describe("reader iframe bridge.js", () => {
 
   it("squeezes the half-width gap between adjacent punctuation", () => {
     document.body.innerHTML = `<p id="punct">「甲」，乙。《丙》《丁》</p>`;
-    dispatchPrefs({ typography: "heti-modern" });
+    dispatchPrefs({});
 
     expect(
       Array.from(document.querySelectorAll("#punct heti-adjacent")).map((el) => el.textContent),
@@ -729,7 +710,7 @@ describe("reader iframe bridge.js", () => {
 
   it("adds the gap when a patched run sits inside an inline element", () => {
     document.body.innerHTML = `<p>中文<em id="em"><span data-br="0-1">abc</span></em>中文</p>`;
-    dispatchPrefs({ typography: "heti-modern" });
+    dispatchPrefs({});
 
     dispatchPatch([{ key: "0-1", html: '<span class="svo svo-subject">abc</span>' }]);
 
@@ -739,22 +720,9 @@ describe("reader iframe bridge.js", () => {
     );
   });
 
-  it("re-runs the fallback after switching back from 原书 following a patch", () => {
-    document.body.innerHTML = `<p><span data-bp="0"></span><span data-br="0-0">中文abc</span></p>`;
-    // 先在中文排版下跑过一次(spacified === true),再切回原书,补丁才算「原书期间到达」。
-    dispatchPrefs({ typography: "heti-modern" });
-    dispatchPrefs({ typography: "book" });
-    dispatchPatch([{ key: "0-0", html: "中文abc" }]);
-    expect(document.querySelector("heti-spacing")).toBeNull();
-
-    dispatchPrefs({ typography: "heti-modern" });
-
-    expect(document.querySelector("heti-spacing")?.textContent).toBe("abc");
-  });
-
   it("re-spacifies patched runs and re-paginates without losing the reading anchor", async () => {
     document.body.innerHTML = `<p><span data-bp="0"></span><span data-br="0-0">中文abc</span></p>`;
-    dispatchPrefs({ typography: "heti-modern", viewMode: "paginated" });
+    dispatchPrefs({ viewMode: "paginated" });
     posted.length = 0;
 
     window.dispatchEvent(
